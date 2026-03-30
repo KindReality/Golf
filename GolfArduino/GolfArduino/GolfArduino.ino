@@ -8,40 +8,24 @@ enum WorkflowState
   Active
 };
 
-enum SensorMode
-{
-  SensorModePir,
-  SensorModeUltrasonic
-};
-
 class BallLauncherController
 {
 public:
-  static const uint8_t PinNotConnected = 255;
-
   BallLauncherController(
-    SensorMode sensorMode,
-    uint8_t sensorSignalPin,
-    uint8_t ultrasonicEchoPin,
+    uint8_t pirPin,
     uint8_t manualTriggerPin,
-    uint8_t relay1Pin,
+    uint8_t relayPin,
     uint8_t neoPixelPin,
     uint16_t pixelCount,
-    float triggerDistanceInches,
-    unsigned long triggerHoldMs,
     unsigned long launchDurationMs,
     unsigned long activeDurationMs,
     unsigned long minimumRestMs,
     unsigned long heartbeatIntervalMs)
-    : sensorMode(sensorMode),
-      pinSensorSignal(sensorSignalPin),
-      pinUltrasonicEcho(ultrasonicEchoPin),
+    : pinPir(pirPin),
       pinManualTrigger(manualTriggerPin),
-      pinRelay1(relay1Pin),
+      pinRelay(relayPin),
       pinNeoPixel(neoPixelPin),
       totalPixels(pixelCount),
-      triggerDistanceInches(triggerDistanceInches),
-      triggerHoldMs(triggerHoldMs),
       launchDurationMs(launchDurationMs),
       activeDurationMs(activeDurationMs),
       minimumRestMs(minimumRestMs),
@@ -52,27 +36,14 @@ public:
 
   void begin()
   {
-    if (sensorMode == SensorModeUltrasonic)
-    {
-      pinMode(pinSensorSignal, OUTPUT);
-      digitalWrite(pinSensorSignal, LOW);
-
-      if (pinUltrasonicEcho != PinNotConnected)
-      {
-        pinMode(pinUltrasonicEcho, INPUT);
-      }
-    }
-    else
-    {
-      pinMode(pinSensorSignal, INPUT);
-    }
-
-    pinMode(pinRelay1, OUTPUT);
-    setRelayOff(pinRelay1);
+    pinMode(pinPir, INPUT);
+    pinMode(pinRelay, OUTPUT);
 
     pinMode(pinManualTrigger, INPUT_PULLUP);
     manualTriggerButton.attach(pinManualTrigger);
     manualTriggerButton.interval(10);
+
+    setRelayOff();
 
     pixels.begin();
     pixels.show();
@@ -81,7 +52,6 @@ public:
 
     lastCycleEndedAtMs = millis() - minimumRestMs;
     lastHeartbeatAtMs = 0;
-    triggerActiveStartedAtMs = 0;
 
     sendDebug("Controller initialized.");
     printDebugStatus();
@@ -113,17 +83,12 @@ public:
   }
 
 private:
-  SensorMode sensorMode;
-
-  uint8_t pinSensorSignal;
-  uint8_t pinUltrasonicEcho;
+  uint8_t pinPir;
   uint8_t pinManualTrigger;
-  uint8_t pinRelay1;
+  uint8_t pinRelay;
   uint8_t pinNeoPixel;
   uint16_t totalPixels;
 
-  float triggerDistanceInches;
-  unsigned long triggerHoldMs;
   unsigned long launchDurationMs;
   unsigned long activeDurationMs;
   unsigned long minimumRestMs;
@@ -132,11 +97,9 @@ private:
   WorkflowState currentState = Idle;
   unsigned long stateStartedAtMs = 0;
   unsigned long lastCycleEndedAtMs = 0;
-  unsigned long triggerActiveStartedAtMs = 0;
   unsigned long lastHeartbeatAtMs = 0;
   unsigned long lastDebugStatusAtMs = 0;
 
-  float lastDistanceInches = -1.0f;
   bool lastPirTriggered = false;
   bool lastManualTriggerPressed = false;
 
@@ -147,12 +110,11 @@ private:
 
   void executeIdle(unsigned long nowMs)
   {
-    bool sensorTriggerActive = isSensorTriggerActive();
+    lastPirTriggered = isPirTriggered();
     bool manualTriggerPressed = isManualTriggerPressed();
 
     if (!isRestComplete(nowMs))
     {
-      triggerActiveStartedAtMs = 0;
       return;
     }
 
@@ -160,40 +122,25 @@ private:
     {
       sendProtocolEvent("TRIGGER");
       sendDebug("Manual trigger confirmed.");
-      triggerActiveStartedAtMs = 0;
       setState(Launch);
       return;
     }
 
-    if (sensorTriggerActive)
+    if (lastPirTriggered)
     {
-      if (triggerActiveStartedAtMs == 0)
-      {
-        triggerActiveStartedAtMs = nowMs;
-        sendDebug("Sensor trigger became active.");
-      }
-
-      if (nowMs - triggerActiveStartedAtMs >= triggerHoldMs)
-      {
-        sendProtocolEvent("TRIGGER");
-        sendDebug("Sensor trigger confirmed.");
-        triggerActiveStartedAtMs = 0;
-        setState(Launch);
-      }
-    }
-    else
-    {
-      triggerActiveStartedAtMs = 0;
+      sendProtocolEvent("TRIGGER");
+      sendDebug("PIR trigger confirmed.");
+      setState(Launch);
     }
   }
 
   void executeLaunch(unsigned long nowMs)
   {
-    setRelayOn(pinRelay1);
+    setRelayOn();
 
     if (nowMs - stateStartedAtMs >= launchDurationMs)
     {
-      setRelayOff(pinRelay1);
+      setRelayOff();
       setState(Active);
     }
   }
@@ -207,54 +154,15 @@ private:
     }
   }
 
-  bool isSensorTriggerActive()
+  bool isPirTriggered() const
   {
-    if (sensorMode == SensorModePir)
-    {
-      lastPirTriggered = readPirTriggered();
-      lastDistanceInches = -1.0f;
-      return lastPirTriggered;
-    }
-
-    lastDistanceInches = readDistanceInches();
-    lastPirTriggered = false;
-
-    return lastDistanceInches > 0.0f && lastDistanceInches < triggerDistanceInches;
+    return digitalRead(pinPir) == HIGH;
   }
 
   bool isManualTriggerPressed()
   {
     lastManualTriggerPressed = manualTriggerButton.fell();
     return lastManualTriggerPressed;
-  }
-
-  bool readPirTriggered() const
-  {
-    return digitalRead(pinSensorSignal) == HIGH;
-  }
-
-  float readDistanceInches()
-  {
-    if (pinUltrasonicEcho == PinNotConnected)
-    {
-      return -1.0f;
-    }
-
-    digitalWrite(pinSensorSignal, LOW);
-    delayMicroseconds(2);
-
-    digitalWrite(pinSensorSignal, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(pinSensorSignal, LOW);
-
-    unsigned long pulseDurationMicroseconds = pulseIn(pinUltrasonicEcho, HIGH, 30000);
-
-    if (pulseDurationMicroseconds == 0)
-    {
-      return -1.0f;
-    }
-
-    return pulseDurationMicroseconds / 148.0f;
   }
 
   void setState(WorkflowState newState)
@@ -265,7 +173,7 @@ private:
     switch (currentState)
     {
       case Idle:
-        setRelayOff(pinRelay1);
+        setRelayOff();
         setAllPixels(0, 0, 255);
         sendProtocolState("IDLE");
         sendDebug("State changed to Idle.");
@@ -278,7 +186,7 @@ private:
         break;
 
       case Active:
-        setRelayOff(pinRelay1);
+        setRelayOff();
         setAllPixels(0, 255, 0);
         sendProtocolState("ACTIVE");
         sendDebug("State changed to Active.");
@@ -286,19 +194,19 @@ private:
     }
   }
 
-  void setRelayOn(uint8_t pin)
+  void setRelayOn()
   {
-    digitalWrite(pin, LOW);
+    digitalWrite(pinRelay, LOW);
   }
 
-  void setRelayOff(uint8_t pin)
+  void setRelayOff()
   {
-    digitalWrite(pin, HIGH);
+    digitalWrite(pinRelay, HIGH);
   }
 
-  bool isRelayOn(uint8_t pin) const
+  bool isRelayOn() const
   {
-    return digitalRead(pin) == LOW;
+    return digitalRead(pinRelay) == LOW;
   }
 
   bool isRestComplete(unsigned long nowMs) const
@@ -326,19 +234,6 @@ private:
         return "Launch";
       case Active:
         return "Active";
-      default:
-        return "Unknown";
-    }
-  }
-
-  const char* getSensorModeName() const
-  {
-    switch (sensorMode)
-    {
-      case SensorModePir:
-        return "PIR";
-      case SensorModeUltrasonic:
-        return "Ultrasonic";
       default:
         return "Unknown";
     }
@@ -373,51 +268,21 @@ private:
 
     Serial.print(F("DEBUG: Status | State: "));
     Serial.print(getStateName());
-    Serial.print(F(" | SensorMode: "));
-    Serial.print(getSensorModeName());
-    Serial.print(F(" | Relay1: "));
-    Serial.print(isRelayOn(pinRelay1) ? F("ON") : F("OFF"));
+    Serial.print(F(" | Relay: "));
+    Serial.print(isRelayOn() ? F("ON") : F("OFF"));
     Serial.print(F(" | ManualButtonEvent: "));
     Serial.print(lastManualTriggerPressed ? F("PRESSED") : F("NONE"));
-
-    if (sensorMode == SensorModePir)
-    {
-      Serial.print(F(" | PirTriggered: "));
-      Serial.print(lastPirTriggered ? F("YES") : F("NO"));
-    }
-    else
-    {
-      Serial.print(F(" | DistanceInches: "));
-      if (lastDistanceInches > 0.0f)
-      {
-        Serial.print(lastDistanceInches, 2);
-      }
-      else
-      {
-        Serial.print(F("no reading"));
-      }
-    }
-
+    Serial.print(F(" | PirTriggered: "));
+    Serial.print(lastPirTriggered ? F("YES") : F("NO"));
     Serial.print(F(" | RestRemainingMs: "));
-    if (isRestComplete(nowMs))
-    {
-      Serial.print(0);
-    }
-    else
-    {
-      Serial.print(minimumRestMs - (nowMs - lastCycleEndedAtMs));
-    }
 
-    Serial.print(F(" | TriggerHoldRemainingMs: "));
-    if (triggerActiveStartedAtMs == 0)
+    if (isRestComplete(nowMs))
     {
       Serial.println(0);
     }
     else
     {
-      unsigned long heldMs = nowMs - triggerActiveStartedAtMs;
-      unsigned long remainingMs = heldMs >= triggerHoldMs ? 0 : (triggerHoldMs - heldMs);
-      Serial.println(remainingMs);
+      Serial.println(minimumRestMs - (nowMs - lastCycleEndedAtMs));
     }
   }
 
@@ -441,40 +306,28 @@ private:
   }
 };
 
-// RJ45 to Arduino mapping currently in use
-// RJ45 pin 8 -> Arduino 7 -> Relay
-// RJ45 pin 7 -> Arduino 6 -> PIR signal now, ultrasonic trigger later if needed
-// RJ45 pin 6 -> Arduino 5 -> Manual trigger button, normally open
-// RJ45 pin 5 -> Arduino 3
-// RJ45 pin 4 -> Arduino 4
-// RJ45 pin 3 -> Arduino 2 -> NeoPixel
+// PIR sensor on Arduino 6
+// Manual button on Arduino 5
+// Relay on Arduino 7
+// NeoPixel on Arduino 2
 
-const SensorMode sensorMode = SensorModePir;
-
-const uint8_t pinSensorSignal = 6;
-const uint8_t pinUltrasonicEcho = BallLauncherController::PinNotConnected;
+const uint8_t pinPir = 6;
 const uint8_t pinManualTrigger = 5;
-const uint8_t pinRelay1 = 7;
+const uint8_t pinRelay = 7;
 const uint8_t pinNeoPixel = 2;
 
 const uint16_t pixelCount = 10;
-const float triggerDistanceInches = 4.5f;
-const unsigned long triggerHoldMs = 1000;
 const unsigned long launchDurationMs = 3000;
 const unsigned long activeDurationMs = 5000;
 const unsigned long minimumRestMs = 5000;
 const unsigned long heartbeatIntervalMs = 1000;
 
 BallLauncherController controller(
-  sensorMode,
-  pinSensorSignal,
-  pinUltrasonicEcho,
+  pinPir,
   pinManualTrigger,
-  pinRelay1,
+  pinRelay,
   pinNeoPixel,
   pixelCount,
-  triggerDistanceInches,
-  triggerHoldMs,
   launchDurationMs,
   activeDurationMs,
   minimumRestMs,
