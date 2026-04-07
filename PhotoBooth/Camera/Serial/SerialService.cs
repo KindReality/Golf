@@ -11,6 +11,8 @@ namespace SaftApp.Serial
         private readonly SerialOptions _options;
         private SerialPort? _port;
         private CancellationTokenSource? _cts;
+        private CancellationTokenSource? _reconnectCts;
+        private Task? _reconnectTask;
 
         public event EventHandler<string>? LineReceived;
 
@@ -54,6 +56,8 @@ namespace SaftApp.Serial
         {
             try { _cts?.Cancel(); } catch { }
             _cts = null;
+            try { _reconnectCts?.Cancel(); } catch { }
+            _reconnectCts = null;
             try { _port?.Close(); } catch { }
             try { _port?.Dispose(); } catch { }
             _port = null;
@@ -86,7 +90,7 @@ namespace SaftApp.Serial
                     }
                     catch (Exception)
                     {
-                        // if port error occurred, attempt to stop loop
+                        // if port error occurred, attempt to stop loop and reconnect
                         break;
                     }
 
@@ -95,7 +99,51 @@ namespace SaftApp.Serial
             }
             finally
             {
-                try { Close(); } catch { }
+                try { _port?.Close(); } catch { }
+                try { _port?.Dispose(); } catch { }
+                _port = null;
+                
+                // Port was closed, start reconnection task
+                StartReconnectLoop();
+            }
+        }
+
+        private void StartReconnectLoop()
+        {
+            // Only start reconnect loop if we're not already doing one
+            if (_reconnectTask is not null && !_reconnectTask.IsCompleted)
+                return;
+
+            _reconnectCts = new CancellationTokenSource();
+            _reconnectTask = Task.Run(() => ReconnectLoopAsync(_reconnectCts.Token));
+        }
+
+        private async Task ReconnectLoopAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    // Wait 1 second before attempting reconnection
+                    await Task.Delay(1000, token);
+
+                    if (token.IsCancellationRequested) break;
+
+                    // Attempt to reconnect
+                    if (await OpenAsync())
+                    {
+                        // Successfully reconnected, exit reconnect loop
+                        return;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception)
+                {
+                    // Log or ignore connection errors and continue attempting
+                }
             }
         }
 
