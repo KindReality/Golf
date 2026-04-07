@@ -12,7 +12,7 @@ class BallLauncherController
 {
 public:
   BallLauncherController(
-    uint8_t pirPin,
+    uint8_t breakBeamPin,
     uint8_t manualTriggerPin,
     uint8_t relayPin,
     uint8_t neoPixelPin,
@@ -21,7 +21,7 @@ public:
     unsigned long activeDurationMs,
     unsigned long minimumRestMs,
     unsigned long heartbeatIntervalMs)
-    : pinPir(pirPin),
+    : pinBreakBeam(breakBeamPin),
       pinManualTrigger(manualTriggerPin),
       pinRelay(relayPin),
       pinNeoPixel(neoPixelPin),
@@ -36,7 +36,7 @@ public:
 
   void begin()
   {
-    pinMode(pinPir, INPUT);
+    pinMode(pinBreakBeam, INPUT_PULLUP);
     pinMode(pinRelay, OUTPUT);
 
     pinMode(pinManualTrigger, INPUT_PULLUP);
@@ -83,7 +83,7 @@ public:
   }
 
 private:
-  uint8_t pinPir;
+  uint8_t pinBreakBeam;
   uint8_t pinManualTrigger;
   uint8_t pinRelay;
   uint8_t pinNeoPixel;
@@ -100,7 +100,7 @@ private:
   unsigned long lastHeartbeatAtMs = 0;
   unsigned long lastDebugStatusAtMs = 0;
 
-  bool lastPirTriggered = false;
+  bool lastBreakBeamTriggered = false;
   bool lastManualTriggerPressed = false;
 
   const unsigned long debugStatusIntervalMs = 500;
@@ -110,7 +110,7 @@ private:
 
   void executeIdle(unsigned long nowMs)
   {
-    lastPirTriggered = isPirTriggered();
+    lastBreakBeamTriggered = isBreakBeamTriggered();
     bool manualTriggerPressed = isManualTriggerPressed();
 
     if (!isRestComplete(nowMs))
@@ -126,10 +126,10 @@ private:
       return;
     }
 
-    if (lastPirTriggered)
+    if (lastBreakBeamTriggered)
     {
       sendProtocolEvent("TRIGGER");
-      sendDebug("PIR trigger confirmed.");
+      sendDebug("Break beam trigger confirmed.");
       setState(Launch);
     }
   }
@@ -154,9 +154,9 @@ private:
     }
   }
 
-  bool isPirTriggered() const
+  bool isBreakBeamTriggered() const
   {
-    return digitalRead(pinPir) == HIGH;
+    return digitalRead(pinBreakBeam) == LOW;
   }
 
   bool isManualTriggerPressed()
@@ -272,8 +272,8 @@ private:
     Serial.print(isRelayOn() ? F("ON") : F("OFF"));
     Serial.print(F(" | ManualButtonEvent: "));
     Serial.print(lastManualTriggerPressed ? F("PRESSED") : F("NONE"));
-    Serial.print(F(" | PirTriggered: "));
-    Serial.print(lastPirTriggered ? F("YES") : F("NO"));
+    Serial.print(F(" | BreakBeamTriggered: "));
+    Serial.print(lastBreakBeamTriggered ? F("YES") : F("NO"));
     Serial.print(F(" | RestRemainingMs: "));
 
     if (isRestComplete(nowMs))
@@ -306,12 +306,12 @@ private:
   }
 };
 
-// PIR sensor on Arduino 6
+// Break beam sensor on Arduino 6
 // Manual button on Arduino 5
 // Relay on Arduino 7
 // NeoPixel on Arduino 2
 
-const uint8_t pinPir = 6;
+const uint8_t pinBreakBeam = 6;
 const uint8_t pinManualTrigger = 5;
 const uint8_t pinRelay = 7;
 const uint8_t pinNeoPixel = 2;
@@ -323,7 +323,7 @@ const unsigned long minimumRestMs = 5000;
 const unsigned long heartbeatIntervalMs = 1000;
 
 BallLauncherController controller(
-  pinPir,
+  pinBreakBeam,
   pinManualTrigger,
   pinRelay,
   pinNeoPixel,
