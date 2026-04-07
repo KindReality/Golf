@@ -65,8 +65,10 @@ namespace SaftApp.Serial
                 _port = new SerialPort(_options.PortName, _options.BaudRate, Parity.None, 8, StopBits.One)
                 {
                     Encoding = Encoding.ASCII,
-                    ReadTimeout = 500,
-                    WriteTimeout = 500
+                    NewLine = "\r\n",   // Arduino Serial.println() sends \r\n; default \n causes ReadLine() to never match
+                    ReadTimeout = 2000,
+                    WriteTimeout = 500,
+                    DtrEnable = true,   // Arduino Micro (native USB CDC) requires DTR asserted to activate serial
                 };
 
                 _port.DataReceived += Port_DataReceived;

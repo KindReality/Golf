@@ -232,45 +232,32 @@ namespace SaftApp
                 if (string.IsNullOrWhiteSpace(e)) return;
                 Debug.WriteLine($"Serial line received: {e}");
 
-                // Arduino protocol uses prefixes like "EVENT:TRIGGER" or simple values like "TRIGGER"
                 var line = e.Trim();
                 if (line.StartsWith("EVENT:", StringComparison.OrdinalIgnoreCase))
                     line = line.Substring(6);
 
                 var norm = line.Trim();
 
-                // Direct trigger string
                 if (norm.Equals("TRIGGER", StringComparison.OrdinalIgnoreCase))
                 {
-                    // marshal to UI thread to interact with state/controls
                     Dispatcher.Invoke(() =>
                     {
-                        Debug.WriteLine("Serial trigger received, invoking StartCountdownMode if idle.");
+                        Debug.WriteLine("Serial TRIGGER received, invoking StartVideoMode if idle.");
                         if (_state == AppState.Idle)
-                        {
-                            StartCountdownMode();
-                        }
+                            StartVideoMode();
                         else
-                        {
                             Debug.WriteLine($"Trigger ignored, current state={_state}");
-                        }
                     });
-
                     return;
                 }
 
-                // Detect textual status lines that contain event information such as:
-                // "DEBUG: Status | ... | ManualButtonEvent: NONE | BreakBeamTriggered: NO | ..."
-                // Both a ManualButtonEvent (when not NONE) and a BreakBeamTriggered (YES/TRUE) should trigger the local video.
                 try
                 {
                     var upper = norm.ToUpperInvariant();
 
-                    // look for ManualButtonEvent
                     int mbi = upper.IndexOf("MANUALBUTTONEVENT", StringComparison.Ordinal);
                     if (mbi >= 0)
                     {
-                        // attempt to extract the value after ':' that follows the key
                         int colon = upper.IndexOf(':', mbi);
                         if (colon >= 0 && colon + 1 < upper.Length)
                         {
@@ -281,17 +268,13 @@ namespace SaftApp
                                 {
                                     Debug.WriteLine($"ManualButtonEvent detected (value={val}), invoking StartVideoMode if idle.");
                                     if (_state == AppState.Idle)
-                                    {
                                         StartVideoMode();
-                                    }
                                 });
-
                                 return;
                             }
                         }
                     }
 
-                    // look for BreakBeamTriggered
                     int bbi = upper.IndexOf("BREAKBEAMTRIGGERED", StringComparison.Ordinal);
                     if (bbi >= 0)
                     {
@@ -299,22 +282,18 @@ namespace SaftApp
                         if (colon >= 0 && colon + 1 < upper.Length)
                         {
                             var val = upper.Substring(colon + 1).Split(new[] { ' ', '|' }, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
-                            if (!string.IsNullOrEmpty(val))
+                            if (!string.IsNullOrEmpty(val) &&
+                                !val.Equals("NO", StringComparison.OrdinalIgnoreCase) &&
+                                !val.Equals("FALSE", StringComparison.OrdinalIgnoreCase) &&
+                                !val.Equals("0", StringComparison.OrdinalIgnoreCase))
                             {
-                                // consider YES/TRUE/1 or anything not NO/FALSE/0 as a trigger
-                                if (!val.Equals("NO", StringComparison.OrdinalIgnoreCase) && !val.Equals("FALSE", StringComparison.OrdinalIgnoreCase) && !val.Equals("0", StringComparison.OrdinalIgnoreCase))
+                                Dispatcher.Invoke(() =>
                                 {
-                                    Dispatcher.Invoke(() =>
-                                    {
-                                        Debug.WriteLine($"BreakBeamTriggered detected (value={val}), invoking StartVideoMode if idle.");
-                                        if (_state == AppState.Idle)
-                                        {
-                                            StartVideoMode();
-                                        }
-                                    });
-
-                                    return;
-                                }
+                                    Debug.WriteLine($"BreakBeamTriggered detected (value={val}), invoking StartVideoMode if idle.");
+                                    if (_state == AppState.Idle)
+                                        StartVideoMode();
+                                });
+                                return;
                             }
                         }
                     }
