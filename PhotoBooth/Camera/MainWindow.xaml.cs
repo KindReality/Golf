@@ -197,6 +197,7 @@ namespace SaftApp
 
                 _serialService = new SerialService(_serialOptions);
                 _serialService.LineReceived += Serial_LineReceived;
+                _serialService.StatusChanged += Serial_StatusChanged;
 
                 if (_serialOptions.AutoOpen)
                 {
@@ -209,7 +210,6 @@ namespace SaftApp
                     else
                     {
                         SetOverlay("Serial ready", 1);
-                        // clear overlay after short delay
                         _ = Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => SetOverlay("", 0)));
                     }
                 }
@@ -218,6 +218,11 @@ namespace SaftApp
             {
                 Debug.WriteLine(ex);
             }
+        }
+
+        private void Serial_StatusChanged(object? sender, SerialStatusEventArgs e)
+        {
+            Trace.WriteLine($"[Serial] {e}");
         }
 
         private void Serial_LineReceived(object? sender, string e)
@@ -232,7 +237,10 @@ namespace SaftApp
                 if (line.StartsWith("EVENT:", StringComparison.OrdinalIgnoreCase))
                     line = line.Substring(6);
 
-                if (line.Equals("TRIGGER", StringComparison.OrdinalIgnoreCase))
+                var norm = line.Trim();
+
+                // Direct trigger string
+                if (norm.Equals("TRIGGER", StringComparison.OrdinalIgnoreCase))
                 {
                     // marshal to UI thread to interact with state/controls
                     Dispatcher.Invoke(() =>
@@ -247,6 +255,73 @@ namespace SaftApp
                             Debug.WriteLine($"Trigger ignored, current state={_state}");
                         }
                     });
+
+                    return;
+                }
+
+                // Detect textual status lines that contain event information such as:
+                // "DEBUG: Status | ... | ManualButtonEvent: NONE | BreakBeamTriggered: NO | ..."
+                // Both a ManualButtonEvent (when not NONE) and a BreakBeamTriggered (YES/TRUE) should trigger the local video.
+                try
+                {
+                    var upper = norm.ToUpperInvariant();
+
+                    // look for ManualButtonEvent
+                    int mbi = upper.IndexOf("MANUALBUTTONEVENT", StringComparison.Ordinal);
+                    if (mbi >= 0)
+                    {
+                        // attempt to extract the value after ':' that follows the key
+                        int colon = upper.IndexOf(':', mbi);
+                        if (colon >= 0 && colon + 1 < upper.Length)
+                        {
+                            var val = upper.Substring(colon + 1).Split(new[] { ' ', '|' }, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+                            if (!string.IsNullOrEmpty(val) && !val.Equals("NONE", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Dispatcher.Invoke(() =>
+                                {
+                                    Debug.WriteLine($"ManualButtonEvent detected (value={val}), invoking StartVideoMode if idle.");
+                                    if (_state == AppState.Idle)
+                                    {
+                                        StartVideoMode();
+                                    }
+                                });
+
+                                return;
+                            }
+                        }
+                    }
+
+                    // look for BreakBeamTriggered
+                    int bbi = upper.IndexOf("BREAKBEAMTRIGGERED", StringComparison.Ordinal);
+                    if (bbi >= 0)
+                    {
+                        int colon = upper.IndexOf(':', bbi);
+                        if (colon >= 0 && colon + 1 < upper.Length)
+                        {
+                            var val = upper.Substring(colon + 1).Split(new[] { ' ', '|' }, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+                            if (!string.IsNullOrEmpty(val))
+                            {
+                                // consider YES/TRUE/1 or anything not NO/FALSE/0 as a trigger
+                                if (!val.Equals("NO", StringComparison.OrdinalIgnoreCase) && !val.Equals("FALSE", StringComparison.OrdinalIgnoreCase) && !val.Equals("0", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    Dispatcher.Invoke(() =>
+                                    {
+                                        Debug.WriteLine($"BreakBeamTriggered detected (value={val}), invoking StartVideoMode if idle.");
+                                        if (_state == AppState.Idle)
+                                        {
+                                            StartVideoMode();
+                                        }
+                                    });
+
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine(ex);
                 }
             }
             catch (Exception ex)
@@ -329,7 +404,16 @@ namespace SaftApp
             _countdownTimer.Stop();
 
             // dispose serial service
-            try { _serialService?.Dispose(); } catch { }
+            try
+            {
+                if (_serialService is not null)
+                {
+                    _serialService.LineReceived -= Serial_LineReceived;
+                    _serialService.StatusChanged -= Serial_StatusChanged;
+                    _serialService.Dispose();
+                }
+            }
+            catch { }
             _serialService = null;
 
             // stop and dispose video timer
@@ -391,8 +475,7 @@ namespace SaftApp
                 prev = _framePreview;
             }
 
-            Debug.WriteLine($"OnPreviewLoop tick: state={_state}, cap={(cap is null ? "null" : "ok")}, frameFull={(full is null ? "null" : "ok")}, framePrev={(prev is null ? "null" : "ok")}, previewLoopEnabled={_previewLoop.IsEnabled}");
-
+            // Avoid noisy per-frame logging; only log on problems
             if (cap is null || full is null || prev is null) return;
             if (!cap.Read(full) || full.Empty())
             {
@@ -406,7 +489,7 @@ namespace SaftApp
                 var bmp = BitmapSourceConverter.ToBitmapSource(prev);
                 bmp.Freeze();
                 PreviewControl.Source = bmp;
-                Debug.WriteLine("OnPreviewLoop: updated PreviewControl.Source with new frame");
+                // intentionally no per-frame debug log to reduce noise
             }
             catch (Exception ex)
             {
