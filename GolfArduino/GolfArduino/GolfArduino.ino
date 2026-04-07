@@ -8,6 +8,36 @@ enum WorkflowState
   Active
 };
 
+// Configurable values
+const unsigned long startupDelayMs = 8000;
+const unsigned long manualTriggerDebounceMs = 10;
+const unsigned long debugStatusIntervalMs = 500;
+
+const uint8_t pinBreakBeam = 6;
+const uint8_t pinManualTrigger = 5;
+const uint8_t pinRelay = 7;
+const uint8_t pinNeoPixel = 2;
+
+const uint16_t pixelCount = 10;
+const unsigned long launchDurationMs = 3000;
+const unsigned long activeDurationMs = 5000;
+const unsigned long minimumRestMs = 5000;
+const unsigned long heartbeatIntervalMs = 1000;
+
+enum PixelColorIndex
+{
+  IdleColor,
+  LaunchColor,
+  ActiveColor
+};
+
+const uint8_t stateColors[][3] =
+{
+  { 0, 0, 255 },
+  { 255, 0, 0 },
+  { 0, 255, 0 }
+};
+
 class BallLauncherController
 {
 public:
@@ -41,7 +71,7 @@ public:
 
     pinMode(pinManualTrigger, INPUT_PULLUP);
     manualTriggerButton.attach(pinManualTrigger);
-    manualTriggerButton.interval(10);
+    manualTriggerButton.interval(manualTriggerDebounceMs);
 
     setRelayOff();
 
@@ -102,8 +132,6 @@ private:
 
   bool lastBreakBeamTriggered = false;
   bool lastManualTriggerPressed = false;
-
-  const unsigned long debugStatusIntervalMs = 500;
 
   Adafruit_NeoPixel pixels;
   Bounce manualTriggerButton = Bounce();
@@ -174,20 +202,29 @@ private:
     {
       case Idle:
         setRelayOff();
-        setAllPixels(0, 0, 255);
+        setAllPixels(
+          stateColors[IdleColor][0],
+          stateColors[IdleColor][1],
+          stateColors[IdleColor][2]);
         sendProtocolState("IDLE");
         sendDebug("State changed to Idle.");
         break;
 
       case Launch:
-        setAllPixels(255, 0, 0);
+        setAllPixels(
+          stateColors[LaunchColor][0],
+          stateColors[LaunchColor][1],
+          stateColors[LaunchColor][2]);
         sendProtocolState("LAUNCH");
         sendDebug("State changed to Launch.");
         break;
 
       case Active:
         setRelayOff();
-        setAllPixels(0, 255, 0);
+        setAllPixels(
+          stateColors[ActiveColor][0],
+          stateColors[ActiveColor][1],
+          stateColors[ActiveColor][2]);
         sendProtocolState("ACTIVE");
         sendDebug("State changed to Active.");
         break;
@@ -306,22 +343,6 @@ private:
   }
 };
 
-// Break beam sensor on Arduino 6
-// Manual button on Arduino 5
-// Relay on Arduino 7
-// NeoPixel on Arduino 2
-
-const uint8_t pinBreakBeam = 6;
-const uint8_t pinManualTrigger = 5;
-const uint8_t pinRelay = 7;
-const uint8_t pinNeoPixel = 2;
-
-const uint16_t pixelCount = 10;
-const unsigned long launchDurationMs = 3000;
-const unsigned long activeDurationMs = 5000;
-const unsigned long minimumRestMs = 5000;
-const unsigned long heartbeatIntervalMs = 1000;
-
 BallLauncherController controller(
   pinBreakBeam,
   pinManualTrigger,
@@ -336,7 +357,7 @@ BallLauncherController controller(
 
 void setup()
 {
-  delay(8000);
+  delay(startupDelayMs);
   Serial.begin(115200);
   controller.begin();
 }
