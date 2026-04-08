@@ -11,6 +11,7 @@ enum WorkflowState
 // Configurable values
 const unsigned long startupDelayMs = 8000;
 const unsigned long manualTriggerDebounceMs = 10;
+const unsigned long manualTriggerLongPressMs = 1000;
 const unsigned long debugStatusIntervalMs = 500;
 
 const uint8_t pinBreakBeam = 6;
@@ -29,6 +30,13 @@ enum PixelColorIndex
   IdleColor,
   LaunchColor,
   ActiveColor
+};
+
+enum ManualButtonEventType
+{
+  ManualButtonNone,
+  ManualButtonTap,
+  ManualButtonLong
 };
 
 const uint8_t stateColors[][3] =
@@ -92,6 +100,7 @@ public:
     unsigned long nowMs = millis();
 
     manualTriggerButton.update();
+    updateManualButtonEvent(nowMs);
 
     switch (currentState)
     {
@@ -131,7 +140,10 @@ private:
   unsigned long lastDebugStatusAtMs = 0;
 
   bool lastBreakBeamTriggered = false;
-  bool lastManualTriggerPressed = false;
+  bool isManualButtonDown = false;
+  unsigned long manualButtonPressedAtMs = 0;
+  ManualButtonEventType lastManualButtonEvent = ManualButtonNone;
+  ManualButtonEventType pendingManualButtonEvent = ManualButtonNone;
 
   Adafruit_NeoPixel pixels;
   Bounce manualTriggerButton = Bounce();
@@ -139,17 +151,17 @@ private:
   void executeIdle(unsigned long nowMs)
   {
     lastBreakBeamTriggered = isBreakBeamTriggered();
-    bool manualTriggerPressed = isManualTriggerPressed();
 
     if (!isRestComplete(nowMs))
     {
       return;
     }
 
-    if (manualTriggerPressed)
+    if (pendingManualButtonEvent != ManualButtonNone)
     {
+      pendingManualButtonEvent = ManualButtonNone;
       sendProtocolEvent("TRIGGER");
-      sendDebug("Manual trigger confirmed.");
+      sendDebug("Manual trigger confirmed after release.");
       setState(Launch);
       return;
     }
@@ -187,10 +199,38 @@ private:
     return digitalRead(pinBreakBeam) == LOW;
   }
 
-  bool isManualTriggerPressed()
+  void updateManualButtonEvent(unsigned long nowMs)
   {
-    lastManualTriggerPressed = manualTriggerButton.fell();
-    return lastManualTriggerPressed;
+    bool manualButtonDown = manualTriggerButton.read() == LOW;
+
+    if (manualButtonDown && !isManualButtonDown)
+    {
+      isManualButtonDown = true;
+      manualButtonPressedAtMs = nowMs;
+      return;
+    }
+
+    if (!manualButtonDown && isManualButtonDown)
+    {
+      isManualButtonDown = false;
+      unsigned long pressDurationMs = nowMs - manualButtonPressedAtMs;
+      lastManualButtonEvent = pressDurationMs >= manualTriggerLongPressMs ? ManualButtonLong : ManualButtonTap;
+      pendingManualButtonEvent = lastManualButtonEvent;
+    }
+  }
+
+  const char* getManualButtonEventName() const
+  {
+    switch (lastManualButtonEvent)
+    {
+      case ManualButtonTap:
+        return "TAP";
+      case ManualButtonLong:
+        return "LONG";
+      case ManualButtonNone:
+      default:
+        return "NONE";
+    }
   }
 
   void setState(WorkflowState newState)
@@ -308,7 +348,7 @@ private:
     Serial.print(F(" | Relay: "));
     Serial.print(isRelayOn() ? F("ON") : F("OFF"));
     Serial.print(F(" | ManualButtonEvent: "));
-    Serial.print(lastManualTriggerPressed ? F("PRESSED") : F("NONE"));
+    Serial.print(getManualButtonEventName());
     Serial.print(F(" | BreakBeamTriggered: "));
     Serial.print(lastBreakBeamTriggered ? F("YES") : F("NO"));
     Serial.print(F(" | RestRemainingMs: "));
@@ -329,7 +369,7 @@ private:
     {
       lastDebugStatusAtMs = nowMs;
       printDebugStatus();
-      lastManualTriggerPressed = false;
+      lastManualButtonEvent = ManualButtonNone;
     }
   }
 
