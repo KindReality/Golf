@@ -233,55 +233,80 @@ namespace SaftApp
                 Debug.WriteLine($"Serial line received: {e}");
 
                 var line = e.Trim();
+
+                // --- Protocol event lines: EVENT:TRIGGER (break beam) ---
                 if (line.StartsWith("EVENT:", StringComparison.OrdinalIgnoreCase))
-                    line = line.Substring(6);
-
-                var norm = line.Trim();
-
-                if (norm.Equals("TRIGGER", StringComparison.OrdinalIgnoreCase))
                 {
-                    Dispatcher.Invoke(() =>
+                    var eventVal = line.Substring(6).Trim();
+                    if (eventVal.Equals("TRIGGER", StringComparison.OrdinalIgnoreCase))
                     {
-                        Debug.WriteLine("Serial TRIGGER received, invoking StartVideoMode if idle.");
-                        if (_state == AppState.Idle)
-                            StartVideoMode();
-                        else
-                            Debug.WriteLine($"Trigger ignored, current state={_state}");
-                    });
+                        Dispatcher.Invoke(() =>
+                        {
+                            Debug.WriteLine("Serial EVENT:TRIGGER (break beam) -> StartVideoMode");
+                            if (_state == AppState.Idle)
+                                StartVideoMode();
+                            else
+                                Debug.WriteLine($"EVENT:TRIGGER ignored, current state={_state}");
+                        });
+                    }
                     return;
                 }
 
-                try
+                // --- DEBUG: Status lines: parse ManualButtonEvent and BreakBeamTriggered ---
+                if (line.StartsWith("DEBUG:", StringComparison.OrdinalIgnoreCase))
                 {
-                    var upper = norm.ToUpperInvariant();
+                    var upper = line.ToUpperInvariant();
 
+                    // ManualButtonEvent: TAP  -> video
+                    // ManualButtonEvent: LONG -> photo countdown
                     int mbi = upper.IndexOf("MANUALBUTTONEVENT", StringComparison.Ordinal);
                     if (mbi >= 0)
                     {
                         int colon = upper.IndexOf(':', mbi);
                         if (colon >= 0 && colon + 1 < upper.Length)
                         {
-                            var val = upper.Substring(colon + 1).Split(new[] { ' ', '|' }, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+                            var val = upper.Substring(colon + 1)
+                                          .Split(new[] { ' ', '|' }, StringSplitOptions.RemoveEmptyEntries)
+                                          .FirstOrDefault()?.Trim();
+
                             if (!string.IsNullOrEmpty(val) && !val.Equals("NONE", StringComparison.OrdinalIgnoreCase))
                             {
-                                Dispatcher.Invoke(() =>
+                                if (val.Equals("TAP", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    Debug.WriteLine($"ManualButtonEvent detected (value={val}), invoking StartVideoMode if idle.");
-                                    if (_state == AppState.Idle)
-                                        StartVideoMode();
-                                });
-                                return;
+                                    Dispatcher.Invoke(() =>
+                                    {
+                                        Debug.WriteLine("ManualButtonEvent: TAP -> StartVideoMode");
+                                        if (_state == AppState.Idle)
+                                            StartVideoMode();
+                                    });
+                                    return;
+                                }
+
+                                if (val.Equals("LONG", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    Dispatcher.Invoke(() =>
+                                    {
+                                        Debug.WriteLine("ManualButtonEvent: LONG -> StartCountdownMode (photo)");
+                                        if (_state == AppState.Idle)
+                                            StartCountdownMode();
+                                    });
+                                    return;
+                                }
                             }
                         }
                     }
 
+                    // BreakBeamTriggered: YES -> video
                     int bbi = upper.IndexOf("BREAKBEAMTRIGGERED", StringComparison.Ordinal);
                     if (bbi >= 0)
                     {
                         int colon = upper.IndexOf(':', bbi);
                         if (colon >= 0 && colon + 1 < upper.Length)
                         {
-                            var val = upper.Substring(colon + 1).Split(new[] { ' ', '|' }, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+                            var val = upper.Substring(colon + 1)
+                                          .Split(new[] { ' ', '|' }, StringSplitOptions.RemoveEmptyEntries)
+                                          .FirstOrDefault()?.Trim();
+
                             if (!string.IsNullOrEmpty(val) &&
                                 !val.Equals("NO", StringComparison.OrdinalIgnoreCase) &&
                                 !val.Equals("FALSE", StringComparison.OrdinalIgnoreCase) &&
@@ -289,18 +314,13 @@ namespace SaftApp
                             {
                                 Dispatcher.Invoke(() =>
                                 {
-                                    Debug.WriteLine($"BreakBeamTriggered detected (value={val}), invoking StartVideoMode if idle.");
+                                    Debug.WriteLine($"BreakBeamTriggered: {val} -> StartVideoMode");
                                     if (_state == AppState.Idle)
                                         StartVideoMode();
                                 });
-                                return;
                             }
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine(ex);
                 }
             }
             catch (Exception ex)
