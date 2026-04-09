@@ -20,9 +20,9 @@ const uint8_t pinRelay = 7;
 const uint8_t pinNeoPixel = 2;
 
 const uint16_t pixelCount = 10;
-const unsigned long launchDurationMs = 3000;
-const unsigned long activeDurationMs = 5000;
-const unsigned long minimumRestMs = 1000;
+const unsigned long launchDurationMs = 8000;
+const unsigned long activeDurationMs = 8500;
+const unsigned long minimumRestMs = 500;
 const unsigned long heartbeatIntervalMs = 1000;
 
 enum PixelColorIndex

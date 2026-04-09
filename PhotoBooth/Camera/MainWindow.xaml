@@ -9,7 +9,7 @@
     mc:Ignorable="d"
     WindowStyle="None"
     ResizeMode="NoResize"
-    WindowState="Normal"
+    WindowState="Maximized"
     Background="Black"
     ShowInTaskbar="True"
     Topmost="False"
@@ -169,9 +169,9 @@
 
     <Grid SnapsToDevicePixels="True">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="50"/>
+            <ColumnDefinition Width="25"/>
             <ColumnDefinition/>
-            <ColumnDefinition Width="50"/>
+            <ColumnDefinition Width="25"/>
         </Grid.ColumnDefinitions>
 
         <!-- Left: capture button -->
@@ -179,7 +179,7 @@
                 x:Name="bCapture"
                 Background="DarkRed"
                 Height="300"
-                Width="50"
+                Width="25"
                 Click="bCapture_Click"/>
 
         <Grid Grid.Column="1" ClipToBounds="True">
@@ -237,7 +237,7 @@
                 x:Name="bVideo"
                 Background="DarkRed"
                 Height="300"
-                Width="50"
+                Width="25"
                 Click="bVideo_Click"/>
     </Grid>
 </Window>

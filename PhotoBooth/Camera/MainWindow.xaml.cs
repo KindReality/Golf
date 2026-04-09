@@ -103,23 +103,6 @@ namespace SaftApp
             _previewLoop.Tick += OnPreviewLoop;
 
             _countdownTimer.Tick += OnCountdownTick;
-
-            WindowStartupLocation = WindowStartupLocation.Manual;
-
-            Action apply = () =>
-            {
-                var wa = SystemParameters.WorkArea;
-                double titleBarHeight = SystemParameters.CaptionHeight + SystemParameters.WindowNonClientFrameThickness.Top;
-                Left = wa.Left;
-                Top = wa.Top + titleBarHeight;
-                Width = wa.Width / 2;
-                Height = wa.Height / 2;
-            };
-
-            Loaded += (_, __) => apply();
-            StateChanged += (_, __) => { if (WindowState == WindowState.Normal) apply(); };
-
-            // Example external controller trigger hookup can call ControllerTrigger()
         }
 
         private void LoadTimingConfiguration()
