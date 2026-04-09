@@ -20,35 +20,8 @@ namespace SaftApp
 
     public sealed partial class MainWindow : WpfWindow
     {
-        public static readonly DependencyProperty CaptureMarkerProperty =
-            DependencyProperty.Register(nameof(CaptureMarker), typeof(bool), typeof(MainWindow),
-                new PropertyMetadata(false, OnCaptureMarkerChanged));
-
-        public static readonly DependencyProperty FadeOutMarkerProperty =
-            DependencyProperty.Register(nameof(FadeOutMarker), typeof(bool), typeof(MainWindow),
-                new PropertyMetadata(false, OnFadeOutMarkerChanged));
-
-        public static readonly DependencyProperty PreviewDoneMarkerProperty =
-            DependencyProperty.Register(nameof(PreviewDoneMarker), typeof(bool), typeof(MainWindow),
-                new PropertyMetadata(false, OnPreviewDoneMarkerChanged));
-
-        public bool CaptureMarker
-        {
-            get => (bool)GetValue(CaptureMarkerProperty);
-            set => SetValue(CaptureMarkerProperty, value);
-        }
-
-        public bool FadeOutMarker
-        {
-            get => (bool)GetValue(FadeOutMarkerProperty);
-            set => SetValue(FadeOutMarkerProperty, value);
-        }
-
-        public bool PreviewDoneMarker
-        {
-            get => (bool)GetValue(PreviewDoneMarkerProperty);
-            set => SetValue(PreviewDoneMarkerProperty, value);
-        }
+        // All bool-marker DPs removed. CaptureMarker and FadeOutMarker are now
+        // driven by DispatcherTimer offsets and storyboard Completed events.
 
         private const int CountdownSeconds = 6;
         private const int TargetFps = 30;
@@ -82,8 +55,11 @@ namespace SaftApp
         // timer used to limit video playback when VideoDurationSeconds > 0
         private DispatcherTimer? _videoTimer;
 
-        // fallback timer to ensure preview returns to idle if storyboard doesn't fire
+        // timer that drives preview timeout → window restart
         private DispatcherTimer? _previewFallbackTimer;
+
+        // timer used for the hold delay between snapshot and flash-out
+        private DispatcherTimer? _holdTimer;
 
         // Serial support
         private ISerialService? _serialService;
@@ -404,6 +380,10 @@ namespace SaftApp
             try { _previewFallbackTimer?.Stop(); } catch { }
             _previewFallbackTimer = null;
 
+            // stop hold timer
+            try { _holdTimer?.Stop(); } catch { }
+            _holdTimer = null;
+
             VideoCapture? cap;
             lock (_sync)
             {
@@ -536,128 +516,7 @@ namespace SaftApp
             SetState(AppState.Capture);
         }
 
-        private static void OnCaptureMarkerChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-        {
-            if (e.NewValue is bool b && b)
-                ((MainWindow)d).OnCaptureMarker();
-        }
-
-        private static void OnFadeOutMarkerChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-        {
-            if (e.NewValue is bool b && b)
-                ((MainWindow)d).OnFadeOutMarker();
-        }
-
-        private static void OnPreviewDoneMarkerChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-        {
-            if (e.NewValue is bool b && b)
-                ((MainWindow)d).OnPreviewDoneMarker();
-        }
-
-        private void OnCaptureMarker()
-        {
-            Debug.WriteLine("OnCaptureMarker fired");
-            CaptureMarker = false;
-            CaptureSnapshot();
-            try
-            {
-                var hold = ((Storyboard)FindResource("HoldThenFade")).Clone();
-                hold.CurrentStateInvalidated += (s, e) => Debug.WriteLine($"HoldThenFade state: {((Clock)s).CurrentState}");
-                Debug.WriteLine("Starting HoldThenFade storyboard");
-                hold.Begin(this, true);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-        }
-
-        private void OnFadeOutMarker()
-        {
-            Debug.WriteLine("OnFadeOutMarker fired");
-            FadeOutMarker = false;
-
-            _runningFlashIn?.Stop(this);
-            _runningFlashIn = null;
-
-            flashOverlay.BeginAnimation(UIElement.OpacityProperty, null);
-
-            try
-            {
-                var outSb = ((Storyboard)FindResource("FlashOutSmooth")).Clone();
-                outSb.Completed += (_, __) =>
-                {
-                    Debug.WriteLine("FlashOutSmooth completed, moving to Preview state");
-                    SetState(AppState.Preview);
-                };
-                outSb.CurrentStateInvalidated += (s, e) => Debug.WriteLine($"FlashOutSmooth state: {((Clock)s).CurrentState}");
-                Debug.WriteLine("Starting FlashOutSmooth storyboard");
-                outSb.Begin(this, true);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-        }
-
-        private void OnPreviewDoneMarker()
-        {
-            PreviewDoneMarker = false;
-            Debug.WriteLine("OnPreviewDoneMarker fired");
-
-            try { _previewFallbackTimer?.Stop(); } catch { }
-            _previewFallbackTimer = null;
-
-            try
-            {
-                // Clear the static preview image and ensure it's hidden
-                imageControl.Source = null;
-                imageControl.Visibility = Visibility.Collapsed;
-
-                // Reset any transforms applied during preview
-                try
-                {
-                    imageControl.RenderTransform = null;
-                    PreviewControl.RenderTransform = null;
-                }
-                catch { }
-
-                // Clear overlay and ensure flash overlay is hidden
-                try
-                {
-                    flashOverlay.BeginAnimation(UIElement.OpacityProperty, null);
-                    flashOverlay.Opacity = 0;
-                    flashOverlay.Visibility = Visibility.Collapsed;
-                }
-                catch { }
-
-                // Ensure preview loop is running so live frames display again
-                try
-                {
-                    if (!_previewLoop.IsEnabled)
-                        _previewLoop.Start();
-                    // clear any frozen preview image so next frame is displayed
-                    PreviewControl.Source = null;
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine(ex);
-                }
-
-                // Finally return to Idle state to perform any additional cleanup
-                SetState(AppState.Idle);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine(ex);
-                // best-effort cleanup even on error
-                try { imageControl.Visibility = Visibility.Collapsed; } catch { }
-                try { PreviewControl.Source = null; } catch { }
-                try { _previewLoop.Start(); } catch { }
-            }
-        }
-
-        private void CaptureSnapshot()
+        private async void CaptureSnapshot()
         {
             Mat? src;
             lock (_sync)
@@ -695,6 +554,68 @@ namespace SaftApp
             imageControl.Source = bmpOut;
             imageControl.Visibility = Visibility.Visible;
             SetOverlay("Saved", 1);
+
+            // Start hold timer for flash-out delay
+            try
+            {
+                _holdTimer?.Stop();
+                _holdTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_holdSeconds) };
+                _holdTimer.Tick += (s, e) =>
+                {
+                    _holdTimer?.Stop();
+                    _holdTimer = null;
+                    Debug.WriteLine("Hold timer elapsed, starting flash-out");
+                    // flash-out handled by storyboard in OnCaptureComplete
+                    OnCaptureComplete();
+                };
+                _holdTimer.Start();
+                Debug.WriteLine($"Hold timer started ({_holdSeconds}s).");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+        }
+
+        private void OnCaptureComplete()
+        {
+            Debug.WriteLine("OnCaptureComplete fired");
+
+            _runningFlashIn?.Stop(this);
+            _runningFlashIn = null;
+
+            flashOverlay.BeginAnimation(UIElement.OpacityProperty, null);
+
+            try
+            {
+                var outSb = ((Storyboard)FindResource("FlashOutSmooth")).Clone();
+                outSb.Completed += (_, __) =>
+                {
+                    Debug.WriteLine("FlashOutSmooth completed, moving to Preview state");
+                    SetState(AppState.Preview);
+                };
+                outSb.CurrentStateInvalidated += (s, e) => Debug.WriteLine($"FlashOutSmooth state: {((Clock)s).CurrentState}");
+                Debug.WriteLine("Starting FlashOutSmooth storyboard");
+                outSb.Begin(this, true);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+        }
+
+        private async Task RestartCameraAsync()
+        {
+            Debug.WriteLine("RestartCameraAsync: reopening camera...");
+            try
+            {
+                await StopAsync();
+                await StartAsync(0);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
         }
 
         private void SetState(AppState next)
@@ -758,35 +679,12 @@ namespace SaftApp
 
             if (_state == AppState.Capture)
             {
-                CaptureMarker = false;
-                FadeOutMarker = false;
-                PreviewDoneMarker = false;
-
-                _runningFlashIn?.Stop(this);
-                _runningFlashIn = ((Storyboard)FindResource("FlashInFast")).Clone();
-                _runningFlashIn.Begin(this, true);
+                CaptureSnapshot();
                 return;
             }
 
             if (_state == AppState.Preview)
             {
-                PreviewDoneMarker = false;
-                var timeout = ((Storyboard)FindResource("PreviewTimeout")).Clone();
-                // Ensure we react when the storyboard completes because animating a DP does not invoke its PropertyChangedCallback
-                timeout.Completed += (_, __) =>
-                {
-                    try
-                    {
-                        if (_state == AppState.Preview)
-                            OnPreviewDoneMarker();
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine(ex);
-                    }
-                };
-                timeout.Begin(this, true);
-
                 // apply horizontal flip to the static preview so it matches typical mirrored live previews
                 try
                 {
@@ -795,7 +693,7 @@ namespace SaftApp
                 }
                 catch { }
 
-                // start fallback timer to ensure we always return to Idle
+                // Single authoritative timer — drives the preview timeout and window restart
                 try
                 {
                     _previewFallbackTimer?.Stop();
@@ -804,25 +702,18 @@ namespace SaftApp
                     {
                         _previewFallbackTimer?.Stop();
                         _previewFallbackTimer = null;
-                        Debug.WriteLine("Preview fallback timer elapsed, invoking OnPreviewDoneMarker.");
-                        try
-                        {
-                            // only act if we're still in Preview
-                            if (_state == AppState.Preview)
-                                OnPreviewDoneMarker();
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.WriteLine(ex);
-                        }
+                        Debug.WriteLine("Preview timer elapsed, invoking OnPreviewDoneMarker.");
+                        if (_state == AppState.Preview)
+                            OnPreviewDoneMarker();
                     };
                     _previewFallbackTimer.Start();
-                    Debug.WriteLine($"Entered Preview state, started fallback timer ({_previewSeconds}s).");
+                    Debug.WriteLine($"Entered Preview state, started timer ({_previewSeconds}s).");
                 }
                 catch (Exception ex)
                 {
                     Debug.WriteLine(ex);
                 }
+                return;
             }
 
             if (_state == AppState.Video)
@@ -940,6 +831,144 @@ namespace SaftApp
         {
             await StopAsync();
             base.OnClosed(e);
+        }
+
+        private void OnPreviewDoneMarker()
+        {
+            Debug.WriteLine("OnPreviewDoneMarker fired");
+
+            try { _previewFallbackTimer?.Stop(); } catch { }
+            _previewFallbackTimer = null;
+
+            try
+            {
+                imageControl.Source = null;
+                imageControl.Visibility = Visibility.Collapsed;
+
+                try
+                {
+                    imageControl.RenderTransform = null;
+                    PreviewControl.RenderTransform = null;
+                }
+                catch { }
+
+                try
+                {
+                    flashOverlay.BeginAnimation(UIElement.OpacityProperty, null);
+                    flashOverlay.Opacity = 0;
+                    flashOverlay.Visibility = Visibility.Collapsed;
+                }
+                catch { }
+
+                RestartWindow();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+                try { RestartWindow(); } catch { SetState(AppState.Idle); }
+            }
+        }
+
+        private void RestartWindow()
+        {
+            Debug.WriteLine("RestartWindow fired");
+
+            // implement foolproof restart: reopen camera, reset state, and ensure idle display
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Dispatcher.InvokeAsync(async () =>
+                    {
+                        // stop any running timers
+                        try { _previewFallbackTimer?.Stop(); } catch { }
+                        try { _videoTimer?.Stop(); } catch { }
+                        try { _holdTimer?.Stop(); } catch { }
+
+                        // restart camera
+                        await RestartCameraAsync();
+
+                        // reset state to idle
+                        SetState(AppState.Idle);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine(ex);
+                }
+            });
+        }
+
+        private void DoSnapshot()
+        {
+            Debug.WriteLine("DoSnapshot marker fired");
+            // ignore if not in preview state
+            if (_state != AppState.Preview) return;
+
+            // Ensure render transforms are cleared before snapshot
+            try
+            {
+                imageControl.RenderTransform = null;
+                PreviewControl.RenderTransform = null;
+            }
+            catch { }
+
+            // snapshot exported regardless of file type settings
+            const string forcePngName = "snapshot_{0:yyyyMMdd_HHmmss_fff}.png";
+            var dir = string.IsNullOrWhiteSpace(_workDir) ? AppContext.BaseDirectory : _workDir;
+            var forcePngPath = Path.Combine(dir, string.Format(forcePngName, DateTime.Now));
+
+            OnCaptureComplete(); // just perform flash-out
+
+            // run snapshot in background, ignore errors
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    // always export to PNG format
+                    var pngPath = Path.ChangeExtension(forcePngPath, ".png");
+
+                    // small delay to ensure previous frame processing is complete
+                    Task.Delay(100).Wait();
+
+                    lock (_sync)
+                    {
+                        // direct pixel access for high performance
+                        if (_frameFull is not null && !_frameFull.Empty())
+                        {
+                            using var tmp = _frameFull.Clone();
+                            tmp.SaveImage(pngPath);
+                            Debug.WriteLine($"Snapshot saved: {pngPath}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Snapshot error: {ex}");
+                }
+            });
+        }
+
+        private void StartFlashOut()
+        {
+            Debug.WriteLine("StartFlashOut marker fired");
+
+            // if in preview state, just perform flash-out
+            if (_state == AppState.Preview)
+            {
+                OnCaptureComplete();
+                return;
+            }
+
+            // if in video state, stop video and perform flash-out
+            if (_state == AppState.Video)
+            {
+                try { _videoControl?.Stop(); } catch { }
+                OnCaptureComplete();
+                return;
+            }
+
+            Debug.WriteLine($"StartFlashOut: ignored, invalid state {_state}");
         }
     }
 }

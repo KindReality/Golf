@@ -118,21 +118,6 @@
                     </EasingDoubleKeyFrame.EasingFunction>
                 </EasingDoubleKeyFrame>
             </DoubleAnimationUsingKeyFrames>
-            <BooleanAnimationUsingKeyFrames Storyboard.TargetName="Root"
-                                            Storyboard.TargetProperty="CaptureMarker"
-                                            Duration="{StaticResource FlashInDuration}"
-                                            FillBehavior="Stop">
-                <DiscreteBooleanKeyFrame KeyTime="18%" Value="True"/>
-            </BooleanAnimationUsingKeyFrames>
-        </Storyboard>
-
-        <Storyboard x:Key="HoldThenFade">
-            <BooleanAnimationUsingKeyFrames Storyboard.TargetName="Root"
-                                            Storyboard.TargetProperty="FadeOutMarker"
-                                            Duration="{StaticResource HoldDuration}"
-                                            FillBehavior="Stop">
-                <DiscreteBooleanKeyFrame KeyTime="100%" Value="True"/>
-            </BooleanAnimationUsingKeyFrames>
         </Storyboard>
 
         <Storyboard x:Key="FlashOutSmooth">
@@ -155,15 +140,6 @@
                                            Duration="{StaticResource FlashOutDuration}">
                 <DiscreteObjectKeyFrame KeyTime="100%" Value="{x:Static Visibility.Collapsed}"/>
             </ObjectAnimationUsingKeyFrames>
-        </Storyboard>
-
-        <Storyboard x:Key="PreviewTimeout">
-            <BooleanAnimationUsingKeyFrames Storyboard.TargetName="Root"
-                                            Storyboard.TargetProperty="PreviewDoneMarker"
-                                            Duration="{StaticResource PreviewDuration}"
-                                            FillBehavior="Stop">
-                <DiscreteBooleanKeyFrame KeyTime="100%" Value="True"/>
-            </BooleanAnimationUsingKeyFrames>
         </Storyboard>
     </Window.Resources>
 
