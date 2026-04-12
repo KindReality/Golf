@@ -31,7 +31,7 @@ namespace SaftApp
         private int    _previewHeight        = 1080;
         private bool   _developerMode        = false;
 
-        // ── Runtime state ────────────────────────────────────────────────────
+        // ── Runtime state ─────────────────────────────────────────────────────
         private AppState _state = AppState.Idle;
 
         private readonly object _sync = new();
@@ -60,6 +60,15 @@ namespace SaftApp
 
         private ISerialService? _serialService;
         private SerialOptions?  _serialOptions;
+
+        // ── Face detection ────────────────────────────────────────────────────
+        private CascadeClassifier?  _faceCascade;
+        private OpenCvSharp.Rect[]  _lastFaces      = Array.Empty<OpenCvSharp.Rect>();
+        private int                 _imgPixelWidth;
+        private int                 _imgPixelHeight;
+        private volatile bool       _faceDetecting;
+        private int                 _faceFrameSkip;
+        private const int           FaceDetectEveryNFrames = 10;
 
         public MainWindow()
         {
@@ -128,6 +137,7 @@ namespace SaftApp
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
             ApplyDeveloperMode();
+            _faceCascade = TryLoadFaceCascade();
             await StartCameraAsync(0);
             await InitializeSerialAsync();
             TransitionTo(AppState.Idle);
@@ -214,7 +224,7 @@ namespace SaftApp
 
         private void EnterCaptureState()
         {
-            countdownGrid.Visibility = Visibility.Collapsed;
+            countdownGrid.Visibility  = Visibility.Collapsed;
             SetCountdownText(string.Empty, 0);
             transitionGrid.Visibility = Visibility.Visible;
             PlayAnimation("TransitionIn",
@@ -294,8 +304,8 @@ namespace SaftApp
 
         private void EnterPreviewState()
         {
-            _previewTimer          = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_previewSeconds) };
-            _previewTimer.Tick    += OnPreviewTimerTick;
+            _previewTimer       = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_previewSeconds) };
+            _previewTimer.Tick += OnPreviewTimerTick;
             _previewTimer.Start();
         }
 
@@ -303,7 +313,6 @@ namespace SaftApp
         {
             _previewTimer?.Stop();
             _previewTimer = null;
-
             if (_state != AppState.Preview) return;
             TransitionTo(AppState.Idle);
         }
@@ -313,6 +322,7 @@ namespace SaftApp
             captureGrid.Visibility = Visibility.Collapsed;
             previewGrid.Visibility = Visibility.Collapsed;
             videoGrid.Visibility   = Visibility.Visible;
+            FaceLayer.Children.Clear();
             PlayLocalVideo("media\\video.mp4");
         }
 
@@ -478,6 +488,7 @@ namespace SaftApp
             }
         }
 
+        // Called on UI thread every frame tick.
         private void OnPreviewLoopTick(object? sender, EventArgs e)
         {
             if (_state == AppState.Preview || _state == AppState.Video) return;
@@ -492,6 +503,7 @@ namespace SaftApp
 
             if (frame is null) return;
 
+            // Blit frame into WriteableBitmap
             try
             {
                 long stride = (long)_previewWidth * 3;
@@ -509,7 +521,137 @@ namespace SaftApp
             finally
             {
                 _previewBitmap.Unlock();
+            }
+
+            // Throttle face detection: every N frames, hand the frame to a background task
+            if (_faceCascade is not null && !_faceDetecting)
+            {
+                _faceFrameSkip++;
+                if (_faceFrameSkip >= FaceDetectEveryNFrames)
+                {
+                    _faceFrameSkip = 0;
+                    _faceDetecting = true;
+                    var detectFrame = frame;
+                    frame = null;           // ownership transferred
+                    _ = Task.Run(() => DetectFacesBackground(detectFrame));
+                }
+            }
+
+            frame?.Dispose();
+        }
+
+        // Runs on a background thread.
+        private void DetectFacesBackground(Mat frame)
+        {
+            try
+            {
+                if (_faceCascade is null) return;
+
+                int w = frame.Width;
+                int h = frame.Height;
+
+                using var gray = new Mat();
+                Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
+                Cv2.EqualizeHist(gray, gray);
+
+                var faces = _faceCascade.DetectMultiScale(
+                    gray,
+                    scaleFactor:  1.2,
+                    minNeighbors: 5,
+                    flags:        HaarDetectionTypes.ScaleImage,
+                    minSize:      new OpenCvSharp.Size(80, 80));
+
+                Debug.WriteLine($"[FaceDetect] {faces.Length} face(s).");
+
+                Dispatcher.InvokeAsync(() =>
+                {
+                    _lastFaces      = faces;
+                    _imgPixelWidth  = w;
+                    _imgPixelHeight = h;
+                    RenderFaceOverlay();
+                });
+            }
+            catch (Exception ex) { Debug.WriteLine($"[FaceDetect] {ex.Message}"); }
+            finally
+            {
                 frame.Dispose();
+                _faceDetecting = false;
+            }
+        }
+
+        // Loads haarcascade_frontalface_default.xml from several well-known locations.
+        private static CascadeClassifier? TryLoadFaceCascade()
+        {
+            const string fileName = "haarcascade_frontalface_default.xml";
+
+            var candidates = new[]
+            {
+                Path.Combine(AppContext.BaseDirectory, fileName),
+                Path.Combine(AppContext.BaseDirectory, "Assets", fileName),
+                Path.Combine(AppContext.BaseDirectory, "Assets", "Haar", fileName),
+            };
+
+            string? found = null;
+            foreach (var c in candidates)
+                if (File.Exists(c)) { found = c; break; }
+
+            if (found is null)
+            {
+                var dir = new DirectoryInfo(AppContext.BaseDirectory);
+                for (int i = 0; i < 6 && dir.Parent is not null && found is null; i++)
+                {
+                    dir = dir.Parent;
+                    var p = Path.Combine(dir.FullName, fileName);
+                    if (File.Exists(p)) found = p;
+                }
+            }
+
+            if (found is null)
+            {
+                Debug.WriteLine("[FaceDetect] haarcascade_frontalface_default.xml not found — face detection disabled.");
+                return null;
+            }
+
+            try
+            {
+                var cc = new CascadeClassifier(found);
+                if (cc.Empty()) { cc.Dispose(); Debug.WriteLine("[FaceDetect] Cascade empty."); return null; }
+                Debug.WriteLine($"[FaceDetect] Cascade loaded: {found}");
+                return cc;
+            }
+            catch (Exception ex) { Debug.WriteLine($"[FaceDetect] Load failed: {ex.Message}"); return null; }
+        }
+
+        // Called on UI thread after each detection pass.
+        private void RenderFaceOverlay()
+        {
+            FaceLayer.Children.Clear();
+
+            if (_lastFaces.Length == 0 || _imgPixelWidth <= 0 || _imgPixelHeight <= 0)
+                return;
+
+            double cw = FaceLayer.ActualWidth;
+            double ch = FaceLayer.ActualHeight;
+            if (cw <= 0 || ch <= 0) return;
+
+            // Match the Uniform stretch used by imgPreview
+            double scale   = Math.Min(cw / _imgPixelWidth, ch / _imgPixelHeight);
+            double offsetX = (cw - _imgPixelWidth  * scale) * 0.5;
+            double offsetY = (ch - _imgPixelHeight * scale) * 0.5;
+
+            foreach (var face in _lastFaces)
+            {
+                var rect = new System.Windows.Shapes.Rectangle
+                {
+                    Width           = face.Width  * scale,
+                    Height          = face.Height * scale,
+                    Stroke          = Brushes.LimeGreen,
+                    StrokeThickness = 2,
+                    Fill            = Brushes.Transparent,
+                };
+                Canvas.SetLeft(rect, offsetX + face.X * scale);
+                Canvas.SetTop (rect, offsetY + face.Y * scale);
+                FaceLayer.Children.Add(rect);
             }
         }
 
@@ -525,25 +667,10 @@ namespace SaftApp
             TransitionTo(AppState.Video);
         }
 
-        private void BtnTrigger2_Click(object sender, RoutedEventArgs e)
-        {
-            if (_state != AppState.Idle) return;
-        }
-
-        private void BtnTrigger3_Click(object sender, RoutedEventArgs e)
-        {
-            if (_state != AppState.Idle) return;
-        }
-
-        private void BtnTrigger4_Click(object sender, RoutedEventArgs e)
-        {
-            if (_state != AppState.Idle) return;
-        }
-
-        private void BtnTrigger5_Click(object sender, RoutedEventArgs e)
-        {
-            if (_state != AppState.Idle) return;
-        }
+        private void BtnTrigger2_Click(object sender, RoutedEventArgs e) { if (_state != AppState.Idle) return; }
+        private void BtnTrigger3_Click(object sender, RoutedEventArgs e) { if (_state != AppState.Idle) return; }
+        private void BtnTrigger4_Click(object sender, RoutedEventArgs e) { if (_state != AppState.Idle) return; }
+        private void BtnTrigger5_Click(object sender, RoutedEventArgs e) { if (_state != AppState.Idle) return; }
 
         private async Task InitializeSerialAsync()
         {
@@ -551,9 +678,9 @@ namespace SaftApp
             {
                 if (_serialOptions is null) return;
 
-                _serialService                   = new SerialService(_serialOptions);
-                _serialService.LineReceived     += Serial_LineReceived;
-                _serialService.StatusChanged    += Serial_StatusChanged;
+                _serialService               = new SerialService(_serialOptions);
+                _serialService.LineReceived += Serial_LineReceived;
+                _serialService.StatusChanged += Serial_StatusChanged;
 
                 if (_serialOptions.AutoOpen)
                 {
@@ -676,8 +803,8 @@ namespace SaftApp
 
                 if (_videoDurationSeconds > 0)
                 {
-                    _videoTimer          = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_videoDurationSeconds) };
-                    _videoTimer.Tick    += OnVideoTimerTick;
+                    _videoTimer       = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_videoDurationSeconds) };
+                    _videoTimer.Tick += OnVideoTimerTick;
                     _videoTimer.Start();
                 }
             }
@@ -724,6 +851,8 @@ namespace SaftApp
         protected override async void OnClosed(EventArgs e)
         {
             await StopCameraAsync();
+            _faceCascade?.Dispose();
+            _faceCascade = null;
             base.OnClosed(e);
         }
     }

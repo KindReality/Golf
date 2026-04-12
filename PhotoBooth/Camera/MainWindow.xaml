@@ -106,6 +106,10 @@
                    RenderOptions.BitmapScalingMode="HighQuality"/>
         </Grid>
 
+        <Canvas x:Name="FaceLayer"
+                Background="Transparent"
+                IsHitTestVisible="False"/>
+
         <Grid x:Name="videoGrid"
               Visibility="Collapsed">
             <MediaElement x:Name="videoPlayer"
