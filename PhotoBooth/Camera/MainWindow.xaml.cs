@@ -515,7 +515,10 @@ namespace SaftApp
 
             try
             {
-                Cv2.Resize(full, prev, new OpenCvSharp.Size(_previewWidth, _previewHeight));
+                // Resize with INTER_AREA for downscaling — preserves aspect ratio only if
+                // _previewWidth/_previewHeight match the capture ratio. Both are 16:9 so no stretching occurs.
+                Cv2.Resize(full, prev, new OpenCvSharp.Size(_previewWidth, _previewHeight),
+                           interpolation: InterpolationFlags.Area);
                 var bmp = BitmapSourceConverter.ToBitmapSource(prev);
                 bmp.Freeze();
                 PreviewControl.Source = bmp;
@@ -749,6 +752,7 @@ namespace SaftApp
 
         private void TrySetHighestResolution(VideoCapture cap)
         {
+            // 16:9 candidates — highest to lowest
             (int w, int h)[] candidates =
             {
                 (7680,4320),(5120,2880),(4096,2160),
