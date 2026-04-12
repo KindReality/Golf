@@ -145,18 +145,29 @@
 
     <Grid SnapsToDevicePixels="True">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="25"/>
+            <ColumnDefinition x:Name="colLeft"  Width="0"/>
             <ColumnDefinition/>
-            <ColumnDefinition Width="25"/>
+            <ColumnDefinition x:Name="colRight" Width="0"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Left: capture button -->
+        <!-- Capture button: shown/sized by DeveloperMode at runtime -->
         <Button Grid.Column="0"
                 x:Name="bCapture"
                 Background="DarkRed"
                 Height="300"
-                Width="25"
-                Click="bCapture_Click"/>
+                Width="0"
+                Visibility="Collapsed"
+                Click="bCapture_Click">
+            <TextBlock Text="Selfie"
+                       Foreground="White"
+                       FontSize="16"
+                       FontWeight="Bold"
+                       FontFamily="Verdana">
+                <TextBlock.LayoutTransform>
+                    <RotateTransform Angle="90"/>
+                </TextBlock.LayoutTransform>
+            </TextBlock>
+        </Button>
 
         <Grid Grid.Column="1" ClipToBounds="True">
             <Image x:Name="PreviewControl"
@@ -208,12 +219,13 @@
                        VerticalAlignment="Stretch"/>
         </Grid>
 
-        <!-- Right: video button -->
+        <!-- Video button: shown/sized by DeveloperMode at runtime -->
         <Button Grid.Column="2"
                 x:Name="bVideo"
                 Background="DarkRed"
                 Height="300"
-                Width="25"
+                Width="0"
+                Visibility="Collapsed"
                 Click="bVideo_Click"/>
     </Grid>
 </Window>
