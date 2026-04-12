@@ -75,11 +75,32 @@ namespace SaftApp
 
         public MainWindow()
         {
+            LoadTimingConfiguration();
+
+            // Set window appearance before InitializeComponent creates the native handle.
+            // Only developer mode needs pre-init settings (WindowStartupLocation, size).
+            if (_developerMode)
+            {
+                WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                WindowStyle           = WindowStyle.SingleBorderWindow;
+                ResizeMode            = ResizeMode.CanResize;
+                Width                 = 800;
+                Height                = 600;
+            }
+
             InitializeComponent();
+
+            // Production mode: maximise after InitializeComponent
+            // (XAML defaults WindowState="Normal"; we override it here for kiosk mode)
+            if (!_developerMode)
+            {
+                WindowStyle = WindowStyle.None;
+                ResizeMode  = ResizeMode.NoResize;
+                WindowState = WindowState.Maximized;
+            }
 
             _videoControl = (MediaElement?)FindName("videoControl");
 
-            LoadTimingConfiguration();
             ApplyTimingsToResources();
 
             _previewLoop.Interval = TimeSpan.FromMilliseconds(1000.0 / TargetFps);
@@ -151,41 +172,33 @@ namespace SaftApp
         {
             if (_developerMode)
             {
-                // Window: fixed 800×600, windowed, centred on screen
-                WindowStyle   = WindowStyle.SingleBorderWindow;
-                ResizeMode    = ResizeMode.CanResize;
-                WindowState   = WindowState.Normal;
-                Width         = 800;
-                Height        = 600;
-                WindowStartupLocation = WindowStartupLocation.CenterScreen;
-
-                // Buttons: visible, equal 50px width
-                const double devButtonWidth = 50;
+                // Window geometry already set in constructor (before Show).
+                // Apply button visibility here after XAML named elements are available.
+                const double devButtonWidth = 80;
                 colLeft.Width  = new GridLength(devButtonWidth);
                 colRight.Width = new GridLength(devButtonWidth);
 
                 bCapture.Width      = devButtonWidth;
                 bCapture.Visibility = Visibility.Visible;
-                bVideo.Width        = devButtonWidth;
-                bVideo.Visibility   = Visibility.Visible;
 
-                Debug.WriteLine("[DeveloperMode] ON — 800×600 windowed, buttons visible");
+                triggerPanel.Visibility = Visibility.Visible;
+                foreach (var btn in new[] { bTrigger1, bTrigger2, bTrigger3, bTrigger4, bTrigger5 })
+                    btn.Width = devButtonWidth;
+
+                Debug.WriteLine("[DeveloperMode] ON — 800×600 centred, buttons visible");
             }
             else
             {
-                // Window: maximised, no border (production kiosk mode)
-                WindowStyle = WindowStyle.None;
-                ResizeMode  = ResizeMode.NoResize;
-                WindowState = WindowState.Maximized;
-
-                // Buttons: fully hidden
+                // Buttons fully hidden
                 colLeft.Width  = new GridLength(0);
                 colRight.Width = new GridLength(0);
 
                 bCapture.Width      = 0;
                 bCapture.Visibility = Visibility.Collapsed;
-                bVideo.Width        = 0;
-                bVideo.Visibility   = Visibility.Collapsed;
+
+                triggerPanel.Visibility = Visibility.Collapsed;
+                foreach (var btn in new[] { bTrigger1, bTrigger2, bTrigger3, bTrigger4, bTrigger5 })
+                    btn.Width = 0;
 
                 Debug.WriteLine("[DeveloperMode] OFF — maximised kiosk, buttons hidden");
             }
@@ -234,7 +247,6 @@ namespace SaftApp
             // Reset captured image
             imageControl.Source = null;
             imageControl.Visibility = Visibility.Collapsed;
-            imageControl.RenderTransform = null;
 
             // Stop video if playing
             try
@@ -249,13 +261,12 @@ namespace SaftApp
             SetOverlay(string.Empty, 0);
 
             // Resume live preview
-            PreviewControl.RenderTransform = null;
             PreviewControl.Source = null;
             PreviewControl.Visibility = Visibility.Visible;
             if (!_previewLoop.IsEnabled)
                 _previewLoop.Start();
 
-            Debug.WriteLine($"[Idle] camera={(  _capture is null ? "null" : "ok")}, previewLoop={_previewLoop.IsEnabled}");
+            Debug.WriteLine($"[Idle] camera={(_capture is null ? "null" : "ok")}, previewLoop={_previewLoop.IsEnabled}");
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -385,7 +396,7 @@ namespace SaftApp
                     encoder.Save(fs);
                     Debug.WriteLine($"[Capture] Saved: {path}");
                 }
-                catch (Exception ex) { Debug.WriteLine($"[Capture] Save failed: {ex}"); }
+                catch (Exception ex) { Debug.WriteLine($"{ex}"); }
             });
         }
 
@@ -397,10 +408,6 @@ namespace SaftApp
 
         private void EnterPreviewState()
         {
-            // Mirror the captured image to match live preview orientation
-            imageControl.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
-            imageControl.RenderTransform = new ScaleTransform(-1, 1);
-
             _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_previewSeconds) };
             _previewTimer.Tick += OnPreviewTimerTick;
             _previewTimer.Start();
@@ -528,10 +535,38 @@ namespace SaftApp
             TransitionTo(AppState.Countdown);
         }
 
-        private void bVideo_Click(object sender, RoutedEventArgs e)
+        // ── Trigger buttons (developer mode) ─────────────────────────────────
+        // General-purpose triggers — wire each to the desired state transition.
+
+        private void bTrigger1_Click(object sender, RoutedEventArgs e)
         {
             if (_state != AppState.Idle) return;
-            TransitionTo(AppState.Video);
+            Debug.WriteLine("[Dev] Trigger 1 fired");
+            TransitionTo(AppState.Video);  // currently: video
+        }
+
+        private void bTrigger2_Click(object sender, RoutedEventArgs e)
+        {
+            if (_state != AppState.Idle) return;
+            Debug.WriteLine("[Dev] Trigger 2 fired");
+        }
+
+        private void bTrigger3_Click(object sender, RoutedEventArgs e)
+        {
+            if (_state != AppState.Idle) return;
+            Debug.WriteLine("[Dev] Trigger 3 fired");
+        }
+
+        private void bTrigger4_Click(object sender, RoutedEventArgs e)
+        {
+            if (_state != AppState.Idle) return;
+            Debug.WriteLine("[Dev] Trigger 4 fired");
+        }
+
+        private void bTrigger5_Click(object sender, RoutedEventArgs e)
+        {
+            if (_state != AppState.Idle) return;
+            Debug.WriteLine("[Dev] Trigger 5 fired");
         }
 
         // ─────────────────────────────────────────────────────────────────────

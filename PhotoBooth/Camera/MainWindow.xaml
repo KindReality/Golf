@@ -9,7 +9,7 @@
     mc:Ignorable="d"
     WindowStyle="None"
     ResizeMode="NoResize"
-    WindowState="Maximized"
+    WindowState="Normal"
     Background="Black"
     ShowInTaskbar="True"
     Topmost="False"
@@ -17,86 +17,73 @@
     Loaded="Window_Loaded">
 
     <Window.Resources>
-        <!-- Keep these for XAML storyboards, values will also be set from code on startup -->
+
+        <!-- ── Shared easing functions ──────────────────────────────────── -->
+        <CubicEase x:Key="EaseOut" EasingMode="EaseOut"/>
+        <CubicEase x:Key="EaseIn"  EasingMode="EaseIn"/>
+
+        <!-- ── Animation timing — values also overridden from code on startup ── -->
         <Duration x:Key="FlashInDuration">0:0:1</Duration>
         <Duration x:Key="FlashOutDuration">0:0:2</Duration>
         <Duration x:Key="HoldDuration">0:0:0.3</Duration>
         <Duration x:Key="PreviewDuration">0:0:10</Duration>
 
+        <!-- ── Trigger button style ──────────────────────────────────────── -->
+        <Style x:Key="TriggerButtonStyle" TargetType="Button">
+            <Setter Property="Background"   Value="DarkRed"/>
+            <Setter Property="Foreground"   Value="White"/>
+            <Setter Property="FontSize"     Value="11"/>
+            <Setter Property="FontWeight"   Value="Bold"/>
+            <Setter Property="FontFamily"   Value="Verdana"/>
+            <Setter Property="Height"       Value="50"/>
+            <Setter Property="Width"        Value="0"/>
+            <Setter Property="Margin"       Value="0,2"/>
+        </Style>
+
+        <!-- ── Countdown number pop-in / slide-out ──────────────────────── -->
         <Storyboard x:Key="CountdownNumberInOut">
+            <!-- Scale X -->
             <DoubleAnimationUsingKeyFrames Storyboard.TargetName="tbOverlayScale"
                                            Storyboard.TargetProperty="ScaleX"
                                            Duration="0:0:1">
-                <EasingDoubleKeyFrame KeyTime="0%" Value="0.6">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseOut"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
-                <EasingDoubleKeyFrame KeyTime="35%" Value="1.0">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseOut"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
-                <EasingDoubleKeyFrame KeyTime="65%" Value="1.0"/>
-                <EasingDoubleKeyFrame KeyTime="100%" Value="1.0">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseIn"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
+                <EasingDoubleKeyFrame KeyTime="0%"   Value="0.6" EasingFunction="{StaticResource EaseOut}"/>
+                <EasingDoubleKeyFrame KeyTime="35%"  Value="1.0" EasingFunction="{StaticResource EaseOut}"/>
+                <EasingDoubleKeyFrame KeyTime="65%"  Value="1.0"/>
+                <EasingDoubleKeyFrame KeyTime="100%" Value="1.0" EasingFunction="{StaticResource EaseIn}"/>
             </DoubleAnimationUsingKeyFrames>
 
+            <!-- Scale Y — identical key-frames to ScaleX -->
             <DoubleAnimationUsingKeyFrames Storyboard.TargetName="tbOverlayScale"
                                            Storyboard.TargetProperty="ScaleY"
                                            Duration="0:0:1">
-                <EasingDoubleKeyFrame KeyTime="0%" Value="0.6">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseOut"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
-                <EasingDoubleKeyFrame KeyTime="35%" Value="1.0">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseOut"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
-                <EasingDoubleKeyFrame KeyTime="65%" Value="1.0"/>
-                <EasingDoubleKeyFrame KeyTime="100%" Value="1.0">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseIn"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
+                <EasingDoubleKeyFrame KeyTime="0%"   Value="0.6" EasingFunction="{StaticResource EaseOut}"/>
+                <EasingDoubleKeyFrame KeyTime="35%"  Value="1.0" EasingFunction="{StaticResource EaseOut}"/>
+                <EasingDoubleKeyFrame KeyTime="65%"  Value="1.0"/>
+                <EasingDoubleKeyFrame KeyTime="100%" Value="1.0" EasingFunction="{StaticResource EaseIn}"/>
             </DoubleAnimationUsingKeyFrames>
 
+            <!-- Translate Y — drops in from above, slides out downward -->
             <DoubleAnimationUsingKeyFrames Storyboard.TargetName="tbOverlayTrans"
                                            Storyboard.TargetProperty="Y"
                                            Duration="0:0:1">
-                <EasingDoubleKeyFrame KeyTime="0%" Value="-400">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseOut"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
-                <EasingDoubleKeyFrame KeyTime="35%" Value="0">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseOut"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
-                <EasingDoubleKeyFrame KeyTime="65%" Value="0"/>
-                <EasingDoubleKeyFrame KeyTime="100%" Value="120">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseIn"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
+                <EasingDoubleKeyFrame KeyTime="0%"   Value="-400" EasingFunction="{StaticResource EaseOut}"/>
+                <EasingDoubleKeyFrame KeyTime="35%"  Value="0"    EasingFunction="{StaticResource EaseOut}"/>
+                <EasingDoubleKeyFrame KeyTime="65%"  Value="0"/>
+                <EasingDoubleKeyFrame KeyTime="100%" Value="120"  EasingFunction="{StaticResource EaseIn}"/>
             </DoubleAnimationUsingKeyFrames>
 
+            <!-- Opacity — snap in, snap out -->
             <DoubleAnimationUsingKeyFrames Storyboard.TargetName="tbOverlay"
                                            Storyboard.TargetProperty="Opacity"
                                            Duration="0:0:1">
-                <DiscreteDoubleKeyFrame KeyTime="0%" Value="0"/>
-                <DiscreteDoubleKeyFrame KeyTime="5%" Value="1"/>
-                <DiscreteDoubleKeyFrame KeyTime="65%" Value="1"/>
+                <DiscreteDoubleKeyFrame KeyTime="0%"   Value="0"/>
+                <DiscreteDoubleKeyFrame KeyTime="5%"   Value="1"/>
+                <DiscreteDoubleKeyFrame KeyTime="65%"  Value="1"/>
                 <DiscreteDoubleKeyFrame KeyTime="100%" Value="0"/>
             </DoubleAnimationUsingKeyFrames>
         </Storyboard>
 
+        <!-- ── Flash overlay: fade in ───────────────────────────────────── -->
         <Storyboard x:Key="FlashInFast">
             <ObjectAnimationUsingKeyFrames Storyboard.TargetName="flashOverlay"
                                            Storyboard.TargetProperty="Visibility"
@@ -107,33 +94,18 @@
                                            Storyboard.TargetProperty="Opacity"
                                            Duration="{StaticResource FlashInDuration}"
                                            FillBehavior="Stop">
-                <EasingDoubleKeyFrame KeyTime="0%" Value="0">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseOut"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
-                <EasingDoubleKeyFrame KeyTime="100%" Value="1">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseOut"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
+                <EasingDoubleKeyFrame KeyTime="0%"   Value="0" EasingFunction="{StaticResource EaseOut}"/>
+                <EasingDoubleKeyFrame KeyTime="100%" Value="1" EasingFunction="{StaticResource EaseOut}"/>
             </DoubleAnimationUsingKeyFrames>
         </Storyboard>
 
+        <!-- ── Flash overlay: fade out ──────────────────────────────────── -->
         <Storyboard x:Key="FlashOutSmooth">
             <DoubleAnimationUsingKeyFrames Storyboard.TargetName="flashOverlay"
                                            Storyboard.TargetProperty="Opacity"
                                            Duration="{StaticResource FlashOutDuration}">
-                <EasingDoubleKeyFrame KeyTime="0%" Value="1">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseIn"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
-                <EasingDoubleKeyFrame KeyTime="100%" Value="0">
-                    <EasingDoubleKeyFrame.EasingFunction>
-                        <CubicEase EasingMode="EaseIn"/>
-                    </EasingDoubleKeyFrame.EasingFunction>
-                </EasingDoubleKeyFrame>
+                <EasingDoubleKeyFrame KeyTime="0%"   Value="1" EasingFunction="{StaticResource EaseIn}"/>
+                <EasingDoubleKeyFrame KeyTime="100%" Value="0" EasingFunction="{StaticResource EaseIn}"/>
             </DoubleAnimationUsingKeyFrames>
             <ObjectAnimationUsingKeyFrames Storyboard.TargetName="flashOverlay"
                                            Storyboard.TargetProperty="Visibility"
@@ -141,6 +113,7 @@
                 <DiscreteObjectKeyFrame KeyTime="100%" Value="{x:Static Visibility.Collapsed}"/>
             </ObjectAnimationUsingKeyFrames>
         </Storyboard>
+
     </Window.Resources>
 
     <Grid SnapsToDevicePixels="True">
@@ -150,7 +123,7 @@
             <ColumnDefinition x:Name="colRight" Width="0"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Capture button: shown/sized by DeveloperMode at runtime -->
+        <!-- Left: Selfie / capture button -->
         <Button Grid.Column="0"
                 x:Name="bCapture"
                 Background="DarkRed"
@@ -169,13 +142,14 @@
             </TextBlock>
         </Button>
 
+        <!-- Centre: camera preview / capture / video layers -->
         <Grid Grid.Column="1" ClipToBounds="True">
+
             <Image x:Name="PreviewControl"
                    Stretch="Uniform"
                    IsHitTestVisible="False"
                    RenderOptions.BitmapScalingMode="HighQuality"/>
 
-            <!-- Video playback element -->
             <MediaElement x:Name="videoControl"
                           LoadedBehavior="Manual"
                           UnloadedBehavior="Stop"
@@ -204,8 +178,8 @@
                        CacheMode="BitmapCache">
                 <TextBlock.RenderTransform>
                     <TransformGroup>
-                        <ScaleTransform x:Name="tbOverlayScale" ScaleX="1" ScaleY="1"/>
-                        <TranslateTransform x:Name="tbOverlayTrans" X="0" Y="0"/>
+                        <ScaleTransform     x:Name="tbOverlayScale" ScaleX="1" ScaleY="1"/>
+                        <TranslateTransform x:Name="tbOverlayTrans" X="0"     Y="0"/>
                     </TransformGroup>
                 </TextBlock.RenderTransform>
             </TextBlock>
@@ -219,13 +193,18 @@
                        VerticalAlignment="Stretch"/>
         </Grid>
 
-        <!-- Video button: shown/sized by DeveloperMode at runtime -->
-        <Button Grid.Column="2"
-                x:Name="bVideo"
-                Background="DarkRed"
-                Height="300"
-                Width="0"
-                Visibility="Collapsed"
-                Click="bVideo_Click"/>
+        <!-- Right: developer trigger panel -->
+        <StackPanel Grid.Column="2"
+                    x:Name="triggerPanel"
+                    Orientation="Vertical"
+                    VerticalAlignment="Center"
+                    Visibility="Collapsed">
+            <Button x:Name="bTrigger1" Content="Trigger 1" Style="{StaticResource TriggerButtonStyle}" Click="bTrigger1_Click"/>
+            <Button x:Name="bTrigger2" Content="Trigger 2" Style="{StaticResource TriggerButtonStyle}" Click="bTrigger2_Click"/>
+            <Button x:Name="bTrigger3" Content="Trigger 3" Style="{StaticResource TriggerButtonStyle}" Click="bTrigger3_Click"/>
+            <Button x:Name="bTrigger4" Content="Trigger 4" Style="{StaticResource TriggerButtonStyle}" Click="bTrigger4_Click"/>
+            <Button x:Name="bTrigger5" Content="Trigger 5" Style="{StaticResource TriggerButtonStyle}" Click="bTrigger5_Click"/>
+        </StackPanel>
+
     </Grid>
 </Window>
