@@ -66,14 +66,12 @@
             </DoubleAnimationUsingKeyFrames>
         </Storyboard>
 
-        <Storyboard x:Key="FlashInFast">
-            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="rectFlash"
-                                           Storyboard.TargetProperty="Visibility"
+        <Storyboard x:Key="TransitionIn">
+            <ObjectAnimationUsingKeyFrames Storyboard.TargetProperty="Visibility"
                                            Duration="0:0:1">
                 <DiscreteObjectKeyFrame KeyTime="0%" Value="{x:Static Visibility.Visible}"/>
             </ObjectAnimationUsingKeyFrames>
-            <DoubleAnimation Storyboard.TargetName="rectFlash"
-                             Storyboard.TargetProperty="Opacity"
+            <DoubleAnimation Storyboard.TargetProperty="Opacity"
                              From="0" To="1"
                              Duration="0:0:1"
                              FillBehavior="Stop">
@@ -83,17 +81,15 @@
             </DoubleAnimation>
         </Storyboard>
 
-        <Storyboard x:Key="FlashOutSmooth">
-            <DoubleAnimation Storyboard.TargetName="rectFlash"
-                             Storyboard.TargetProperty="Opacity"
+        <Storyboard x:Key="TransitionOut">
+            <DoubleAnimation Storyboard.TargetProperty="Opacity"
                              From="1" To="0"
                              Duration="0:0:1">
                 <DoubleAnimation.EasingFunction>
                     <CubicEase EasingMode="EaseIn"/>
                 </DoubleAnimation.EasingFunction>
             </DoubleAnimation>
-            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="rectFlash"
-                                           Storyboard.TargetProperty="Visibility"
+            <ObjectAnimationUsingKeyFrames Storyboard.TargetProperty="Visibility"
                                            Duration="0:0:1">
                 <DiscreteObjectKeyFrame KeyTime="100%" Value="{x:Static Visibility.Collapsed}"/>
             </ObjectAnimationUsingKeyFrames>
@@ -143,8 +139,11 @@
                 </TextBlock.RenderTransform>
             </TextBlock>
 
-            <Rectangle x:Name="rectFlash"
-                       Panel.ZIndex="3"
+        </Grid>
+
+        <Grid x:Name="transitionGrid"
+              Visibility="Collapsed">
+            <Rectangle x:Name="rectTransition"
                        Fill="White"
                        Opacity="0"
                        Visibility="Collapsed"

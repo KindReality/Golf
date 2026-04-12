@@ -20,8 +20,8 @@ namespace SaftApp
 
     public sealed partial class MainWindow : WpfWindow
     {
-        private double _flashInSeconds       = 1.0;
-        private double _flashOutSeconds      = 2.0;
+        private double _transitionInSeconds  = 1.0;
+        private double _transitionOutSeconds = 2.0;
         private double _previewSeconds       = 10.0;
         private double _videoDurationSeconds = 30.0;
         private int    _countdownSeconds     = 6;
@@ -87,8 +87,8 @@ namespace SaftApp
                 using var doc  = JsonDocument.Parse(File.ReadAllText(path));
                 var       root = doc.RootElement;
 
-                if (root.TryGetProperty("FlashInSeconds",       out var v1)) _flashInSeconds       = v1.GetDouble();
-                if (root.TryGetProperty("FlashOutSeconds",      out var v2)) _flashOutSeconds      = v2.GetDouble();
+                if (root.TryGetProperty("TransitionInSeconds",  out var v1)) _transitionInSeconds  = v1.GetDouble();
+                if (root.TryGetProperty("TransitionOutSeconds", out var v2)) _transitionOutSeconds = v2.GetDouble();
                 if (root.TryGetProperty("PreviewSeconds",       out var v3)) _previewSeconds       = v3.GetDouble();
                 if (root.TryGetProperty("VideoDurationSeconds", out var v4)) _videoDurationSeconds = v4.GetDouble();
                 if (root.TryGetProperty("CountdownSeconds",     out var v5)) _countdownSeconds     = v5.GetInt32();
@@ -145,9 +145,10 @@ namespace SaftApp
         {
             StopAllStateTimers();
 
-            rectFlash.BeginAnimation(UIElement.OpacityProperty, null);
-            rectFlash.Opacity    = 0;
-            rectFlash.Visibility = Visibility.Collapsed;
+            rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
+            rectTransition.Opacity    = 0;
+            rectTransition.Visibility = Visibility.Collapsed;
+            transitionGrid.Visibility = Visibility.Collapsed;
 
             imgCapture.Source     = null;
             imgCapture.Visibility = Visibility.Collapsed;
@@ -202,12 +203,14 @@ namespace SaftApp
         private void EnterCaptureState()
         {
             SetCountdownText(string.Empty, 0);
-            PlayAnimation("FlashInFast",
-                duration:    TimeSpan.FromSeconds(_flashInSeconds),
-                onCompleted: OnFlashInCompleted);
+            transitionGrid.Visibility = Visibility.Visible;
+            PlayAnimation("TransitionIn",
+                duration:    TimeSpan.FromSeconds(_transitionInSeconds),
+                onCompleted: OnTransitionInCompleted,
+                target:      rectTransition);
         }
 
-        private void OnFlashInCompleted(object? sender, EventArgs e)
+        private void OnTransitionInCompleted(object? sender, EventArgs e)
         {
             if (_state != AppState.Capture) return;
 
@@ -223,10 +226,11 @@ namespace SaftApp
                 return;
             }
 
-            rectFlash.BeginAnimation(UIElement.OpacityProperty, null);
-            PlayAnimation("FlashOutSmooth",
-                duration:    TimeSpan.FromSeconds(_flashOutSeconds),
-                onCompleted: OnFlashOutCompleted);
+            rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
+            PlayAnimation("TransitionOut",
+                duration:    TimeSpan.FromSeconds(_transitionOutSeconds),
+                onCompleted: OnTransitionOutCompleted,
+                target:      rectTransition);
 
             _ = Task.Run(() =>
             {
@@ -248,7 +252,7 @@ namespace SaftApp
             });
         }
 
-        private void OnFlashOutCompleted(object? sender, EventArgs e)
+        private void OnTransitionOutCompleted(object? sender, EventArgs e)
         {
             if (_state != AppState.Capture) return;
             TransitionTo(AppState.Preview);
@@ -305,11 +309,15 @@ namespace SaftApp
             TransitionTo(AppState.Idle);
         }
 
-        private void PlayAnimation(string resourceKey, TimeSpan? duration = null, EventHandler? onCompleted = null)
+        private void PlayAnimation(string resourceKey, TimeSpan? duration = null,
+                                   EventHandler? onCompleted = null, UIElement? target = null)
         {
             try
             {
                 var sb = ((Storyboard)FindResource(resourceKey)).Clone();
+
+                if (target is not null)
+                    Storyboard.SetTarget(sb, target);
 
                 if (duration.HasValue)
                 {
@@ -320,7 +328,8 @@ namespace SaftApp
 
                 if (onCompleted is not null)
                     sb.Completed += onCompleted;
-                sb.Begin(this, true);
+
+                sb.Begin(this, handoffBehavior: HandoffBehavior.SnapshotAndReplace, isControllable: true);
             }
             catch (Exception ex) { Debug.WriteLine($"[Animation] {resourceKey}: {ex}"); }
         }
@@ -546,11 +555,12 @@ namespace SaftApp
             _frameFull?.Dispose();    _frameFull    = null;
             _framePreview?.Dispose(); _framePreview = null;
 
-            rectFlash.BeginAnimation(UIElement.OpacityProperty, null);
-            rectFlash.Opacity    = 0;
-            rectFlash.Visibility = Visibility.Collapsed;
-            imgCapture.Source    = null;
-            imgCapture.Visibility = Visibility.Collapsed;
+            rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
+            rectTransition.Opacity    = 0;
+            rectTransition.Visibility = Visibility.Collapsed;
+            transitionGrid.Visibility = Visibility.Collapsed;
+            imgCapture.Source         = null;
+            imgCapture.Visibility     = Visibility.Collapsed;
 
             try { videoPlayer.Stop(); } catch { }
             videoPlayer.Visibility = Visibility.Collapsed;
