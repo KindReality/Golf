@@ -52,8 +52,6 @@ namespace SaftApp
         private readonly DispatcherTimer _previewLoop = new();
         // Countdown: fires every 1 s while in Countdown state
         private readonly DispatcherTimer _countdownTimer = new() { Interval = TimeSpan.FromSeconds(1) };
-        // Capture: short hold between snapshot display and flash-out
-        private DispatcherTimer? _holdTimer;
         // Preview: drives automatic return to Idle after _previewSeconds
         private DispatcherTimer? _previewTimer;
         // Video: optional hard cap on video playback duration
@@ -308,16 +306,23 @@ namespace SaftApp
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // Capture — grab frame, show it, play FlashInFast animation.
-        // FlashInFast.Completed → start _holdTimer.
-        // _holdTimer.Tick → play FlashOutSmooth animation.
-        // FlashOutSmooth.Completed → TransitionTo(Preview)
+        // Capture — screen flashes white (FlashInFast), frame is grabbed at
+        // peak white, then FlashOutSmooth reveals the captured image.
+        // FlashInFast.Completed → grab frame → FlashOutSmooth.Completed → Preview
         // ─────────────────────────────────────────────────────────────────────
 
         private void EnterCaptureState()
         {
             SetOverlay(string.Empty, 0);
+            PlayAnimation("FlashInFast", onCompleted: OnFlashInCompleted);
+        }
 
+        private void OnFlashInCompleted(object? sender, EventArgs e)
+        {
+            if (_state != AppState.Capture) return;
+
+            // Grab frame at peak white — subject has reacted to flash,
+            // white overlay hides any camera lag.
             Mat? src;
             lock (_sync) { src = _frameFull?.Clone(); }
 
@@ -330,45 +335,21 @@ namespace SaftApp
                 return;
             }
 
-            // Convert and freeze bitmap on UI thread, save asynchronously
             var bitmap = src.ToBitmapSource();
             bitmap.Freeze();
             src.Dispose();
 
             SaveCaptureAsync(bitmap);
 
-            // Show captured frame
+            // Stage captured image behind the white overlay before fading out
             imageControl.Source = bitmap;
             imageControl.Visibility = Visibility.Visible;
 
-            // Play flash-in → on completion start hold timer
-            PlayAnimation("FlashInFast", onCompleted: OnFlashInCompleted);
-        }
+            Debug.WriteLine("[Capture] Frame grabbed — starting FlashOutSmooth");
 
-        private void OnFlashInCompleted(object? sender, EventArgs e)
-        {
-            if (_state != AppState.Capture) return;
-
-            Debug.WriteLine($"[Capture] FlashInFast completed — starting hold timer ({_holdSeconds}s)");
-
-            _holdTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_holdSeconds) };
-            _holdTimer.Tick += OnHoldTimerTick;
-            _holdTimer.Start();
-        }
-
-        private void OnHoldTimerTick(object? sender, EventArgs e)
-        {
-            _holdTimer?.Stop();
-            _holdTimer = null;
-
-            if (_state != AppState.Capture) return;
-
-            Debug.WriteLine("[Capture] Hold elapsed — playing FlashOutSmooth");
-
-            // Clear any leftover opacity animation before starting flash-out
+            // Clear any held opacity value left by FlashInFast (FillBehavior=Stop)
             flashOverlay.BeginAnimation(UIElement.OpacityProperty, null);
 
-            // Flash-out → on completion move to Preview
             PlayAnimation("FlashOutSmooth", onCompleted: OnFlashOutCompleted);
         }
 
@@ -477,9 +458,6 @@ namespace SaftApp
         private void StopAllStateTimers()
         {
             _countdownTimer.Stop();
-
-            _holdTimer?.Stop();
-            _holdTimer = null;
 
             _previewTimer?.Stop();
             _previewTimer = null;
