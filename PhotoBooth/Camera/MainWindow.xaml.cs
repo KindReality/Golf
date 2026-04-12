@@ -20,6 +20,7 @@ namespace SaftApp
 
     public sealed partial class MainWindow : WpfWindow
     {
+        // ── Configuration ─────────────────────────────────────────────────────
         private double _transitionInSeconds  = 1.0;
         private double _transitionOutSeconds = 2.0;
         private double _previewSeconds       = 10.0;
@@ -30,6 +31,7 @@ namespace SaftApp
         private int    _previewHeight        = 1080;
         private bool   _developerMode        = false;
 
+        // ── Runtime state ────────────────────────────────────────────────────
         private AppState _state = AppState.Idle;
 
         private readonly object _sync = new();
@@ -37,6 +39,17 @@ namespace SaftApp
         private Mat? _frameFull;
         private Mat? _framePreview;
         private string? _workDir;
+
+        // ── WriteableBitmap reuse ─────────────────────────────────────────────
+        private WriteableBitmap? _previewBitmap;
+
+        // ── Background frame pump ─────────────────────────────────────────────
+        // Decoded frames are produced on a background thread and handed to the
+        // UI thread via this double-buffer slot.
+        private Mat?              _frameReady;        // background writes, UI thread reads
+        private readonly object   _frameLock = new(); // guards _frameReady
+        private Thread?           _captureThread;
+        private volatile bool     _captureRunning;
 
         private readonly DispatcherTimer _previewLoop    = new();
         private readonly DispatcherTimer _countdownTimer = new() { Interval = TimeSpan.FromSeconds(1) };
@@ -150,20 +163,18 @@ namespace SaftApp
             rectTransition.Visibility = Visibility.Collapsed;
             transitionGrid.Visibility = Visibility.Collapsed;
 
-            imgCapture.Source     = null;
-            imgCapture.Visibility = Visibility.Collapsed;
+            captureGrid.Visibility   = Visibility.Collapsed;
+            imgCapture.Source        = null;
+            videoGrid.Visibility     = Visibility.Collapsed;
+            countdownGrid.Visibility = Visibility.Collapsed;
 
-            try
-            {
-                videoPlayer.Stop();
-                videoPlayer.Visibility = Visibility.Collapsed;
-            }
-            catch { }
+            try { videoPlayer.Stop(); } catch { }
 
             SetCountdownText(string.Empty, 0);
 
-            imgPreview.Source     = null;
-            imgPreview.Visibility = Visibility.Visible;
+            if (imgPreview.Source != _previewBitmap)
+                imgPreview.Source = _previewBitmap;
+            previewGrid.Visibility = Visibility.Visible;
             if (!_previewLoop.IsEnabled)
                 _previewLoop.Start();
 
@@ -172,8 +183,9 @@ namespace SaftApp
 
         private void EnterCountdownState()
         {
-            imgCapture.Visibility = Visibility.Collapsed;
-            _countdownCounter     = _countdownSeconds;
+            captureGrid.Visibility   = Visibility.Collapsed;
+            countdownGrid.Visibility = Visibility.Visible;
+            _countdownCounter        = _countdownSeconds;
             ShowCountdownTick();
             _countdownTimer.Start();
         }
@@ -202,6 +214,7 @@ namespace SaftApp
 
         private void EnterCaptureState()
         {
+            countdownGrid.Visibility = Visibility.Collapsed;
             SetCountdownText(string.Empty, 0);
             transitionGrid.Visibility = Visibility.Visible;
             PlayAnimation("TransitionIn",
@@ -244,8 +257,9 @@ namespace SaftApp
 
                     Dispatcher.Invoke(() =>
                     {
-                        imgCapture.Source     = bitmap;
-                        imgCapture.Visibility = Visibility.Visible;
+                        imgCapture.Source      = bitmap;
+                        captureGrid.Visibility = Visibility.Visible;
+                        previewGrid.Visibility = Visibility.Collapsed;
                     });
                 }
                 catch (Exception ex) { Debug.WriteLine($"[Capture] {ex}"); src.Dispose(); }
@@ -296,9 +310,9 @@ namespace SaftApp
 
         private void EnterVideoState()
         {
-            imgCapture.Visibility  = Visibility.Collapsed;
-            imgPreview.Source      = null;
-            videoPlayer.Visibility = Visibility.Visible;
+            captureGrid.Visibility = Visibility.Collapsed;
+            previewGrid.Visibility = Visibility.Collapsed;
+            videoGrid.Visibility   = Visibility.Visible;
             PlayLocalVideo("media\\video.mp4");
         }
 
@@ -345,33 +359,158 @@ namespace SaftApp
             _videoTimer = null;
         }
 
-        private void OnPreviewLoopTick(object? sender, EventArgs e)
+        private async Task StartCameraAsync(int cameraIndex)
         {
-            if (_state == AppState.Preview || _state == AppState.Video) return;
+            if (_capture is not null && _capture.IsOpened()) return;
 
-            VideoCapture? cap;
-            Mat?          full;
-            Mat?          prev;
+            await StopCameraAsync();
 
-            lock (_sync)
-            {
-                cap  = _capture;
-                full = _frameFull;
-                prev = _framePreview;
-            }
+            VideoCapture? cap = new VideoCapture(cameraIndex, VideoCaptureAPIs.DSHOW);
+            if (!cap.IsOpened()) { cap.Release(); cap.Dispose(); cap = new VideoCapture(cameraIndex, VideoCaptureAPIs.ANY); }
+            if (!cap.IsOpened()) { cap.Release(); cap.Dispose(); SetCountdownText("Camera not found", 1); return; }
 
-            if (cap is null || full is null || prev is null) return;
-            if (!cap.Read(full) || full.Empty()) return;
+            TrySetHighestResolution(cap);
+
+            var env = Environment.GetEnvironmentVariable("PhotoBoothWorking");
+            if (string.IsNullOrWhiteSpace(env))
+                env = Path.Combine(AppContext.BaseDirectory, "Output");
+            try { Directory.CreateDirectory(env); } catch { }
+            _workDir = env;
+
+            lock (_sync) { _capture = cap; }
+
+            _frameFull?.Dispose();
+            _framePreview?.Dispose();
+            _frameFull    = new Mat((int)cap.FrameHeight, (int)cap.FrameWidth, MatType.CV_8UC3);
+            _framePreview = new Mat(_previewHeight, _previewWidth, MatType.CV_8UC3);
+
+            _previewBitmap = new WriteableBitmap(
+                _previewWidth, _previewHeight, 96, 96,
+                PixelFormats.Bgr24, null);
+            imgPreview.Source = _previewBitmap;
+
+            _captureRunning = true;
+            _captureThread  = new Thread(CaptureLoop) { IsBackground = true, Name = "CaptureLoop" };
+            _captureThread.Start();
+
+            _previewLoop.Start();
+        }
+
+        private async Task StopCameraAsync()
+        {
+            _captureRunning = false;
+
+            _previewLoop.Stop();
+            StopAllStateTimers();
 
             try
             {
+                if (_serialService is not null)
+                {
+                    _serialService.LineReceived  -= Serial_LineReceived;
+                    _serialService.StatusChanged -= Serial_StatusChanged;
+                    _serialService.Dispose();
+                }
+            }
+            catch { }
+            _serialService = null;
+
+            VideoCapture? cap;
+            lock (_sync) { cap = _capture; _capture = null; }
+            try { cap?.Release(); cap?.Dispose(); } catch { }
+
+            _captureThread?.Join(500);
+            _captureThread = null;
+
+            _frameFull?.Dispose();    _frameFull    = null;
+            _framePreview?.Dispose(); _framePreview = null;
+
+            lock (_frameLock)
+            {
+                _frameReady?.Dispose();
+                _frameReady = null;
+            }
+
+            _previewBitmap = null;
+
+            rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
+            rectTransition.Opacity    = 0;
+            rectTransition.Visibility = Visibility.Collapsed;
+            transitionGrid.Visibility = Visibility.Collapsed;
+
+            captureGrid.Visibility   = Visibility.Collapsed;
+            imgCapture.Source        = null;
+            videoGrid.Visibility     = Visibility.Collapsed;
+            countdownGrid.Visibility = Visibility.Collapsed;
+
+            try { videoPlayer.Stop(); } catch { }
+        }
+
+        // Runs on background thread — reads camera, resizes, double-buffers result.
+        private void CaptureLoop()
+        {
+            while (_captureRunning)
+            {
+                VideoCapture? cap;
+                Mat?          full;
+                Mat?          prev;
+
+                lock (_sync)
+                {
+                    cap  = _capture;
+                    full = _frameFull;
+                    prev = _framePreview;
+                }
+
+                if (cap is null || full is null || prev is null) { Thread.Sleep(5); continue; }
+
+                if (!cap.Read(full) || full.Empty()) { Thread.Sleep(5); continue; }
+
                 Cv2.Resize(full, prev, new OpenCvSharp.Size(_previewWidth, _previewHeight),
                            interpolation: InterpolationFlags.Area);
-                var bmp = BitmapSourceConverter.ToBitmapSource(prev);
-                bmp.Freeze();
-                imgPreview.Source = bmp;
+
+                var ready = prev.Clone();
+                lock (_frameLock)
+                {
+                    _frameReady?.Dispose();
+                    _frameReady = ready;
+                }
             }
-            catch (Exception ex) { Debug.WriteLine(ex); }
+        }
+
+        private void OnPreviewLoopTick(object? sender, EventArgs e)
+        {
+            if (_state == AppState.Preview || _state == AppState.Video) return;
+            if (_previewBitmap is null) return;
+
+            Mat? frame;
+            lock (_frameLock)
+            {
+                frame       = _frameReady;
+                _frameReady = null;
+            }
+
+            if (frame is null) return;
+
+            try
+            {
+                long stride = (long)_previewWidth * 3;
+                _previewBitmap.Lock();
+                unsafe
+                {
+                    Buffer.MemoryCopy(
+                        (void*)frame.Data,
+                        (void*)_previewBitmap.BackBuffer,
+                        _previewBitmap.BackBufferStride * _previewHeight,
+                        stride * _previewHeight);
+                }
+                _previewBitmap.AddDirtyRect(new Int32Rect(0, 0, _previewWidth, _previewHeight));
+            }
+            finally
+            {
+                _previewBitmap.Unlock();
+                frame.Dispose();
+            }
         }
 
         private void BtnCapture_Click(object sender, RoutedEventArgs e)
@@ -500,70 +639,6 @@ namespace SaftApp
             {
                 Dispatcher.Invoke(() => { if (_state == AppState.Idle) TransitionTo(AppState.Video); });
             }
-        }
-
-        private async Task StartCameraAsync(int cameraIndex)
-        {
-            if (_capture is not null && _capture.IsOpened()) return;
-
-            await StopCameraAsync();
-
-            VideoCapture? cap = new VideoCapture(cameraIndex, VideoCaptureAPIs.DSHOW);
-            if (!cap.IsOpened()) { cap.Release(); cap.Dispose(); cap = new VideoCapture(cameraIndex, VideoCaptureAPIs.ANY); }
-            if (!cap.IsOpened()) { cap.Release(); cap.Dispose(); SetCountdownText("Camera not found", 1); return; }
-
-            TrySetHighestResolution(cap);
-
-            var env = Environment.GetEnvironmentVariable("PhotoBoothWorking");
-            if (string.IsNullOrWhiteSpace(env))
-                env = Path.Combine(AppContext.BaseDirectory, "Output");
-            try { Directory.CreateDirectory(env); } catch { }
-            _workDir = env;
-
-            lock (_sync) { _capture = cap; }
-
-            _frameFull?.Dispose();
-            _framePreview?.Dispose();
-            _frameFull    = new Mat((int)cap.FrameHeight, (int)cap.FrameWidth, MatType.CV_8UC3);
-            _framePreview = new Mat(_previewHeight, _previewWidth, MatType.CV_8UC3);
-
-            imgCapture.Visibility = Visibility.Collapsed;
-            _previewLoop.Start();
-        }
-
-        private async Task StopCameraAsync()
-        {
-            _previewLoop.Stop();
-            StopAllStateTimers();
-
-            try
-            {
-                if (_serialService is not null)
-                {
-                    _serialService.LineReceived  -= Serial_LineReceived;
-                    _serialService.StatusChanged -= Serial_StatusChanged;
-                    _serialService.Dispose();
-                }
-            }
-            catch { }
-            _serialService = null;
-
-            VideoCapture? cap;
-            lock (_sync) { cap = _capture; _capture = null; }
-            try { cap?.Release(); cap?.Dispose(); } catch { }
-
-            _frameFull?.Dispose();    _frameFull    = null;
-            _framePreview?.Dispose(); _framePreview = null;
-
-            rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
-            rectTransition.Opacity    = 0;
-            rectTransition.Visibility = Visibility.Collapsed;
-            transitionGrid.Visibility = Visibility.Collapsed;
-            imgCapture.Source         = null;
-            imgCapture.Visibility     = Visibility.Collapsed;
-
-            try { videoPlayer.Stop(); } catch { }
-            videoPlayer.Visibility = Visibility.Collapsed;
         }
 
         private void TrySetHighestResolution(VideoCapture cap)
