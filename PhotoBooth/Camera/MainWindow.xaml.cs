@@ -20,61 +20,38 @@ namespace SaftApp
 
     public sealed partial class MainWindow : WpfWindow
     {
-        // ── Timing configuration (seconds) ───────────────────────────────────
         private double _flashInSeconds       = 1.0;
         private double _flashOutSeconds      = 2.0;
         private double _previewSeconds       = 10.0;
-        private double _videoDurationSeconds = 30.0; // 0 = play full file
+        private double _videoDurationSeconds = 30.0;
         private int    _countdownSeconds     = 6;
         private int    _targetFps            = 30;
         private int    _previewWidth         = 1920;
         private int    _previewHeight        = 1080;
+        private bool   _developerMode        = false;
 
-        // ── Developer mode ────────────────────────────────────────────────────
-        // When true: both buttons visible at equal size, window 800×600 centred.
-        // When false: buttons collapsed/hidden, window maximised borderless.
-        private bool _developerMode = false;
-
-        // ── State ─────────────────────────────────────────────────────────────
         private AppState _state = AppState.Idle;
 
-        // ── Camera ────────────────────────────────────────────────────────────
         private readonly object _sync = new();
         private VideoCapture? _capture;
         private Mat? _frameFull;
         private Mat? _framePreview;
         private string? _workDir;
 
-        // ── Timers ────────────────────────────────────────────────────────────
-        // Always-running live-preview pump (paused during Preview / Video states)
-        private readonly DispatcherTimer _previewLoop = new();
-        // Countdown: fires every 1 s while in Countdown state
+        private readonly DispatcherTimer _previewLoop    = new();
         private readonly DispatcherTimer _countdownTimer = new() { Interval = TimeSpan.FromSeconds(1) };
-        // Preview: drives automatic return to Idle after _previewSeconds
         private DispatcherTimer? _previewTimer;
-        // Video: optional hard cap on video playback duration
         private DispatcherTimer? _videoTimer;
 
-        // ── Countdown state ───────────────────────────────────────────────────
         private int _countdownCounter;
 
-        // ── UI references ─────────────────────────────────────────────────────
-        private MediaElement? _videoControl;
-
-        // ── Serial ────────────────────────────────────────────────────────────
         private ISerialService? _serialService;
-        private SerialOptions? _serialOptions;
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Construction / startup
-        // ─────────────────────────────────────────────────────────────────────
+        private SerialOptions?  _serialOptions;
 
         public MainWindow()
         {
             LoadTimingConfiguration();
 
-            // Set window appearance before InitializeComponent creates the native handle.
-            // Only developer mode needs pre-init settings (WindowStartupLocation, size).
             if (_developerMode)
             {
                 WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -86,8 +63,6 @@ namespace SaftApp
 
             InitializeComponent();
 
-            // Production mode: maximise after InitializeComponent
-            // (XAML defaults WindowState="Normal"; we override it here for kiosk mode)
             if (!_developerMode)
             {
                 WindowStyle = WindowStyle.None;
@@ -95,11 +70,8 @@ namespace SaftApp
                 WindowState = WindowState.Maximized;
             }
 
-            _videoControl = (MediaElement?)FindName("videoControl");
-
             _previewLoop.Interval = TimeSpan.FromMilliseconds(1000.0 / _targetFps);
-            _previewLoop.Tick += OnPreviewLoopTick;
-
+            _previewLoop.Tick    += OnPreviewLoopTick;
             _countdownTimer.Tick += OnCountdownTick;
         }
 
@@ -112,8 +84,8 @@ namespace SaftApp
 
                 if (!File.Exists(path)) return;
 
-                using var doc = JsonDocument.Parse(File.ReadAllText(path));
-                var root = doc.RootElement;
+                using var doc  = JsonDocument.Parse(File.ReadAllText(path));
+                var       root = doc.RootElement;
 
                 if (root.TryGetProperty("FlashInSeconds",       out var v1)) _flashInSeconds       = v1.GetDouble();
                 if (root.TryGetProperty("FlashOutSeconds",      out var v2)) _flashOutSeconds      = v2.GetDouble();
@@ -130,26 +102,15 @@ namespace SaftApp
                     try
                     {
                         _serialOptions = new SerialOptions();
-                        if (s.TryGetProperty("PortName",  out var pn)) _serialOptions.PortName = pn.GetString();
-                        if (s.TryGetProperty("BaudRate",  out var br)) _serialOptions.BaudRate = br.GetInt32();
-                        if (s.TryGetProperty("AutoOpen",  out var ao)) _serialOptions.AutoOpen = ao.GetBoolean();
+                        if (s.TryGetProperty("PortName", out var pn)) _serialOptions.PortName = pn.GetString();
+                        if (s.TryGetProperty("BaudRate", out var br)) _serialOptions.BaudRate = br.GetInt32();
+                        if (s.TryGetProperty("AutoOpen", out var ao)) _serialOptions.AutoOpen = ao.GetBoolean();
                     }
                     catch (Exception ex) { Debug.WriteLine(ex); _serialOptions = null; }
                 }
             }
             catch (Exception ex) { Debug.WriteLine(ex); }
         }
-
-        // private void ApplyTimingsToResources()
-        // {
-        //     try
-        //     {
-        //         Resources["FlashInDuration"]  = new Duration(TimeSpan.FromSeconds(_flashInSeconds));
-        //         Resources["FlashOutDuration"] = new Duration(TimeSpan.FromSeconds(_flashOutSeconds));
-        //         Resources["PreviewDuration"]  = new Duration(TimeSpan.FromSeconds(_previewSeconds));
-        //     }
-        //     catch (Exception ex) { Debug.WriteLine(ex); }
-        // }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
@@ -159,57 +120,12 @@ namespace SaftApp
             TransitionTo(AppState.Idle);
         }
 
-        /// <summary>
-        /// Applies window layout and button visibility based on <see cref="_developerMode"/>.
-        /// DeveloperMode  = true  → 800×600 centred, both buttons visible at equal 50px width.
-        /// DeveloperMode  = false → maximised borderless, both buttons collapsed and zero-width.
-        /// </summary>
         private void ApplyDeveloperMode()
         {
-            if (_developerMode)
-            {
-                // Window geometry already set in constructor (before Show).
-                // Apply button visibility here after XAML named elements are available.
-                const double devButtonWidth = 80;
-                colLeft.Width  = new GridLength(devButtonWidth);
-                colRight.Width = new GridLength(devButtonWidth);
-
-                bCapture.Width      = devButtonWidth;
-                bCapture.Visibility = Visibility.Visible;
-
-                triggerPanel.Visibility = Visibility.Visible;
-                foreach (var btn in new[] { bTrigger1, bTrigger2, bTrigger3, bTrigger4, bTrigger5 })
-                    btn.Width = devButtonWidth;
-
-                Debug.WriteLine("[DeveloperMode] ON — 800×600 centred, buttons visible");
-            }
-            else
-            {
-                // Buttons fully hidden
-                colLeft.Width  = new GridLength(0);
-                colRight.Width = new GridLength(0);
-
-                bCapture.Width      = 0;
-                bCapture.Visibility = Visibility.Collapsed;
-
-                triggerPanel.Visibility = Visibility.Collapsed;
-                foreach (var btn in new[] { bTrigger1, bTrigger2, bTrigger3, bTrigger4, bTrigger5 })
-                    btn.Width = 0;
-
-                Debug.WriteLine("[DeveloperMode] OFF — maximised kiosk, buttons hidden");
-            }
+            overlayGrid.Visibility = _developerMode ? Visibility.Visible : Visibility.Collapsed;
+            Debug.WriteLine(_developerMode ? "[DeveloperMode] ON" : "[DeveloperMode] OFF");
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // State machine — single entry point
-        // ─────────────────────────────────────────────────────────────────────
-
-        /// <summary>
-        /// The only method that may change <see cref="_state"/>.
-        /// Each state has a corresponding Enter method that owns its setup logic.
-        /// Completion of that state (animation Completed, timer Tick, task continuation)
-        /// calls TransitionTo for the next state.
-        /// </summary>
         private void TransitionTo(AppState next)
         {
             Debug.WriteLine($"[State] {_state} → {next}");
@@ -217,65 +133,46 @@ namespace SaftApp
 
             switch (_state)
             {
-                case AppState.Idle:     EnterIdleState();     break;
-                case AppState.Countdown:EnterCountdownState();break;
-                case AppState.Capture:  EnterCaptureState();  break;
-                case AppState.Preview:  EnterPreviewState();  break;
-                case AppState.Video:    EnterVideoState();    break;
+                case AppState.Idle:      EnterIdleState();      break;
+                case AppState.Countdown: EnterCountdownState(); break;
+                case AppState.Capture:   EnterCaptureState();   break;
+                case AppState.Preview:   EnterPreviewState();   break;
+                case AppState.Video:     EnterVideoState();     break;
             }
         }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Idle — live camera feed, all UI reset
-        // No animation. Camera loop drives display continuously.
-        // Exits via: bCapture_Click → Countdown | bVideo_Click / serial → Video
-        // ─────────────────────────────────────────────────────────────────────
 
         private void EnterIdleState()
         {
             StopAllStateTimers();
 
-            // Reset flash overlay
-            flashOverlay.BeginAnimation(UIElement.OpacityProperty, null);
-            flashOverlay.Opacity = 0;
-            flashOverlay.Visibility = Visibility.Collapsed;
+            rectFlash.BeginAnimation(UIElement.OpacityProperty, null);
+            rectFlash.Opacity    = 0;
+            rectFlash.Visibility = Visibility.Collapsed;
 
-            // Reset captured image
-            imageControl.Source = null;
-            imageControl.Visibility = Visibility.Collapsed;
+            imgCapture.Source     = null;
+            imgCapture.Visibility = Visibility.Collapsed;
 
-            // Stop video if playing
             try
             {
-                _videoControl?.Stop();
-                if (_videoControl is not null)
-                    _videoControl.Visibility = Visibility.Collapsed;
+                videoPlayer.Stop();
+                videoPlayer.Visibility = Visibility.Collapsed;
             }
             catch { }
 
-            // Clear overlay text
-            SetOverlay(string.Empty, 0);
+            SetCountdownText(string.Empty, 0);
 
-            // Resume live preview
-            PreviewControl.Source = null;
-            PreviewControl.Visibility = Visibility.Visible;
+            imgPreview.Source     = null;
+            imgPreview.Visibility = Visibility.Visible;
             if (!_previewLoop.IsEnabled)
                 _previewLoop.Start();
 
-            Debug.WriteLine($"[Idle] camera={(_capture is null ? "null" : "ok")}, previewLoop={_previewLoop.IsEnabled}");
+            Debug.WriteLine($"[Idle] camera={(_capture is null ? "null" : "ok")}");
         }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Countdown — _countdownTimer ticks every 1 s, CountdownNumberInOut
-        // animation plays on each tick.
-        // Exits via: _countdownTimer when counter reaches 0 → Capture
-        // ─────────────────────────────────────────────────────────────────────
 
         private void EnterCountdownState()
         {
-            imageControl.Visibility = Visibility.Collapsed;
-
-            _countdownCounter = _countdownSeconds;
+            imgCapture.Visibility = Visibility.Collapsed;
+            _countdownCounter     = _countdownSeconds;
             ShowCountdownTick();
             _countdownTimer.Start();
         }
@@ -292,28 +189,21 @@ namespace SaftApp
                 return;
             }
 
-            // Counter reached zero → move to Capture
             _countdownTimer.Stop();
             TransitionTo(AppState.Capture);
         }
 
         private void ShowCountdownTick()
         {
-            SetOverlay(_countdownCounter.ToString(), 1);
+            SetCountdownText(_countdownCounter.ToString(), 1);
             PlayAnimation("CountdownNumberInOut");
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Capture — screen flashes white (FlashInFast), frame is grabbed at
-        // peak white, then FlashOutSmooth reveals the captured image.
-        // FlashInFast.Completed → grab frame → FlashOutSmooth.Completed → Preview
-        // ─────────────────────────────────────────────────────────────────────
-
         private void EnterCaptureState()
         {
-            SetOverlay(string.Empty, 0);
+            SetCountdownText(string.Empty, 0);
             PlayAnimation("FlashInFast",
-                duration: TimeSpan.FromSeconds(_flashInSeconds),
+                duration:    TimeSpan.FromSeconds(_flashInSeconds),
                 onCompleted: OnFlashInCompleted);
         }
 
@@ -326,21 +216,18 @@ namespace SaftApp
 
             if (src is null || src.Empty())
             {
-                Debug.WriteLine("[Capture] No frame available — returning to Idle");
-                SetOverlay("No frame", 1);
+                Debug.WriteLine("[Capture] No frame — returning to Idle");
+                SetCountdownText("No frame", 1);
                 src?.Dispose();
                 TransitionTo(AppState.Idle);
                 return;
             }
 
-            // Clear held opacity before starting flash-out — don't wait for the
-            // background conversion; FlashOutSmooth runs while the bitmap is being prepared.
-            flashOverlay.BeginAnimation(UIElement.OpacityProperty, null);
+            rectFlash.BeginAnimation(UIElement.OpacityProperty, null);
             PlayAnimation("FlashOutSmooth",
-                duration: TimeSpan.FromSeconds(_flashOutSeconds),
+                duration:    TimeSpan.FromSeconds(_flashOutSeconds),
                 onCompleted: OnFlashOutCompleted);
 
-            // Convert and save on a background thread — Mat clone is thread-safe.
             _ = Task.Run(() =>
             {
                 try
@@ -349,30 +236,25 @@ namespace SaftApp
                     bitmap.Freeze();
                     src.Dispose();
 
-                    SaveCaptureAsync(bitmap);
+                    SaveCapture(bitmap);
 
-                    // Marshal back to UI thread to stage the captured image
                     Dispatcher.Invoke(() =>
                     {
-                        imageControl.Source     = bitmap;
-                        imageControl.Visibility = Visibility.Visible;
+                        imgCapture.Source     = bitmap;
+                        imgCapture.Visibility = Visibility.Visible;
                     });
                 }
-                catch (Exception ex) { Debug.WriteLine($"[Capture] Conversion failed: {ex}"); src.Dispose(); }
+                catch (Exception ex) { Debug.WriteLine($"[Capture] {ex}"); src.Dispose(); }
             });
-
-            Debug.WriteLine("[Capture] Frame grabbed — FlashOutSmooth running, conversion in background");
         }
 
         private void OnFlashOutCompleted(object? sender, EventArgs e)
         {
             if (_state != AppState.Capture) return;
-
-            Debug.WriteLine("[Capture] FlashOutSmooth completed → Preview");
             TransitionTo(AppState.Preview);
         }
 
-        private void SaveCaptureAsync(BitmapSource bitmap)
+        private void SaveCapture(BitmapSource bitmap)
         {
             var dir  = string.IsNullOrWhiteSpace(_workDir) ? AppContext.BaseDirectory : _workDir;
             var path = Path.Combine(dir, $"capture_{DateTime.Now:yyyyMMdd_HHmmss_fff}.png");
@@ -392,19 +274,11 @@ namespace SaftApp
             });
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Preview — frozen captured image shown with horizontal mirror.
-        // _previewTimer drives automatic return to Idle after _previewSeconds.
-        // Exits via: _previewTimer.Tick → Idle (via RestartCameraAndReturnToIdle)
-        // ─────────────────────────────────────────────────────────────────────
-
         private void EnterPreviewState()
         {
-            _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_previewSeconds) };
-            _previewTimer.Tick += OnPreviewTimerTick;
+            _previewTimer          = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_previewSeconds) };
+            _previewTimer.Tick    += OnPreviewTimerTick;
             _previewTimer.Start();
-
-            Debug.WriteLine($"[Preview] Showing captured image for {_previewSeconds}s");
         }
 
         private void OnPreviewTimerTick(object? sender, EventArgs e)
@@ -413,44 +287,24 @@ namespace SaftApp
             _previewTimer = null;
 
             if (_state != AppState.Preview) return;
-
-            Debug.WriteLine("[Preview] Timer elapsed → Idle");
             TransitionTo(AppState.Idle);
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Video — MediaElement plays media\video.mp4.
-        // Exits via: MediaEnded event | _videoTimer (duration cap) → Idle
-        // ─────────────────────────────────────────────────────────────────────
-
         private void EnterVideoState()
         {
-            imageControl.Visibility = Visibility.Collapsed;
-            PreviewControl.Source = null;
-
-            if (_videoControl is not null)
-                _videoControl.Visibility = Visibility.Visible;
-
+            imgCapture.Visibility  = Visibility.Collapsed;
+            imgPreview.Source      = null;
+            videoPlayer.Visibility = Visibility.Visible;
             PlayLocalVideo("media\\video.mp4");
         }
 
-        private void videoControl_MediaEnded(object sender, RoutedEventArgs e)
+        private void VideoPlayer_MediaEnded(object sender, RoutedEventArgs e)
         {
-            Debug.WriteLine("[Video] MediaEnded → Idle");
             _videoTimer?.Stop();
             _videoTimer = null;
             TransitionTo(AppState.Idle);
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Animation helpers
-        // ─────────────────────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Clones the named storyboard resource, overrides every child timeline's Duration
-        /// with <paramref name="duration"/> when provided, optionally wires a Completed
-        /// handler, then begins it against this window.
-        /// </summary>
         private void PlayAnimation(string resourceKey, TimeSpan? duration = null, EventHandler? onCompleted = null)
         {
             try
@@ -468,12 +322,8 @@ namespace SaftApp
                     sb.Completed += onCompleted;
                 sb.Begin(this, true);
             }
-            catch (Exception ex) { Debug.WriteLine($"[Animation] {resourceKey} failed: {ex}"); }
+            catch (Exception ex) { Debug.WriteLine($"[Animation] {resourceKey}: {ex}"); }
         }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Timer helpers
-        // ─────────────────────────────────────────────────────────────────────
 
         private void StopAllStateTimers()
         {
@@ -486,17 +336,13 @@ namespace SaftApp
             _videoTimer = null;
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Live preview loop (always running except during Preview / Video)
-        // ─────────────────────────────────────────────────────────────────────
-
         private void OnPreviewLoopTick(object? sender, EventArgs e)
         {
             if (_state == AppState.Preview || _state == AppState.Video) return;
 
             VideoCapture? cap;
-            Mat? full;
-            Mat? prev;
+            Mat?          full;
+            Mat?          prev;
 
             lock (_sync)
             {
@@ -506,73 +352,50 @@ namespace SaftApp
             }
 
             if (cap is null || full is null || prev is null) return;
-
-            if (!cap.Read(full) || full.Empty())
-            {
-                Debug.WriteLine("[PreviewLoop] Failed to read frame");
-                return;
-            }
+            if (!cap.Read(full) || full.Empty()) return;
 
             try
             {
-                // Resize with INTER_AREA for downscaling — preserves aspect ratio only if
-                // _previewWidth/_previewHeight match the capture ratio. Both are 16:9 so no stretching occurs.
                 Cv2.Resize(full, prev, new OpenCvSharp.Size(_previewWidth, _previewHeight),
                            interpolation: InterpolationFlags.Area);
                 var bmp = BitmapSourceConverter.ToBitmapSource(prev);
                 bmp.Freeze();
-                PreviewControl.Source = bmp;
+                imgPreview.Source = bmp;
             }
             catch (Exception ex) { Debug.WriteLine(ex); }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // UI input — buttons and serial
-        // ─────────────────────────────────────────────────────────────────────
-
-        private void bCapture_Click(object sender, RoutedEventArgs e)
+        private void BtnCapture_Click(object sender, RoutedEventArgs e)
         {
             if (_state != AppState.Idle) return;
             TransitionTo(AppState.Countdown);
         }
 
-        // ── Trigger buttons (developer mode) ─────────────────────────────────
-        // General-purpose triggers — wire each to the desired state transition.
-
-        private void bTrigger1_Click(object sender, RoutedEventArgs e)
+        private void BtnTrigger1_Click(object sender, RoutedEventArgs e)
         {
             if (_state != AppState.Idle) return;
-            Debug.WriteLine("[Dev] Trigger 1 fired");
-            TransitionTo(AppState.Video);  // currently: video
+            TransitionTo(AppState.Video);
         }
 
-        private void bTrigger2_Click(object sender, RoutedEventArgs e)
+        private void BtnTrigger2_Click(object sender, RoutedEventArgs e)
         {
             if (_state != AppState.Idle) return;
-            Debug.WriteLine("[Dev] Trigger 2 fired");
         }
 
-        private void bTrigger3_Click(object sender, RoutedEventArgs e)
+        private void BtnTrigger3_Click(object sender, RoutedEventArgs e)
         {
             if (_state != AppState.Idle) return;
-            Debug.WriteLine("[Dev] Trigger 3 fired");
         }
 
-        private void bTrigger4_Click(object sender, RoutedEventArgs e)
+        private void BtnTrigger4_Click(object sender, RoutedEventArgs e)
         {
             if (_state != AppState.Idle) return;
-            Debug.WriteLine("[Dev] Trigger 4 fired");
         }
 
-        private void bTrigger5_Click(object sender, RoutedEventArgs e)
+        private void BtnTrigger5_Click(object sender, RoutedEventArgs e)
         {
             if (_state != AppState.Idle) return;
-            Debug.WriteLine("[Dev] Trigger 5 fired");
         }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Serial
-        // ─────────────────────────────────────────────────────────────────────
 
         private async Task InitializeSerialAsync()
         {
@@ -580,9 +403,9 @@ namespace SaftApp
             {
                 if (_serialOptions is null) return;
 
-                _serialService = new SerialService(_serialOptions);
-                _serialService.LineReceived   += Serial_LineReceived;
-                _serialService.StatusChanged  += Serial_StatusChanged;
+                _serialService                   = new SerialService(_serialOptions);
+                _serialService.LineReceived     += Serial_LineReceived;
+                _serialService.StatusChanged    += Serial_StatusChanged;
 
                 if (_serialOptions.AutoOpen)
                 {
@@ -590,11 +413,11 @@ namespace SaftApp
                     Debug.WriteLine($"[Serial] Open ({_serialOptions.PortName}@{_serialOptions.BaudRate}) → {ok}");
 
                     if (!ok)
-                        SetOverlay($"Serial {_serialOptions.PortName ?? "?"} not open", 1);
+                        SetCountdownText($"Serial {_serialOptions.PortName ?? "?"} not open", 1);
                     else
                     {
-                        SetOverlay("Serial ready", 1);
-                        _ = Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => SetOverlay(string.Empty, 0)));
+                        SetCountdownText("Serial ready", 1);
+                        _ = Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => SetCountdownText(string.Empty, 0)));
                     }
                 }
             }
@@ -609,7 +432,6 @@ namespace SaftApp
             try
             {
                 if (string.IsNullOrWhiteSpace(line)) return;
-                Debug.WriteLine($"[Serial] ← {line}");
 
                 var trimmed = line.Trim();
 
@@ -644,7 +466,7 @@ namespace SaftApp
 
             if (string.IsNullOrEmpty(val) || val.Equals("NONE", StringComparison.OrdinalIgnoreCase)) return;
 
-            if (val.Equals("TAP",  StringComparison.OrdinalIgnoreCase))
+            if (val.Equals("TAP", StringComparison.OrdinalIgnoreCase))
                 Dispatcher.Invoke(() => { if (_state == AppState.Idle) TransitionTo(AppState.Video); });
             else if (val.Equals("LONG", StringComparison.OrdinalIgnoreCase))
                 Dispatcher.Invoke(() => { if (_state == AppState.Idle) TransitionTo(AppState.Countdown); });
@@ -671,10 +493,6 @@ namespace SaftApp
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Camera lifecycle
-        // ─────────────────────────────────────────────────────────────────────
-
         private async Task StartCameraAsync(int cameraIndex)
         {
             if (_capture is not null && _capture.IsOpened()) return;
@@ -682,17 +500,8 @@ namespace SaftApp
             await StopCameraAsync();
 
             VideoCapture? cap = new VideoCapture(cameraIndex, VideoCaptureAPIs.DSHOW);
-            if (!cap.IsOpened())
-            {
-                cap.Release(); cap.Dispose();
-                cap = new VideoCapture(cameraIndex, VideoCaptureAPIs.ANY);
-            }
-            if (!cap.IsOpened())
-            {
-                cap.Release(); cap.Dispose();
-                SetOverlay("Camera not found", 1);
-                return;
-            }
+            if (!cap.IsOpened()) { cap.Release(); cap.Dispose(); cap = new VideoCapture(cameraIndex, VideoCaptureAPIs.ANY); }
+            if (!cap.IsOpened()) { cap.Release(); cap.Dispose(); SetCountdownText("Camera not found", 1); return; }
 
             TrySetHighestResolution(cap);
 
@@ -709,7 +518,7 @@ namespace SaftApp
             _frameFull    = new Mat((int)cap.FrameHeight, (int)cap.FrameWidth, MatType.CV_8UC3);
             _framePreview = new Mat(_previewHeight, _previewWidth, MatType.CV_8UC3);
 
-            imageControl.Visibility = Visibility.Collapsed;
+            imgCapture.Visibility = Visibility.Collapsed;
             _previewLoop.Start();
         }
 
@@ -718,7 +527,6 @@ namespace SaftApp
             _previewLoop.Stop();
             StopAllStateTimers();
 
-            // Dispose serial
             try
             {
                 if (_serialService is not null)
@@ -731,28 +539,25 @@ namespace SaftApp
             catch { }
             _serialService = null;
 
-            // Release camera
             VideoCapture? cap;
             lock (_sync) { cap = _capture; _capture = null; }
             try { cap?.Release(); cap?.Dispose(); } catch { }
 
-            _frameFull?.Dispose();  _frameFull   = null;
+            _frameFull?.Dispose();    _frameFull    = null;
             _framePreview?.Dispose(); _framePreview = null;
 
-            // Reset UI
-            flashOverlay.BeginAnimation(UIElement.OpacityProperty, null);
-            flashOverlay.Opacity    = 0;
-            flashOverlay.Visibility = Visibility.Collapsed;
-            imageControl.Source     = null;
-            imageControl.Visibility = Visibility.Collapsed;
+            rectFlash.BeginAnimation(UIElement.OpacityProperty, null);
+            rectFlash.Opacity    = 0;
+            rectFlash.Visibility = Visibility.Collapsed;
+            imgCapture.Source    = null;
+            imgCapture.Visibility = Visibility.Collapsed;
 
-            try { _videoControl?.Stop(); } catch { }
-            if (_videoControl is not null) _videoControl.Visibility = Visibility.Collapsed;
+            try { videoPlayer.Stop(); } catch { }
+            videoPlayer.Visibility = Visibility.Collapsed;
         }
 
         private void TrySetHighestResolution(VideoCapture cap)
         {
-            // 16:9 candidates — highest to lowest
             (int w, int h)[] candidates =
             {
                 (7680,4320),(5120,2880),(4096,2160),
@@ -766,10 +571,6 @@ namespace SaftApp
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Video playback helpers
-        // ─────────────────────────────────────────────────────────────────────
-
         private void PlayLocalVideo(string relativePath)
         {
             try
@@ -777,41 +578,28 @@ namespace SaftApp
                 string? resolved = ResolveProjectRelativePath(relativePath);
                 if (string.IsNullOrWhiteSpace(resolved) || !File.Exists(resolved))
                 {
-                    Debug.WriteLine($"[Video] File not found: {relativePath}");
-                    SetOverlay("Video not found", 1);
+                    SetCountdownText("Video not found", 1);
                     TransitionTo(AppState.Idle);
                     return;
                 }
 
-                if (_videoControl is null)
-                {
-                    Debug.WriteLine("[Video] videoControl is null");
-                    TransitionTo(AppState.Idle);
-                    return;
-                }
-
-                _videoControl.Source          = new Uri(resolved);
-                _videoControl.LoadedBehavior  = MediaState.Manual;
-                _videoControl.UnloadedBehavior = MediaState.Stop;
-                _videoControl.Position        = TimeSpan.Zero;
-                _videoControl.Play();
+                videoPlayer.Source           = new Uri(resolved);
+                videoPlayer.LoadedBehavior   = MediaState.Manual;
+                videoPlayer.UnloadedBehavior = MediaState.Stop;
+                videoPlayer.Position         = TimeSpan.Zero;
+                videoPlayer.Play();
 
                 if (_videoDurationSeconds > 0)
                 {
-                    _videoTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_videoDurationSeconds) };
-                    _videoTimer.Tick += OnVideoTimerTick;
+                    _videoTimer          = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_videoDurationSeconds) };
+                    _videoTimer.Tick    += OnVideoTimerTick;
                     _videoTimer.Start();
-                    Debug.WriteLine($"[Video] Playing with {_videoDurationSeconds}s cap");
-                }
-                else
-                {
-                    Debug.WriteLine("[Video] Playing to natural end");
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Video] Error: {ex}");
-                SetOverlay("Video error", 1);
+                Debug.WriteLine($"[Video] {ex}");
+                SetCountdownText("Video error", 1);
                 TransitionTo(AppState.Idle);
             }
         }
@@ -820,25 +608,15 @@ namespace SaftApp
         {
             _videoTimer?.Stop();
             _videoTimer = null;
-
-            Debug.WriteLine("[Video] Duration cap elapsed → Idle");
-            try { _videoControl?.Stop(); } catch { }
+            try { videoPlayer.Stop(); } catch { }
             TransitionTo(AppState.Idle);
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Overlay helper
-        // ─────────────────────────────────────────────────────────────────────
-
-        private void SetOverlay(string text, double opacity)
+        private void SetCountdownText(string text, double opacity)
         {
-            tbOverlay.Text    = text;
-            tbOverlay.Opacity = opacity;
+            tbCountdown.Text    = text;
+            tbCountdown.Opacity = opacity;
         }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Path resolution
-        // ─────────────────────────────────────────────────────────────────────
 
         private string? ResolveProjectRelativePath(string relativePath)
         {
@@ -850,17 +628,13 @@ namespace SaftApp
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
             for (int i = 0; i < 6 && dir.Parent is not null; i++)
             {
-                dir = dir.Parent;
+                dir       = dir.Parent;
                 candidate = Path.Combine(dir.FullName, relativePath);
                 if (File.Exists(candidate)) return Path.GetFullPath(candidate);
             }
 
             return null;
         }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Window lifecycle
-        // ─────────────────────────────────────────────────────────────────────
 
         protected override async void OnClosed(EventArgs e)
         {
