@@ -20,17 +20,15 @@ namespace SaftApp
 
     public sealed partial class MainWindow : WpfWindow
     {
-        private const int CountdownSeconds = 6;
-        private const int TargetFps = 30;
-        private const int PreviewWidth = 1920;
-        private const int PreviewHeight = 1080;
-
         // ── Timing configuration (seconds) ───────────────────────────────────
-        private double _flashInSeconds = 1.0;
-        private double _flashOutSeconds = 2.0;
-        private double _holdSeconds = 0.3;
-        private double _previewSeconds = 10.0;
-        private double _videoDurationSeconds = 33.0; // 0 = play full file
+        private double _flashInSeconds       = 1.0;
+        private double _flashOutSeconds      = 2.0;
+        private double _previewSeconds       = 10.0;
+        private double _videoDurationSeconds = 30.0; // 0 = play full file
+        private int    _countdownSeconds     = 6;
+        private int    _targetFps            = 30;
+        private int    _previewWidth         = 1920;
+        private int    _previewHeight        = 1080;
 
         // ── Developer mode ────────────────────────────────────────────────────
         // When true: both buttons visible at equal size, window 800×600 centred.
@@ -99,9 +97,7 @@ namespace SaftApp
 
             _videoControl = (MediaElement?)FindName("videoControl");
 
-            ApplyTimingsToResources();
-
-            _previewLoop.Interval = TimeSpan.FromMilliseconds(1000.0 / TargetFps);
+            _previewLoop.Interval = TimeSpan.FromMilliseconds(1000.0 / _targetFps);
             _previewLoop.Tick += OnPreviewLoopTick;
 
             _countdownTimer.Tick += OnCountdownTick;
@@ -119,21 +115,24 @@ namespace SaftApp
                 using var doc = JsonDocument.Parse(File.ReadAllText(path));
                 var root = doc.RootElement;
 
-                if (root.TryGetProperty("FlashInSeconds",      out var v1)) _flashInSeconds      = v1.GetDouble();
-                if (root.TryGetProperty("FlashOutSeconds",     out var v2)) _flashOutSeconds     = v2.GetDouble();
-                if (root.TryGetProperty("HoldSeconds",         out var v3)) _holdSeconds         = v3.GetDouble();
-                if (root.TryGetProperty("PreviewSeconds",      out var v4)) _previewSeconds      = v4.GetDouble();
-                if (root.TryGetProperty("VideoDurationSeconds",out var v5)) _videoDurationSeconds= v5.GetDouble();
-                if (root.TryGetProperty("DeveloperMode",       out var v6)) _developerMode       = v6.GetBoolean();
+                if (root.TryGetProperty("FlashInSeconds",       out var v1)) _flashInSeconds       = v1.GetDouble();
+                if (root.TryGetProperty("FlashOutSeconds",      out var v2)) _flashOutSeconds      = v2.GetDouble();
+                if (root.TryGetProperty("PreviewSeconds",       out var v3)) _previewSeconds       = v3.GetDouble();
+                if (root.TryGetProperty("VideoDurationSeconds", out var v4)) _videoDurationSeconds = v4.GetDouble();
+                if (root.TryGetProperty("CountdownSeconds",     out var v5)) _countdownSeconds     = v5.GetInt32();
+                if (root.TryGetProperty("TargetFps",            out var v6)) _targetFps            = v6.GetInt32();
+                if (root.TryGetProperty("PreviewWidth",         out var v7)) _previewWidth         = v7.GetInt32();
+                if (root.TryGetProperty("PreviewHeight",        out var v8)) _previewHeight        = v8.GetInt32();
+                if (root.TryGetProperty("DeveloperMode",        out var v9)) _developerMode        = v9.GetBoolean();
 
                 if (root.TryGetProperty("Serial", out var s))
                 {
                     try
                     {
                         _serialOptions = new SerialOptions();
-                        if (s.TryGetProperty("PortName",  out var pn)) _serialOptions.PortName  = pn.GetString();
-                        if (s.TryGetProperty("BaudRate",  out var br)) _serialOptions.BaudRate  = br.GetInt32();
-                        if (s.TryGetProperty("AutoOpen",  out var ao)) _serialOptions.AutoOpen  = ao.GetBoolean();
+                        if (s.TryGetProperty("PortName",  out var pn)) _serialOptions.PortName = pn.GetString();
+                        if (s.TryGetProperty("BaudRate",  out var br)) _serialOptions.BaudRate = br.GetInt32();
+                        if (s.TryGetProperty("AutoOpen",  out var ao)) _serialOptions.AutoOpen = ao.GetBoolean();
                     }
                     catch (Exception ex) { Debug.WriteLine(ex); _serialOptions = null; }
                 }
@@ -141,17 +140,16 @@ namespace SaftApp
             catch (Exception ex) { Debug.WriteLine(ex); }
         }
 
-        private void ApplyTimingsToResources()
-        {
-            try
-            {
-                Resources["FlashInDuration"]  = new Duration(TimeSpan.FromSeconds(_flashInSeconds));
-                Resources["FlashOutDuration"] = new Duration(TimeSpan.FromSeconds(_flashOutSeconds));
-                Resources["HoldDuration"]     = new Duration(TimeSpan.FromSeconds(_holdSeconds));
-                Resources["PreviewDuration"]  = new Duration(TimeSpan.FromSeconds(_previewSeconds));
-            }
-            catch (Exception ex) { Debug.WriteLine(ex); }
-        }
+        // private void ApplyTimingsToResources()
+        // {
+        //     try
+        //     {
+        //         Resources["FlashInDuration"]  = new Duration(TimeSpan.FromSeconds(_flashInSeconds));
+        //         Resources["FlashOutDuration"] = new Duration(TimeSpan.FromSeconds(_flashOutSeconds));
+        //         Resources["PreviewDuration"]  = new Duration(TimeSpan.FromSeconds(_previewSeconds));
+        //     }
+        //     catch (Exception ex) { Debug.WriteLine(ex); }
+        // }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
@@ -277,8 +275,8 @@ namespace SaftApp
         {
             imageControl.Visibility = Visibility.Collapsed;
 
-            _countdownCounter = CountdownSeconds;
-            ShowCountdownTick();                     // display first number immediately
+            _countdownCounter = _countdownSeconds;
+            ShowCountdownTick();
             _countdownTimer.Start();
         }
 
@@ -314,15 +312,15 @@ namespace SaftApp
         private void EnterCaptureState()
         {
             SetOverlay(string.Empty, 0);
-            PlayAnimation("FlashInFast", onCompleted: OnFlashInCompleted);
+            PlayAnimation("FlashInFast",
+                duration: TimeSpan.FromSeconds(_flashInSeconds),
+                onCompleted: OnFlashInCompleted);
         }
 
         private void OnFlashInCompleted(object? sender, EventArgs e)
         {
             if (_state != AppState.Capture) return;
 
-            // Grab frame at peak white — subject has reacted to flash,
-            // white overlay hides any camera lag.
             Mat? src;
             lock (_sync) { src = _frameFull?.Clone(); }
 
@@ -335,22 +333,35 @@ namespace SaftApp
                 return;
             }
 
-            var bitmap = src.ToBitmapSource();
-            bitmap.Freeze();
-            src.Dispose();
-
-            SaveCaptureAsync(bitmap);
-
-            // Stage captured image behind the white overlay before fading out
-            imageControl.Source = bitmap;
-            imageControl.Visibility = Visibility.Visible;
-
-            Debug.WriteLine("[Capture] Frame grabbed — starting FlashOutSmooth");
-
-            // Clear any held opacity value left by FlashInFast (FillBehavior=Stop)
+            // Clear held opacity before starting flash-out — don't wait for the
+            // background conversion; FlashOutSmooth runs while the bitmap is being prepared.
             flashOverlay.BeginAnimation(UIElement.OpacityProperty, null);
+            PlayAnimation("FlashOutSmooth",
+                duration: TimeSpan.FromSeconds(_flashOutSeconds),
+                onCompleted: OnFlashOutCompleted);
 
-            PlayAnimation("FlashOutSmooth", onCompleted: OnFlashOutCompleted);
+            // Convert and save on a background thread — Mat clone is thread-safe.
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    var bitmap = src.ToBitmapSource();
+                    bitmap.Freeze();
+                    src.Dispose();
+
+                    SaveCaptureAsync(bitmap);
+
+                    // Marshal back to UI thread to stage the captured image
+                    Dispatcher.Invoke(() =>
+                    {
+                        imageControl.Source     = bitmap;
+                        imageControl.Visibility = Visibility.Visible;
+                    });
+                }
+                catch (Exception ex) { Debug.WriteLine($"[Capture] Conversion failed: {ex}"); src.Dispose(); }
+            });
+
+            Debug.WriteLine("[Capture] Frame grabbed — FlashOutSmooth running, conversion in background");
         }
 
         private void OnFlashOutCompleted(object? sender, EventArgs e)
@@ -403,8 +414,8 @@ namespace SaftApp
 
             if (_state != AppState.Preview) return;
 
-            Debug.WriteLine("[Preview] Timer elapsed → restarting camera and returning to Idle");
-            RestartCameraAndReturnToIdle();
+            Debug.WriteLine("[Preview] Timer elapsed → Idle");
+            TransitionTo(AppState.Idle);
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -436,14 +447,23 @@ namespace SaftApp
         // ─────────────────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Clones the named storyboard resource, optionally wires a Completed handler,
-        /// then begins it against this window.
+        /// Clones the named storyboard resource, overrides every child timeline's Duration
+        /// with <paramref name="duration"/> when provided, optionally wires a Completed
+        /// handler, then begins it against this window.
         /// </summary>
-        private void PlayAnimation(string resourceKey, EventHandler? onCompleted = null)
+        private void PlayAnimation(string resourceKey, TimeSpan? duration = null, EventHandler? onCompleted = null)
         {
             try
             {
                 var sb = ((Storyboard)FindResource(resourceKey)).Clone();
+
+                if (duration.HasValue)
+                {
+                    var d = new Duration(duration.Value);
+                    foreach (Timeline child in sb.Children)
+                        child.Duration = d;
+                }
+
                 if (onCompleted is not null)
                     sb.Completed += onCompleted;
                 sb.Begin(this, true);
@@ -495,7 +515,7 @@ namespace SaftApp
 
             try
             {
-                Cv2.Resize(full, prev, new OpenCvSharp.Size(PreviewWidth, PreviewHeight));
+                Cv2.Resize(full, prev, new OpenCvSharp.Size(_previewWidth, _previewHeight));
                 var bmp = BitmapSourceConverter.ToBitmapSource(prev);
                 bmp.Freeze();
                 PreviewControl.Source = bmp;
@@ -683,8 +703,8 @@ namespace SaftApp
 
             _frameFull?.Dispose();
             _framePreview?.Dispose();
-            _frameFull   = new Mat((int)cap.FrameHeight, (int)cap.FrameWidth, MatType.CV_8UC3);
-            _framePreview = new Mat(PreviewHeight, PreviewWidth, MatType.CV_8UC3);
+            _frameFull    = new Mat((int)cap.FrameHeight, (int)cap.FrameWidth, MatType.CV_8UC3);
+            _framePreview = new Mat(_previewHeight, _previewWidth, MatType.CV_8UC3);
 
             imageControl.Visibility = Visibility.Collapsed;
             _previewLoop.Start();
@@ -740,24 +760,6 @@ namespace SaftApp
                 cap.FrameHeight = h;
                 if ((int)cap.FrameWidth == w && (int)cap.FrameHeight == h) break;
             }
-        }
-
-        private void RestartCameraAndReturnToIdle()
-        {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Dispatcher.InvokeAsync(async () =>
-                    {
-                        StopAllStateTimers();
-                        await StopCameraAsync();
-                        await StartCameraAsync(0);
-                        TransitionTo(AppState.Idle);
-                    });
-                }
-                catch (Exception ex) { Debug.WriteLine(ex); }
-            });
         }
 
         // ─────────────────────────────────────────────────────────────────────
