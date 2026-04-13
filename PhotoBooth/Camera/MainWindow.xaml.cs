@@ -3,6 +3,7 @@ using OpenCvSharp.WpfExtensions;
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -33,6 +34,8 @@ namespace SaftApp
 
         // ── Runtime state ─────────────────────────────────────────────────────
         private AppState _state = AppState.Idle;
+        private AppState? _pendingState;
+        private bool _isTransitioning;
 
         private readonly object _sync = new();
         private VideoCapture? _capture;
@@ -69,6 +72,7 @@ namespace SaftApp
         private volatile bool       _faceDetecting;
         private int                 _faceFrameSkip;
         private const int           FaceDetectEveryNFrames = 10;
+        private bool _enableFaceDetection = true; // Default to true
 
         public MainWindow()
         {
@@ -118,6 +122,7 @@ namespace SaftApp
                 if (root.TryGetProperty("PreviewWidth",         out var v7)) _previewWidth         = v7.GetInt32();
                 if (root.TryGetProperty("PreviewHeight",        out var v8)) _previewHeight        = v8.GetInt32();
                 if (root.TryGetProperty("DeveloperMode",        out var v9)) _developerMode        = v9.GetBoolean();
+                if (root.TryGetProperty("EnableFaceDetection",  out var v10)) _enableFaceDetection = v10.GetBoolean();
 
                 if (root.TryGetProperty("Serial", out var s))
                 {
@@ -139,8 +144,8 @@ namespace SaftApp
             ApplyDeveloperMode();
             _faceCascade = TryLoadFaceCascade();
             await StartCameraAsync(0);
+            EnterState(AppState.Idle);
             await InitializeSerialAsync();
-            TransitionTo(AppState.Idle);
         }
 
         private void ApplyDeveloperMode()
@@ -151,7 +156,82 @@ namespace SaftApp
 
         private void TransitionTo(AppState next)
         {
+            if (_isTransitioning)
+            {
+                _pendingState = next;
+                return;
+            }
+
+            if (_state == next && next != AppState.Capture)
+                return;
+
+            // Exclusions requested: no shared fade for Idle->Countdown or Capture->Preview
+            if ((_state == AppState.Idle && next == AppState.Countdown)
+                || (_state == AppState.Capture && next == AppState.Preview))
+            {
+                Debug.WriteLine($"[State] {_state} → {next} (direct)");
+                EnterState(next);
+                return;
+            }
+
             Debug.WriteLine($"[State] {_state} → {next}");
+            _pendingState = next;
+            _isTransitioning = true;
+
+            StopAllStateTimers();
+            transitionGrid.Visibility = Visibility.Visible;
+            rectTransition.Visibility = Visibility.Visible;
+            rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
+            rectTransition.Opacity = 0;
+
+            PlayAnimation(
+                "TransitionIn",
+                duration: TimeSpan.FromSeconds(_transitionInSeconds),
+                onCompleted: OnGlobalTransitionInCompleted,
+                target: rectTransition);
+        }
+
+        private void OnGlobalTransitionInCompleted(object? sender, EventArgs e)
+        {
+            if (_pendingState is null)
+            {
+                EndTransition();
+                return;
+            }
+
+            var next = _pendingState.Value;
+            _pendingState = null;
+            EnterState(next);
+
+            PlayAnimation(
+                "TransitionOut",
+                duration: TimeSpan.FromSeconds(_transitionOutSeconds),
+                onCompleted: OnGlobalTransitionOutCompleted,
+                target: rectTransition);
+        }
+
+        private void OnGlobalTransitionOutCompleted(object? sender, EventArgs e)
+        {
+            EndTransition();
+
+            if (_pendingState is AppState queued)
+            {
+                _pendingState = null;
+                TransitionTo(queued);
+            }
+        }
+
+        private void EndTransition()
+        {
+            rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
+            rectTransition.Opacity    = 0;
+            rectTransition.Visibility = Visibility.Collapsed;
+            transitionGrid.Visibility = Visibility.Collapsed;
+            _isTransitioning = false;
+        }
+
+        private void EnterState(AppState next)
+        {
             _state = next;
 
             switch (_state)
@@ -164,26 +244,25 @@ namespace SaftApp
             }
         }
 
-        private void EnterIdleState()
+        private void HideAllContent()
         {
-            StopAllStateTimers();
-
-            rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
-            rectTransition.Opacity    = 0;
-            rectTransition.Visibility = Visibility.Collapsed;
-            transitionGrid.Visibility = Visibility.Collapsed;
-
             captureGrid.Visibility   = Visibility.Collapsed;
-            imgCapture.Source        = null;
             videoGrid.Visibility     = Visibility.Collapsed;
             countdownGrid.Visibility = Visibility.Collapsed;
-
+            previewGrid.Visibility   = Visibility.Collapsed;
+            imgCapture.Source        = null;
+            FaceLayer.Children.Clear();
             try { videoPlayer.Stop(); } catch { }
+        }
 
+        private void EnterIdleState()
+        {
+            HideAllContent();
             SetCountdownText(string.Empty, 0);
 
             if (imgPreview.Source != _previewBitmap)
                 imgPreview.Source = _previewBitmap;
+
             previewGrid.Visibility = Visibility.Visible;
             if (!_previewLoop.IsEnabled)
                 _previewLoop.Start();
@@ -194,8 +273,16 @@ namespace SaftApp
         private void EnterCountdownState()
         {
             captureGrid.Visibility   = Visibility.Collapsed;
+            videoGrid.Visibility     = Visibility.Collapsed;
             countdownGrid.Visibility = Visibility.Visible;
-            _countdownCounter        = _countdownSeconds;
+            previewGrid.Visibility   = Visibility.Visible;
+
+            if (imgPreview.Source != _previewBitmap)
+                imgPreview.Source = _previewBitmap;
+            if (!_previewLoop.IsEnabled)
+                _previewLoop.Start();
+
+            _countdownCounter = _countdownSeconds;
             ShowCountdownTick();
             _countdownTimer.Start();
         }
@@ -224,18 +311,8 @@ namespace SaftApp
 
         private void EnterCaptureState()
         {
-            countdownGrid.Visibility  = Visibility.Collapsed;
+            HideAllContent();
             SetCountdownText(string.Empty, 0);
-            transitionGrid.Visibility = Visibility.Visible;
-            PlayAnimation("TransitionIn",
-                duration:    TimeSpan.FromSeconds(_transitionInSeconds),
-                onCompleted: OnTransitionInCompleted,
-                target:      rectTransition);
-        }
-
-        private void OnTransitionInCompleted(object? sender, EventArgs e)
-        {
-            if (_state != AppState.Capture) return;
 
             Mat? src;
             lock (_sync) { src = _frameFull?.Clone(); }
@@ -249,12 +326,6 @@ namespace SaftApp
                 return;
             }
 
-            rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
-            PlayAnimation("TransitionOut",
-                duration:    TimeSpan.FromSeconds(_transitionOutSeconds),
-                onCompleted: OnTransitionOutCompleted,
-                target:      rectTransition);
-
             _ = Task.Run(() =>
             {
                 try
@@ -267,19 +338,15 @@ namespace SaftApp
 
                     Dispatcher.Invoke(() =>
                     {
+                        if (_state != AppState.Capture) return;
                         imgCapture.Source      = bitmap;
                         captureGrid.Visibility = Visibility.Visible;
-                        previewGrid.Visibility = Visibility.Collapsed;
                     });
                 }
                 catch (Exception ex) { Debug.WriteLine($"[Capture] {ex}"); src.Dispose(); }
             });
-        }
 
-        private void OnTransitionOutCompleted(object? sender, EventArgs e)
-        {
-            if (_state != AppState.Capture) return;
-            TransitionTo(AppState.Preview);
+            _ = Dispatcher.BeginInvoke(new Action(() => TransitionTo(AppState.Preview)), DispatcherPriority.Background);
         }
 
         private void SaveCapture(BitmapSource bitmap)
@@ -304,6 +371,15 @@ namespace SaftApp
 
         private void EnterPreviewState()
         {
+            videoGrid.Visibility     = Visibility.Collapsed;
+            countdownGrid.Visibility = Visibility.Collapsed;
+            previewGrid.Visibility   = Visibility.Collapsed;
+            FaceLayer.Children.Clear();
+
+            captureGrid.Visibility = imgCapture.Source is not null
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
             _previewTimer       = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_previewSeconds) };
             _previewTimer.Tick += OnPreviewTimerTick;
             _previewTimer.Start();
@@ -319,10 +395,8 @@ namespace SaftApp
 
         private void EnterVideoState()
         {
-            captureGrid.Visibility = Visibility.Collapsed;
-            previewGrid.Visibility = Visibility.Collapsed;
-            videoGrid.Visibility   = Visibility.Visible;
-            FaceLayer.Children.Clear();
+            HideAllContent();
+            videoGrid.Visibility = Visibility.Visible;
             PlayLocalVideo("media\\video.mp4");
         }
 
@@ -361,10 +435,8 @@ namespace SaftApp
         private void StopAllStateTimers()
         {
             _countdownTimer.Stop();
-
             _previewTimer?.Stop();
             _previewTimer = null;
-
             _videoTimer?.Stop();
             _videoTimer = null;
         }
@@ -448,12 +520,7 @@ namespace SaftApp
             rectTransition.Visibility = Visibility.Collapsed;
             transitionGrid.Visibility = Visibility.Collapsed;
 
-            captureGrid.Visibility   = Visibility.Collapsed;
-            imgCapture.Source        = null;
-            videoGrid.Visibility     = Visibility.Collapsed;
-            countdownGrid.Visibility = Visibility.Collapsed;
-
-            try { videoPlayer.Stop(); } catch { }
+            HideAllContent();
         }
 
         // Runs on background thread — reads camera, resizes, double-buffers result.
@@ -473,7 +540,6 @@ namespace SaftApp
                 }
 
                 if (cap is null || full is null || prev is null) { Thread.Sleep(5); continue; }
-
                 if (!cap.Read(full) || full.Empty()) { Thread.Sleep(5); continue; }
 
                 Cv2.Resize(full, prev, new OpenCvSharp.Size(_previewWidth, _previewHeight),
@@ -503,7 +569,6 @@ namespace SaftApp
 
             if (frame is null) return;
 
-            // Blit frame into WriteableBitmap
             try
             {
                 long stride = (long)_previewWidth * 3;
@@ -523,8 +588,9 @@ namespace SaftApp
                 _previewBitmap.Unlock();
             }
 
-            // Throttle face detection: every N frames, hand the frame to a background task
-            if (_faceCascade is not null && !_faceDetecting)
+            bool previewVisible = previewGrid.Visibility == Visibility.Visible;
+
+            if (_enableFaceDetection && previewVisible && _faceCascade is not null && !_faceDetecting)
             {
                 _faceFrameSkip++;
                 if (_faceFrameSkip >= FaceDetectEveryNFrames)
@@ -532,15 +598,18 @@ namespace SaftApp
                     _faceFrameSkip = 0;
                     _faceDetecting = true;
                     var detectFrame = frame;
-                    frame = null;           // ownership transferred
+                    frame = null;
                     _ = Task.Run(() => DetectFacesBackground(detectFrame));
                 }
+            }
+            else if (!previewVisible)
+            {
+                FaceLayer.Children.Clear();
             }
 
             frame?.Dispose();
         }
 
-        // Runs on a background thread.
         private void DetectFacesBackground(Mat frame)
         {
             try
@@ -561,14 +630,15 @@ namespace SaftApp
                     flags:        HaarDetectionTypes.ScaleImage,
                     minSize:      new OpenCvSharp.Size(80, 80));
 
-                Debug.WriteLine($"[FaceDetect] {faces.Length} face(s).");
-
                 Dispatcher.InvokeAsync(() =>
                 {
                     _lastFaces      = faces;
                     _imgPixelWidth  = w;
                     _imgPixelHeight = h;
-                    RenderFaceOverlay();
+                    if (previewGrid.Visibility == Visibility.Visible)
+                        RenderFaceOverlay();
+                    else
+                        FaceLayer.Children.Clear();
                 });
             }
             catch (Exception ex) { Debug.WriteLine($"[FaceDetect] {ex.Message}"); }
@@ -657,20 +727,20 @@ namespace SaftApp
 
         private void BtnCapture_Click(object sender, RoutedEventArgs e)
         {
-            if (_state != AppState.Idle) return;
+            if (_state != AppState.Idle || _isTransitioning) return;
             TransitionTo(AppState.Countdown);
         }
 
         private void BtnTrigger1_Click(object sender, RoutedEventArgs e)
         {
-            if (_state != AppState.Idle) return;
+            if (_state == AppState.Video || _isTransitioning) return;
             TransitionTo(AppState.Video);
         }
 
-        private void BtnTrigger2_Click(object sender, RoutedEventArgs e) { if (_state != AppState.Idle) return; }
-        private void BtnTrigger3_Click(object sender, RoutedEventArgs e) { if (_state != AppState.Idle) return; }
-        private void BtnTrigger4_Click(object sender, RoutedEventArgs e) { if (_state != AppState.Idle) return; }
-        private void BtnTrigger5_Click(object sender, RoutedEventArgs e) { if (_state != AppState.Idle) return; }
+        private void BtnTrigger2_Click(object sender, RoutedEventArgs e) { }
+        private void BtnTrigger3_Click(object sender, RoutedEventArgs e) { }
+        private void BtnTrigger4_Click(object sender, RoutedEventArgs e) { }
+        private void BtnTrigger5_Click(object sender, RoutedEventArgs e) { }
 
         private async Task InitializeSerialAsync()
         {
@@ -678,8 +748,8 @@ namespace SaftApp
             {
                 if (_serialOptions is null) return;
 
-                _serialService               = new SerialService(_serialOptions);
-                _serialService.LineReceived += Serial_LineReceived;
+                _serialService                = new SerialService(_serialOptions);
+                _serialService.LineReceived  += Serial_LineReceived;
                 _serialService.StatusChanged += Serial_StatusChanged;
 
                 if (_serialOptions.AutoOpen)
@@ -713,7 +783,7 @@ namespace SaftApp
                 if (trimmed.StartsWith("EVENT:", StringComparison.OrdinalIgnoreCase))
                 {
                     if (trimmed[6..].Trim().Equals("TRIGGER", StringComparison.OrdinalIgnoreCase))
-                        Dispatcher.Invoke(() => { if (_state == AppState.Idle) TransitionTo(AppState.Video); });
+                        Dispatcher.Invoke(() => { if (_state != AppState.Video && !_isTransitioning) TransitionTo(AppState.Video); });
                     return;
                 }
 
@@ -742,9 +812,9 @@ namespace SaftApp
             if (string.IsNullOrEmpty(val) || val.Equals("NONE", StringComparison.OrdinalIgnoreCase)) return;
 
             if (val.Equals("TAP", StringComparison.OrdinalIgnoreCase))
-                Dispatcher.Invoke(() => { if (_state == AppState.Idle) TransitionTo(AppState.Video); });
+                Dispatcher.Invoke(() => { if (_state != AppState.Video && !_isTransitioning) TransitionTo(AppState.Video); });
             else if (val.Equals("LONG", StringComparison.OrdinalIgnoreCase))
-                Dispatcher.Invoke(() => { if (_state == AppState.Idle) TransitionTo(AppState.Countdown); });
+                Dispatcher.Invoke(() => { if (_state == AppState.Idle && !_isTransitioning) TransitionTo(AppState.Countdown); });
         }
 
         private void ParseDebugBreakBeam(string upper)
@@ -760,11 +830,11 @@ namespace SaftApp
                           .FirstOrDefault()?.Trim();
 
             if (!string.IsNullOrEmpty(val)
-                && !val.Equals("NO",    StringComparison.OrdinalIgnoreCase)
+                && !val.Equals("NO", StringComparison.OrdinalIgnoreCase)
                 && !val.Equals("FALSE", StringComparison.OrdinalIgnoreCase)
-                && !val.Equals("0",     StringComparison.OrdinalIgnoreCase))
+                && !val.Equals("0", StringComparison.OrdinalIgnoreCase))
             {
-                Dispatcher.Invoke(() => { if (_state == AppState.Idle) TransitionTo(AppState.Video); });
+                Dispatcher.Invoke(() => { if (_state != AppState.Video && !_isTransitioning) TransitionTo(AppState.Video); });
             }
         }
 
