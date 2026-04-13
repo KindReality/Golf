@@ -165,9 +165,10 @@ namespace SaftApp
             if (_state == next && next != AppState.Capture)
                 return;
 
-            // Exclusions requested: no shared fade for Idle->Countdown or Capture->Preview
+            // Exclusions requested: no shared fade for Idle->Countdown, Capture->Preview, or Preview->Idle
             if ((_state == AppState.Idle && next == AppState.Countdown)
-                || (_state == AppState.Capture && next == AppState.Preview))
+                || (_state == AppState.Capture && next == AppState.Preview)
+                || (_state == AppState.Preview && next == AppState.Idle))
             {
                 Debug.WriteLine($"[State] {_state} → {next} (direct)");
                 EnterState(next);
