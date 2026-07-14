@@ -42,6 +42,9 @@ namespace SaftApp
         private Mat? _frameFull;
         private Mat? _framePreview;
         private string? _workDir;
+        private Uri? _videoUri;
+        private bool _videoPrepared;
+        private BitmapSource? _lastCapturedImage;
 
         // ── WriteableBitmap reuse ─────────────────────────────────────────────
         private WriteableBitmap? _previewBitmap;
@@ -73,6 +76,7 @@ namespace SaftApp
         private int                 _faceFrameSkip;
         private const int           FaceDetectEveryNFrames = 10;
         private bool _enableFaceDetection = true; // Default to true
+        private bool _enableSerial = true;
 
         public MainWindow()
         {
@@ -123,8 +127,9 @@ namespace SaftApp
                 if (root.TryGetProperty("PreviewHeight",        out var v8)) _previewHeight        = v8.GetInt32();
                 if (root.TryGetProperty("DeveloperMode",        out var v9)) _developerMode        = v9.GetBoolean();
                 if (root.TryGetProperty("EnableFaceDetection",  out var v10)) _enableFaceDetection = v10.GetBoolean();
+                if (root.TryGetProperty("EnableSerial",         out var v11)) _enableSerial        = v11.GetBoolean();
 
-                if (root.TryGetProperty("Serial", out var s))
+                if (_enableSerial && root.TryGetProperty("Serial", out var s))
                 {
                     try
                     {
@@ -135,6 +140,10 @@ namespace SaftApp
                     }
                     catch (Exception ex) { Debug.WriteLine(ex); _serialOptions = null; }
                 }
+                else
+                {
+                    _serialOptions = null;
+                }
             }
             catch (Exception ex) { Debug.WriteLine(ex); }
         }
@@ -143,9 +152,130 @@ namespace SaftApp
         {
             ApplyDeveloperMode();
             _faceCascade = TryLoadFaceCascade();
+            PrepareVideo();
             await StartCameraAsync(0);
             EnterState(AppState.Idle);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                PrepareLatestPicture();
+                imgPreviewButton.Source = _lastCapturedImage;
+            }, DispatcherPriority.Loaded);
             await InitializeSerialAsync();
+            LoadBrandingFromIcon();
+        }
+
+        private void PrepareLatestPicture()
+        {
+            try
+            {
+                var searchDirs = GetPictureSearchDirectories().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                Debug.WriteLine($"[Picture] Search directories: {string.Join(" | ", searchDirs)}");
+
+                var newest = searchDirs
+                    .Where(d => { try { return Directory.Exists(d); } catch { return false; } })
+                    .SelectMany(dir =>
+                    {
+                        try { return Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly); }
+                        catch { return Enumerable.Empty<string>(); }
+                    })
+                    .Where(path =>
+                    {
+                        var ext = Path.GetExtension(path);
+                        return ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
+                            || ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+                            || ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+                            || ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase);
+                    })
+                    .Select(path => { try { return new FileInfo(path); } catch { return null; } })
+                    .Where(fi => fi is not null && fi.Exists && fi.Length > 0)
+                    .OrderByDescending(fi => fi!.LastWriteTimeUtc)
+                    .ThenByDescending(fi => fi!.CreationTimeUtc)
+                    .FirstOrDefault();
+
+                if (newest is null)
+                {
+                    Debug.WriteLine("[Picture] Prepare skipped: no saved pictures found in any search directory.");
+                    return;
+                }
+
+                Debug.WriteLine($"[Picture] Loading: {newest.FullName} ({newest.Length} bytes)");
+
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption  = BitmapCacheOption.OnLoad;
+                bmp.UriSource    = new Uri(newest.FullName);
+                bmp.EndInit();
+                bmp.Freeze();
+
+                _lastCapturedImage = bmp;
+                imgPreviewButton.Source = bmp;
+
+                Debug.WriteLine($"[Picture] Prepared latest picture: {newest.FullName} ({bmp.PixelWidth}x{bmp.PixelHeight})");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Picture] Prepare failed: {ex}");
+            }
+        }
+
+        private IEnumerable<string> GetPictureSearchDirectories()
+        {
+            var resolved = ResolvePictureDirectory();
+            if (!string.IsNullOrWhiteSpace(resolved))
+                yield return resolved;
+
+            yield return Path.Combine(AppContext.BaseDirectory, "Output");
+
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            for (int i = 0; i < 6 && dir.Parent is not null; i++)
+            {
+                dir = dir.Parent;
+                yield return Path.Combine(dir.FullName, "Output");
+            }
+        }
+
+        private string ResolvePictureDirectory()
+        {
+            var dir = _workDir;
+            if (string.IsNullOrWhiteSpace(dir))
+                dir = Environment.GetEnvironmentVariable("PhotoBoothWorking");
+            if (string.IsNullOrWhiteSpace(dir))
+                dir = Path.Combine(AppContext.BaseDirectory, "Output");
+            return dir;
+        }
+
+        private void PrepareVideo()
+        {
+            try
+            {
+                string? resolved = ResolveProjectRelativePath("media\\video.mp4");
+                if (string.IsNullOrWhiteSpace(resolved) || !File.Exists(resolved))
+                {
+                    _videoUri = null;
+                    _videoPrepared = false;
+                    Debug.WriteLine("[Video] Preload skipped: file not found.");
+                    return;
+                }
+
+                _videoUri = new Uri(resolved);
+                videoPlayer.LoadedBehavior   = MediaState.Manual;
+                videoPlayer.UnloadedBehavior = MediaState.Stop;
+                videoPlayer.Source           = _videoUri;
+                videoPlayer.Position         = TimeSpan.Zero;
+                videoPlayer.Volume           = 0;
+                videoPlayer.Play();
+                videoPlayer.Pause();
+                videoPlayer.Position = TimeSpan.Zero;
+                videoPlayer.Volume   = 1;
+                _videoPrepared = true;
+                Debug.WriteLine($"[Video] Prepared: {resolved}");
+            }
+            catch (Exception ex)
+            {
+                _videoPrepared = false;
+                _videoUri = null;
+                Debug.WriteLine($"[Video] Prepare failed: {ex}");
+            }
         }
 
         private void ApplyDeveloperMode()
@@ -156,26 +286,32 @@ namespace SaftApp
 
         private void TransitionTo(AppState next)
         {
+            Debug.WriteLine($"[Transition] Request {_state} -> {next} | transitioning={_isTransitioning} | pending={_pendingState?.ToString() ?? "null"}");
+
             if (_isTransitioning)
             {
                 _pendingState = next;
+                Debug.WriteLine($"[Transition] Queued {_pendingState}");
                 return;
             }
 
             if (_state == next && next != AppState.Capture)
+            {
+                Debug.WriteLine($"[Transition] Ignored duplicate state {_state}");
                 return;
+            }
 
             // Exclusions requested: no shared fade for Idle->Countdown, Capture->Preview, or Preview->Idle
             if ((_state == AppState.Idle && next == AppState.Countdown)
                 || (_state == AppState.Capture && next == AppState.Preview)
                 || (_state == AppState.Preview && next == AppState.Idle))
             {
-                Debug.WriteLine($"[State] {_state} → {next} (direct)");
+                Debug.WriteLine($"[Transition] Direct {_state} -> {next}");
                 EnterState(next);
                 return;
             }
 
-            Debug.WriteLine($"[State] {_state} → {next}");
+            Debug.WriteLine($"[Transition] Animated {_state} -> {next}");
             _pendingState = next;
             _isTransitioning = true;
 
@@ -185,6 +321,7 @@ namespace SaftApp
             rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
             rectTransition.Opacity = 0;
 
+            Debug.WriteLine($"[Transition] Starting TransitionIn for {_state} -> {next}");
             PlayAnimation(
                 "TransitionIn",
                 duration: TimeSpan.FromSeconds(_transitionInSeconds),
@@ -194,6 +331,8 @@ namespace SaftApp
 
         private void OnGlobalTransitionInCompleted(object? sender, EventArgs e)
         {
+            Debug.WriteLine($"[Transition] TransitionIn completed | pending={_pendingState?.ToString() ?? "null"}");
+
             if (_pendingState is null)
             {
                 EndTransition();
@@ -202,8 +341,10 @@ namespace SaftApp
 
             var next = _pendingState.Value;
             _pendingState = null;
+            Debug.WriteLine($"[Transition] Entering state {next}");
             EnterState(next);
 
+            Debug.WriteLine($"[Transition] Starting TransitionOut for {next}");
             PlayAnimation(
                 "TransitionOut",
                 duration: TimeSpan.FromSeconds(_transitionOutSeconds),
@@ -213,10 +354,12 @@ namespace SaftApp
 
         private void OnGlobalTransitionOutCompleted(object? sender, EventArgs e)
         {
+            Debug.WriteLine($"[Transition] TransitionOut completed | pending={_pendingState?.ToString() ?? "null"}");
             EndTransition();
 
             if (_pendingState is AppState queued)
             {
+                Debug.WriteLine($"[Transition] Processing queued state {queued}");
                 _pendingState = null;
                 TransitionTo(queued);
             }
@@ -224,6 +367,7 @@ namespace SaftApp
 
         private void EndTransition()
         {
+            Debug.WriteLine("[Transition] EndTransition");
             rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
             rectTransition.Opacity    = 0;
             rectTransition.Visibility = Visibility.Collapsed;
@@ -233,6 +377,7 @@ namespace SaftApp
 
         private void EnterState(AppState next)
         {
+            Debug.WriteLine($"[State] Enter {next}");
             _state = next;
 
             switch (_state)
@@ -258,6 +403,7 @@ namespace SaftApp
 
         private void EnterIdleState()
         {
+            Debug.WriteLine("[State:Idle] EnterIdleState");
             HideAllContent();
             SetCountdownText(string.Empty, 0);
 
@@ -268,11 +414,12 @@ namespace SaftApp
             if (!_previewLoop.IsEnabled)
                 _previewLoop.Start();
 
-            Debug.WriteLine($"[Idle] camera={(_capture is null ? "null" : "ok")}");
+            Debug.WriteLine($"[State:Idle] camera={(_capture is null ? "null" : "ok")}, previewLoop={_previewLoop.IsEnabled}");
         }
 
         private void EnterCountdownState()
         {
+            Debug.WriteLine("[State:Countdown] EnterCountdownState");
             captureGrid.Visibility   = Visibility.Collapsed;
             videoGrid.Visibility     = Visibility.Collapsed;
             countdownGrid.Visibility = Visibility.Visible;
@@ -284,6 +431,7 @@ namespace SaftApp
                 _previewLoop.Start();
 
             _countdownCounter = _countdownSeconds;
+            Debug.WriteLine($"[State:Countdown] Starting countdown at {_countdownCounter}");
             ShowCountdownTick();
             _countdownTimer.Start();
         }
@@ -293,6 +441,7 @@ namespace SaftApp
             if (_state != AppState.Countdown) return;
 
             _countdownCounter--;
+            Debug.WriteLine($"[State:Countdown] Tick -> {_countdownCounter}");
 
             if (_countdownCounter > 0)
             {
@@ -301,17 +450,20 @@ namespace SaftApp
             }
 
             _countdownTimer.Stop();
+            Debug.WriteLine("[State:Countdown] Complete -> Capture");
             TransitionTo(AppState.Capture);
         }
 
         private void ShowCountdownTick()
         {
+            Debug.WriteLine($"[State:Countdown] ShowCountdownTick {_countdownCounter}");
             SetCountdownText(_countdownCounter.ToString(), 1);
             PlayAnimation("CountdownNumberInOut");
         }
 
         private void EnterCaptureState()
         {
+            Debug.WriteLine("[State:Capture] EnterCaptureState");
             HideAllContent();
             SetCountdownText(string.Empty, 0);
 
@@ -320,7 +472,7 @@ namespace SaftApp
 
             if (src is null || src.Empty())
             {
-                Debug.WriteLine("[Capture] No frame — returning to Idle");
+                Debug.WriteLine("[State:Capture] No frame -> Idle");
                 SetCountdownText("No frame", 1);
                 src?.Dispose();
                 TransitionTo(AppState.Idle);
@@ -340,13 +492,17 @@ namespace SaftApp
                     Dispatcher.Invoke(() =>
                     {
                         if (_state != AppState.Capture) return;
-                        imgCapture.Source      = bitmap;
-                        captureGrid.Visibility = Visibility.Visible;
+                        _lastCapturedImage      = bitmap;
+                        imgCapture.Source       = bitmap;
+                        imgPreviewButton.Source = bitmap;
+                        captureGrid.Visibility  = Visibility.Visible;
+                        Debug.WriteLine("[State:Capture] Capture image assigned to imgCapture");
                     });
                 }
-                catch (Exception ex) { Debug.WriteLine($"[Capture] {ex}"); src.Dispose(); }
+                catch (Exception ex) { Debug.WriteLine($"[State:Capture] {ex}"); src.Dispose(); }
             });
 
+            Debug.WriteLine("[State:Capture] Queue Preview transition");
             _ = Dispatcher.BeginInvoke(new Action(() => TransitionTo(AppState.Preview)), DispatcherPriority.Background);
         }
 
@@ -372,22 +528,30 @@ namespace SaftApp
 
         private void EnterPreviewState()
         {
+            Debug.WriteLine("[State:Preview] EnterPreviewState");
             videoGrid.Visibility     = Visibility.Collapsed;
             countdownGrid.Visibility = Visibility.Collapsed;
             previewGrid.Visibility   = Visibility.Collapsed;
             FaceLayer.Children.Clear();
 
+            if (imgCapture.Source is null && _lastCapturedImage is not null)
+                imgCapture.Source = _lastCapturedImage;
+
             captureGrid.Visibility = imgCapture.Source is not null
                 ? Visibility.Visible
                 : Visibility.Collapsed;
 
+            Debug.WriteLine($"[State:Preview] captureVisible={captureGrid.Visibility} hasImage={imgCapture.Source is not null}");
+
             _previewTimer       = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_previewSeconds) };
             _previewTimer.Tick += OnPreviewTimerTick;
             _previewTimer.Start();
+            Debug.WriteLine($"[State:Preview] Preview timer started for {_previewSeconds}s");
         }
 
         private void OnPreviewTimerTick(object? sender, EventArgs e)
         {
+            Debug.WriteLine("[State:Preview] Timer elapsed -> Idle");
             _previewTimer?.Stop();
             _previewTimer = null;
             if (_state != AppState.Preview) return;
@@ -396,6 +560,7 @@ namespace SaftApp
 
         private void EnterVideoState()
         {
+            Debug.WriteLine("[State:Video] EnterVideoState");
             HideAllContent();
             videoGrid.Visibility = Visibility.Visible;
             PlayLocalVideo("media\\video.mp4");
@@ -403,6 +568,7 @@ namespace SaftApp
 
         private void VideoPlayer_MediaEnded(object sender, RoutedEventArgs e)
         {
+            Debug.WriteLine("[State:Video] MediaEnded -> Idle");
             _videoTimer?.Stop();
             _videoTimer = null;
             TransitionTo(AppState.Idle);
@@ -413,6 +579,7 @@ namespace SaftApp
         {
             try
             {
+                Debug.WriteLine($"[Animation] Begin {resourceKey} duration={(duration.HasValue ? duration.Value.ToString() : "resource-default")} target={(target as FrameworkElement)?.Name ?? target?.GetType().Name ?? "window"}");
                 var sb = ((Storyboard)FindResource(resourceKey)).Clone();
 
                 if (target is not null)
@@ -428,6 +595,7 @@ namespace SaftApp
                 if (onCompleted is not null)
                     sb.Completed += onCompleted;
 
+                sb.Completed += (_, __) => Debug.WriteLine($"[Animation] Completed {resourceKey}");
                 sb.Begin(this, handoffBehavior: HandoffBehavior.SnapshotAndReplace, isControllable: true);
             }
             catch (Exception ex) { Debug.WriteLine($"[Animation] {resourceKey}: {ex}"); }
@@ -435,6 +603,7 @@ namespace SaftApp
 
         private void StopAllStateTimers()
         {
+            Debug.WriteLine("[Timers] StopAllStateTimers");
             _countdownTimer.Stop();
             _previewTimer?.Stop();
             _previewTimer = null;
@@ -732,13 +901,34 @@ namespace SaftApp
             TransitionTo(AppState.Countdown);
         }
 
+        private void BtnPreview_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isTransitioning) return;
+            if (_lastCapturedImage is null) return;
+            if (_state == AppState.Video) return;
+
+            imgCapture.Source = _lastCapturedImage;
+
+            if (_state == AppState.Idle)
+            {
+                EnterState(AppState.Preview);
+                return;
+            }
+
+            TransitionTo(AppState.Preview);
+        }
+
         private void BtnTrigger1_Click(object sender, RoutedEventArgs e)
         {
             if (_state == AppState.Video || _isTransitioning) return;
             TransitionTo(AppState.Video);
         }
 
-        private void BtnTrigger2_Click(object sender, RoutedEventArgs e) { }
+        private void BtnTrigger2_Click(object sender, RoutedEventArgs e)
+        {
+            if (_state != AppState.Idle || _isTransitioning) return;
+            TransitionTo(AppState.Countdown);
+        }
         private void BtnTrigger3_Click(object sender, RoutedEventArgs e) { }
         private void BtnTrigger4_Click(object sender, RoutedEventArgs e) { }
         private void BtnTrigger5_Click(object sender, RoutedEventArgs e) { }
@@ -858,18 +1048,25 @@ namespace SaftApp
         {
             try
             {
+                if (!_videoPrepared)
+                    PrepareVideo();
+
                 string? resolved = ResolveProjectRelativePath(relativePath);
-                if (string.IsNullOrWhiteSpace(resolved) || !File.Exists(resolved))
+                if (_videoUri is null && (!string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved)))
+                    _videoUri = new Uri(resolved);
+
+                if (_videoUri is null)
                 {
                     SetCountdownText("Video not found", 1);
                     TransitionTo(AppState.Idle);
                     return;
                 }
 
-                videoPlayer.Source           = new Uri(resolved);
                 videoPlayer.LoadedBehavior   = MediaState.Manual;
                 videoPlayer.UnloadedBehavior = MediaState.Stop;
-                videoPlayer.Position         = TimeSpan.Zero;
+                if (videoPlayer.Source is null || videoPlayer.Source != _videoUri)
+                    videoPlayer.Source = _videoUri;
+                videoPlayer.Position = TimeSpan.Zero;
                 videoPlayer.Play();
 
                 if (_videoDurationSeconds > 0)
@@ -925,6 +1122,104 @@ namespace SaftApp
             _faceCascade?.Dispose();
             _faceCascade = null;
             base.OnClosed(e);
+        }
+
+        private void LoadBrandingFromIcon()
+        {
+            try
+            {
+                string? iconPath = ResolveProjectRelativePath("media\\icon.png")
+                                   ?? Path.Combine(AppContext.BaseDirectory, "media", "icon.png");
+                if (string.IsNullOrWhiteSpace(iconPath) || !File.Exists(iconPath))
+                {
+                    Debug.WriteLine("[Branding] icon.png not found");
+                    return;
+                }
+
+                // Use System.Drawing to sample the image and compute an average primary color
+                using var bmp = new System.Drawing.Bitmap(iconPath);
+                long rSum = 0, gSum = 0, bSum = 0, count = 0;
+                int stepX = Math.Max(1, bmp.Width / 64);
+                int stepY = Math.Max(1, bmp.Height / 64);
+                for (int x = 0; x < bmp.Width; x += stepX)
+                {
+                    for (int y = 0; y < bmp.Height; y += stepY)
+                    {
+                        var p = bmp.GetPixel(x, y);
+                        if (p.A < 64) continue;
+                        rSum += p.R; gSum += p.G; bSum += p.B; count++;
+                    }
+                }
+
+                if (count == 0) return;
+
+                byte r = (byte)(rSum / count);
+                byte g = (byte)(gSum / count);
+                byte b = (byte)(bSum / count);
+
+                var primaryColor = System.Windows.Media.Color.FromRgb(r, g, b);
+
+                // Choose accent foreground (white/black) based on luminance
+                double luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+                var accentFore = luminance > 0.6 ? System.Windows.Media.Colors.Black : System.Windows.Media.Colors.White;
+
+                // Slightly desaturate/adjust primary for UI surfaces
+                var adjusted = System.Windows.Media.Color.FromScRgb(1f,
+                    Math.Min(1f, (float)(r / 255.0 * 0.95)),
+                    Math.Min(1f, (float)(g / 255.0 * 0.95)),
+                    Math.Min(1f, (float)(b / 255.0 * 0.95)));
+
+                // Apply to resources in this window so DynamicResource picks it up
+                this.Resources["PrimaryBrush"] = new SolidColorBrush(primaryColor);
+                this.Resources["AccentBrush"]  = new SolidColorBrush(adjusted);
+                this.Resources["AccentForeground"] = new SolidColorBrush(accentFore);
+
+                // Set window icon from icon.ico if available, else fallback to icon.png
+                try
+                {
+                    string? icoPath = ResolveProjectRelativePath("media\\icon.ico")
+                                      ?? ResolveProjectRelativePath("media\\icon.png")
+                                      ?? Path.Combine(AppContext.BaseDirectory, "media", "icon.ico");
+
+                    if (!string.IsNullOrWhiteSpace(icoPath) && File.Exists(icoPath))
+                    {
+                        try
+                        {
+                            var icoUri = new Uri(icoPath, UriKind.Absolute);
+                            this.Icon = BitmapFrame.Create(icoUri);
+                            Debug.WriteLine($"[Branding] Window.Icon set from {icoPath}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"[Branding] Failed to set Window.Icon from {icoPath}: {ex.Message}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[Branding] Window icon assignment failed: {ex}");
+                }
+
+                // Also set the preview button to the icon if no last captured image
+                if (_lastCapturedImage is null)
+                {
+                    var bi = new BitmapImage();
+                    bi.BeginInit();
+                    bi.CacheOption = BitmapCacheOption.OnLoad;
+                    bi.UriSource = new Uri(iconPath);
+                    bi.EndInit();
+                    bi.Freeze();
+                    _lastCapturedImage = bi;
+                    imgPreviewButton.Source = bi;
+                    Debug.WriteLine($"[Branding] Set preview button image to icon.png");
+                }
+
+                // Note: Taskbar uses Window.Icon and the application embedded icon. Ensure ApplicationIcon is set in the project file.
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Branding] failed: {ex}");
+            }
         }
     }
 }

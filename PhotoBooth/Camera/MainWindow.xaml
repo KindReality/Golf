@@ -20,9 +20,13 @@
         <CubicEase x:Key="EaseOut" EasingMode="EaseOut"/>
         <CubicEase x:Key="EaseIn"  EasingMode="EaseIn"/>
 
+        <SolidColorBrush x:Key="PrimaryBrush" Color="#FF8B0000"/>
+        <SolidColorBrush x:Key="AccentBrush"  Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="AccentForeground" Color="#FFFFFFFF"/>
+
         <Style x:Key="DevButtonStyle" TargetType="Button">
-            <Setter Property="Background"  Value="DarkRed"/>
-            <Setter Property="Foreground"  Value="White"/>
+            <Setter Property="Background"  Value="{DynamicResource PrimaryBrush}"/>
+            <Setter Property="Foreground"  Value="{DynamicResource AccentForeground}"/>
             <Setter Property="FontSize"    Value="11"/>
             <Setter Property="FontWeight"  Value="Bold"/>
             <Setter Property="FontFamily"  Value="Verdana"/>
@@ -98,8 +102,12 @@
     </Window.Resources>
 
     <Grid SnapsToDevicePixels="True">
+            <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
 
-        <Grid x:Name="previewGrid">
+        <Grid x:Name="previewGrid" Grid.Column="1">
             <Image x:Name="imgPreview"
                    Stretch="Uniform"
                    IsHitTestVisible="False"
@@ -107,10 +115,12 @@
         </Grid>
 
         <Canvas x:Name="FaceLayer"
+                Grid.Column="1"
                 Background="Transparent"
                 IsHitTestVisible="False"/>
 
         <Grid x:Name="videoGrid"
+              Grid.Column="1"
               Visibility="Collapsed">
             <MediaElement x:Name="videoPlayer"
                           LoadedBehavior="Manual"
@@ -121,6 +131,7 @@
         </Grid>
 
         <Grid x:Name="captureGrid"
+              Grid.Column="1"
               Visibility="Collapsed">
             <Image x:Name="imgCapture"
                    Stretch="Uniform"
@@ -129,6 +140,7 @@
         </Grid>
 
         <Grid x:Name="countdownGrid"
+              Grid.Column="1"
               Visibility="Collapsed">
             <TextBlock x:Name="tbCountdown"
                        HorizontalAlignment="Center"
@@ -151,6 +163,7 @@
         </Grid>
 
         <Grid x:Name="transitionGrid"
+              Grid.ColumnSpan="2"
               Visibility="Collapsed">
             <Rectangle x:Name="rectTransition"
                        Fill="White"
@@ -160,24 +173,40 @@
         </Grid>
 
         <Grid x:Name="overlayGrid"
+              Grid.ColumnSpan="2"
               Visibility="Collapsed">
-            <Button x:Name="btnCapture"
-                    HorizontalAlignment="Left"
-                    VerticalAlignment="Center"
-                    Height="300"
-                    Width="80"
-                    Background="DarkRed"
-                    Click="BtnCapture_Click">
-                <TextBlock Text="Selfie"
-                           Foreground="White"
-                           FontSize="16"
-                           FontWeight="Bold"
-                           FontFamily="Verdana">
-                    <TextBlock.LayoutTransform>
-                        <RotateTransform Angle="90"/>
-                    </TextBlock.LayoutTransform>
-                </TextBlock>
-            </Button>
+            <StackPanel Grid.Column="0"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Center"
+                        Orientation="Vertical"
+                        Margin="8,0,8,0">
+                <Button x:Name="btnCapture"
+                        Width="80"
+                        Height="300"
+                        Background="DarkRed"
+                        Margin="0,0,0,8"
+                        Click="BtnCapture_Click">
+                    <TextBlock Text="📷"
+                               Foreground="White"
+                               FontSize="36"
+                               FontWeight="Bold"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"/>
+                </Button>
+
+                <Button x:Name="btnPreview"
+                        Width="80"
+                        MinHeight="60"
+                        Background="DarkRed"
+                        Padding="4"
+                        HorizontalContentAlignment="Stretch"
+                        VerticalContentAlignment="Stretch"
+                        Click="BtnPreview_Click">
+                    <Image x:Name="imgPreviewButton"
+                           Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                </Button>
+            </StackPanel>
 
             <StackPanel x:Name="devTriggerPanel"
                         HorizontalAlignment="Right"
