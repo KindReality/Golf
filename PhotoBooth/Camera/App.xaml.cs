@@ -1,8 +1,6 @@
-﻿using System.Configuration;
-using System.Data;
-using System.Windows;
+﻿using System.Windows;
 
-namespace SaftCameraApp
+namespace SaftApp
 {
     /// <summary>
     /// Interaction logic for App.xaml
@@ -10,5 +8,4 @@ namespace SaftCameraApp
     public partial class App : Application
     {
     }
-
 }

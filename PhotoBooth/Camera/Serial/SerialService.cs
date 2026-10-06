@@ -120,7 +120,7 @@ namespace SaftApp.Serial
             var port = _port;
             var closed = port is not null && !port.IsOpen;
             RaiseStatus(SerialStatusKind.Error,
-                $"Port error: {e.EventType}" + (closed ? $" — port {_options.PortName} appears closed" : string.Empty));
+                $"Port error: {e.EventType}" + (closed ? $" - port {_options.PortName} appears closed" : string.Empty));
             StartReconnectLoop();
         }
 
