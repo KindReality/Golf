@@ -1,3 +1,4 @@
+using PhotoBooth.Diagnostics;
 using System;
 using System.IO.Ports;
 using System.Text;
@@ -20,7 +21,7 @@ namespace SaftApp.Serial
         public SerialService(SerialOptions options)
         {
             _options = options ?? throw new ArgumentNullException(nameof(options));
-            Debug.WriteLine($"SerialService: constructed (Port={_options.PortName}, Baud={_options.BaudRate}, AutoOpen={_options.AutoOpen})");
+            Telemetry.Legacy($"SerialService: constructed (Port={_options.PortName}, Baud={_options.BaudRate}, AutoOpen={_options.AutoOpen})");
         }
 
         public bool IsOpen => _port?.IsOpen ?? false;
@@ -31,7 +32,7 @@ namespace SaftApp.Serial
             bool result = await TryOpenAsync(isReconnect: false);
             if (!result)
             {
-                Debug.WriteLine("SerialService: Initial connect failed, starting reconnect loop.");
+                Telemetry.Legacy("SerialService: Initial connect failed, starting reconnect loop.");
                 StartReconnectLoop();
             }
             return result;
@@ -40,7 +41,7 @@ namespace SaftApp.Serial
         private void RaiseStatus(SerialStatusKind kind, string message, int? attempt = null)
         {
             var args = new SerialStatusEventArgs(kind, message, attempt);
-            Debug.WriteLine($"SerialService: {args}");
+            Telemetry.Legacy($"SerialService: {args}");
             StatusChanged?.Invoke(this, args);
         }
 
@@ -48,7 +49,7 @@ namespace SaftApp.Serial
         {
             if (IsOpen)
             {
-                Debug.WriteLine("SerialService: OpenAsync called but already open.");
+                Telemetry.Legacy("SerialService: OpenAsync called but already open.");
                 return true;
             }
             if (string.IsNullOrWhiteSpace(_options.PortName))
@@ -95,7 +96,7 @@ namespace SaftApp.Serial
         {
             try
             {
-                Debug.WriteLine($"SerialService: PinChanged event: {e.EventType}");
+                Telemetry.Legacy($"SerialService: PinChanged event: {e.EventType}");
                 var port = _port;
                 if (port is null) return;
 
@@ -111,7 +112,7 @@ namespace SaftApp.Serial
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"SerialService: PinChanged handler exception: {ex.Message}");
+                Telemetry.Legacy($"SerialService: PinChanged handler exception: {ex.Message}");
             }
         }
 
@@ -162,7 +163,7 @@ namespace SaftApp.Serial
 
         public void Close()
         {
-            Debug.WriteLine("SerialService: Close called, shutting down port and any reconnect attempts.");
+            Telemetry.Legacy("SerialService: Close called, shutting down port and any reconnect attempts.");
             try { _reconnectCts?.Cancel(); } catch { }
             _reconnectCts = null;
 
@@ -173,8 +174,8 @@ namespace SaftApp.Serial
                     try { _port.DataReceived -= Port_DataReceived; } catch { }
                     try { _port.ErrorReceived -= Port_ErrorReceived; } catch { }
                     try { _port.PinChanged -= Port_PinChanged; } catch { }
-                    try { _port.Close(); } catch (Exception ex) { Debug.WriteLine($"SerialService: Error closing port: {ex.Message}"); }
-                    try { _port.Dispose(); } catch (Exception ex) { Debug.WriteLine($"SerialService: Error disposing port: {ex.Message}"); }
+                    try { _port.Close(); } catch (Exception ex) { Telemetry.Legacy($"SerialService: Error closing port: {ex.Message}"); }
+                    try { _port.Dispose(); } catch (Exception ex) { Telemetry.Legacy($"SerialService: Error disposing port: {ex.Message}"); }
 
                     RaiseStatus(SerialStatusKind.Disconnected, $"Port {_options.PortName} closed.");
                 }
@@ -190,11 +191,11 @@ namespace SaftApp.Serial
             // Only start reconnect loop if we're not already doing one
             if (_reconnectTask is not null && !_reconnectTask.IsCompleted)
             {
-                Debug.WriteLine("SerialService: Reconnect loop already running.");
+                Telemetry.Legacy("SerialService: Reconnect loop already running.");
                 return;
             }
 
-            Debug.WriteLine("SerialService: Starting reconnect loop.");
+            Telemetry.Legacy("SerialService: Starting reconnect loop.");
             _reconnectCts = new CancellationTokenSource();
             _reconnectTask = Task.Run(() => ReconnectLoopAsync(_reconnectCts.Token));
         }
@@ -230,21 +231,21 @@ namespace SaftApp.Serial
                 }
                 catch (OperationCanceledException)
                 {
-                    Debug.WriteLine("SerialService: Reconnect loop canceled.");
+                    Telemetry.Legacy("SerialService: Reconnect loop canceled.");
                     break;
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"SerialService: Reconnect loop exception: {ex.Message}");
+                    Telemetry.Legacy($"SerialService: Reconnect loop exception: {ex.Message}");
                 }
             }
 
-            Debug.WriteLine("SerialService: Reconnect loop exiting.");
+            Telemetry.Legacy("SerialService: Reconnect loop exiting.");
         }
 
         public void Dispose()
         {
-            Debug.WriteLine("SerialService: Dispose called.");
+            Telemetry.Legacy("SerialService: Dispose called.");
             Close();
         }
     }

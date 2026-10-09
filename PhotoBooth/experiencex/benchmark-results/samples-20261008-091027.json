@@ -1,0 +1,151 @@
+{
+  "Machine": "ALPHA",
+  "LogicalProcessors": 32,
+  "Gpu": [
+    {
+      "Name": "Meta Virtual Monitor",
+      "DriverVersion": "11.1.45.729"
+    },
+    {
+      "Name": "NVIDIA GeForce RTX 4070 Ti",
+      "DriverVersion": "32.0.15.9186"
+    }
+  ],
+  "Results": [
+    {
+      "Application": "ExperienceX",
+      "Label": "dx11-final",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\dx11-final-benchmark-Plain-17b4669971d746ea99f5ced3a1e9e84f-presents.csv",
+      "PresentEventCount": 594,
+      "PresentationStatus": "Captured present events; these are not decoded video frames",
+      "PresentationTiming": {
+        "P95DisplayGapMilliseconds": 16.9298,
+        "MaxDisplayGapMilliseconds": 33.1782,
+        "DisplayGapsOver50Milliseconds": 0,
+        "UndisplayedPresents": 0,
+        "Measurement": "PresentMon display events; separate from decoded video frame drops"
+      },
+      "ProfilerExitCode": 0,
+      "Case": "Plain",
+      "RequestId": "benchmark-Plain-17b4669971d746ea99f5ced3a1e9e84f",
+      "SampleSeconds": 10.6987828,
+      "CpuPercentOfMachine": 1.71602464908438,
+      "WorkingSetMiB": 217.2734375,
+      "GpuEnginePercent": {
+        "VideoDecode": 8.282615712941954,
+        "VideoProcessing": null,
+        "Copy": 0.020061278436826674,
+        "3D": 1.1222229529029688
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": null,
+      "RenderTiming": {
+        "MonitorName": "\\\\.\\DISPLAY1",
+        "TransferredVideoFrames": 603,
+        "MediaEngineFramesRendered": 602,
+        "MediaEngineFramesDropped": 0,
+        "TransferCalls": 603,
+        "SubmittedPresents": 1224,
+        "MaxVideoTimestampGapMilliseconds": 33.3334,
+        "MaxPresentSubmissionGapMilliseconds": 59.8736,
+        "FrameStatisticsAvailable": true,
+        "PresentCount": 1559,
+        "PresentRefreshCount": 15307584,
+        "SyncRefreshCount": 15307584,
+        "MediaPositionSeconds": 20.1311033,
+        "SurfaceOpacity": 0
+      },
+      "Errors": []
+    },
+    {
+      "Application": "ExperienceX",
+      "Label": "dx11-final",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\dx11-final-benchmark-BlackKey-bd9dfeafb487477cbafa688f1b24da38-presents.csv",
+      "PresentEventCount": 594,
+      "PresentationStatus": "Captured present events; these are not decoded video frames",
+      "PresentationTiming": {
+        "P95DisplayGapMilliseconds": 16.9289,
+        "MaxDisplayGapMilliseconds": 33.4035,
+        "DisplayGapsOver50Milliseconds": 0,
+        "UndisplayedPresents": 0,
+        "Measurement": "PresentMon display events; separate from decoded video frame drops"
+      },
+      "ProfilerExitCode": 0,
+      "Case": "BlackKey",
+      "RequestId": "benchmark-BlackKey-bd9dfeafb487477cbafa688f1b24da38",
+      "SampleSeconds": 10.103707,
+      "CpuPercentOfMachine": 2.020066125235025,
+      "WorkingSetMiB": 221.34375,
+      "GpuEnginePercent": {
+        "VideoDecode": 9.061937357227873,
+        "VideoProcessing": null,
+        "Copy": 0.02058112013660183,
+        "3D": 0.8522897492383927
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": null,
+      "RenderTiming": {
+        "MonitorName": "\\\\.\\DISPLAY1",
+        "TransferredVideoFrames": 603,
+        "MediaEngineFramesRendered": 602,
+        "MediaEngineFramesDropped": 0,
+        "TransferCalls": 603,
+        "SubmittedPresents": 1200,
+        "MaxVideoTimestampGapMilliseconds": 33.3334,
+        "MaxPresentSubmissionGapMilliseconds": 58.6812,
+        "FrameStatisticsAvailable": true,
+        "PresentCount": 2759,
+        "PresentRefreshCount": 15309034,
+        "SyncRefreshCount": 15309034,
+        "MediaPositionSeconds": 20.1409974,
+        "SurfaceOpacity": 0
+      },
+      "Errors": []
+    },
+    {
+      "Application": "ExperienceX",
+      "Label": "dx11-final",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\dx11-final-benchmark-BlackKeyAndKeystone-d15c18308265413087e69e33e07ebb8d-presents.csv",
+      "PresentEventCount": 595,
+      "PresentationStatus": "Captured present events; these are not decoded video frames",
+      "PresentationTiming": {
+        "P95DisplayGapMilliseconds": 16.9686,
+        "MaxDisplayGapMilliseconds": 34.0126,
+        "DisplayGapsOver50Milliseconds": 0,
+        "UndisplayedPresents": 4,
+        "Measurement": "PresentMon display events; separate from decoded video frame drops"
+      },
+      "ProfilerExitCode": 0,
+      "Case": "BlackKeyAndKeystone",
+      "RequestId": "benchmark-BlackKeyAndKeystone-d15c18308265413087e69e33e07ebb8d",
+      "SampleSeconds": 10.1033152,
+      "CpuPercentOfMachine": 1.870325135951415,
+      "WorkingSetMiB": 225.1328125,
+      "GpuEnginePercent": {
+        "VideoDecode": 11.942977180403897,
+        "VideoProcessing": null,
+        "Copy": 0.03681203401301574,
+        "3D": 1.0520184962020007
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": null,
+      "RenderTiming": {
+        "MonitorName": "\\\\.\\DISPLAY1",
+        "TransferredVideoFrames": 603,
+        "MediaEngineFramesRendered": 602,
+        "MediaEngineFramesDropped": 0,
+        "TransferCalls": 603,
+        "SubmittedPresents": 1207,
+        "MaxVideoTimestampGapMilliseconds": 33.3334,
+        "MaxPresentSubmissionGapMilliseconds": 40.8188,
+        "FrameStatisticsAvailable": true,
+        "PresentCount": 3966,
+        "PresentRefreshCount": 15310543,
+        "SyncRefreshCount": 15310543,
+        "MediaPositionSeconds": 20.1303265,
+        "SurfaceOpacity": 0
+      },
+      "Errors": []
+    }
+  ]
+}

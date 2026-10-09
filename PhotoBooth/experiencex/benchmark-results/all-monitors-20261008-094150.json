@@ -1,0 +1,368 @@
+{
+  "Machine": "ALPHA",
+  "SimultaneousMonitors": [
+    "\\\\.\\DISPLAY1",
+    "\\\\.\\DISPLAY2",
+    "\\\\.\\DISPLAY3"
+  ],
+  "SampleSeconds": 20,
+  "Results": [
+    {
+      "Case": "Plain",
+      "ProcessId": 56308,
+      "Video": "ping.mp4",
+      "CaptureStart": "2026-10-08T14:41:59.2875062+00:00",
+      "CaptureEnd": "2026-10-08T14:42:20.0716238+00:00",
+      "CpuPercentOfMachine": 2.5636934771690685,
+      "WorkingSetMiB": 247.91015625,
+      "GpuEnginePercent": {
+        "3D": 1.0271133913712174,
+        "VideoDecode": 12.286369454029316,
+        "Copy": 0.04571811751200598,
+        "VideoProcessing": null
+      },
+      "GpuCounterError": null,
+      "Monitors": [
+        {
+          "MonitorName": "\\\\.\\DISPLAY1",
+          "RequestId": "all-Plain-47c1dffef3864270b8ad13a142462c14-0",
+          "Confirmed": "2026-10-08T09:41:52.3129511-05:00",
+          "Stopped": "2026-10-08T09:42:24.3669562-05:00",
+          "WarmupDecoderDrops": 2,
+          "Final": {
+            "MonitorName": "\\\\.\\DISPLAY1",
+            "TransferredVideoFrames": 962,
+            "MediaEngineFramesRendered": 961,
+            "MediaEngineFramesDropped": 2,
+            "TransferCalls": 962,
+            "SubmittedPresents": 1911,
+            "MaxVideoTimestampGapMilliseconds": 66.6667,
+            "MaxPresentSubmissionGapMilliseconds": 63.458,
+            "FrameStatisticsAvailable": true,
+            "PresentCount": 3809,
+            "PresentRefreshCount": 15420610,
+            "SyncRefreshCount": 15420610,
+            "MediaPositionSeconds": 32.1487135,
+            "SurfaceOpacity": 0
+          }
+        },
+        {
+          "MonitorName": "\\\\.\\DISPLAY2",
+          "RequestId": "all-Plain-47c1dffef3864270b8ad13a142462c14-1",
+          "Confirmed": "2026-10-08T09:41:52.3448639-05:00",
+          "Stopped": "2026-10-08T09:42:24.4012679-05:00",
+          "WarmupDecoderDrops": 1,
+          "Final": {
+            "MonitorName": "\\\\.\\DISPLAY2",
+            "TransferredVideoFrames": 961,
+            "MediaEngineFramesRendered": 960,
+            "MediaEngineFramesDropped": 2,
+            "TransferCalls": 961,
+            "SubmittedPresents": 1911,
+            "MaxVideoTimestampGapMilliseconds": 66.6667,
+            "MaxPresentSubmissionGapMilliseconds": 64.0854,
+            "FrameStatisticsAvailable": true,
+            "PresentCount": 3809,
+            "PresentRefreshCount": 15420612,
+            "SyncRefreshCount": 15420612,
+            "MediaPositionSeconds": 32.1343361,
+            "SurfaceOpacity": 0
+          }
+        },
+        {
+          "MonitorName": "\\\\.\\DISPLAY3",
+          "RequestId": "all-Plain-47c1dffef3864270b8ad13a142462c14-2",
+          "Confirmed": "2026-10-08T09:41:52.3448469-05:00",
+          "Stopped": "2026-10-08T09:42:24.4012536-05:00",
+          "WarmupDecoderDrops": 2,
+          "Final": {
+            "MonitorName": "\\\\.\\DISPLAY3",
+            "TransferredVideoFrames": 962,
+            "MediaEngineFramesRendered": 961,
+            "MediaEngineFramesDropped": 2,
+            "TransferCalls": 962,
+            "SubmittedPresents": 1913,
+            "MaxVideoTimestampGapMilliseconds": 66.6667,
+            "MaxPresentSubmissionGapMilliseconds": 61.6755,
+            "FrameStatisticsAvailable": true,
+            "PresentCount": 3810,
+            "PresentRefreshCount": 15420612,
+            "SyncRefreshCount": 15420612,
+            "MediaPositionSeconds": 32.1528,
+            "SurfaceOpacity": 0
+          }
+        }
+      ],
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\all-Plain-47c1dffef3864270b8ad13a142462c14-presents.csv",
+      "UnattributedPresentEvents": 52,
+      "SwapChains": [
+        {
+          "SwapChain": "0x216838E1150",
+          "Presents": 1152,
+          "Displayed": 683,
+          "Undisplayed": 469,
+          "P95DisplayGapMs": 66.7252,
+          "MaximumDisplayGapMs": 149.9008,
+          "DisplayGapsOver50Ms": 92
+        },
+        {
+          "SwapChain": "0x216C7EA03E0",
+          "Presents": 1153,
+          "Displayed": 24,
+          "Undisplayed": 1129,
+          "P95DisplayGapMs": 3517.0787,
+          "MaximumDisplayGapMs": 3517.0787,
+          "DisplayGapsOver50Ms": 22
+        },
+        {
+          "SwapChain": "0x216C829D570",
+          "Presents": 1157,
+          "Displayed": 442,
+          "Undisplayed": 715,
+          "P95DisplayGapMs": 116.81330000000001,
+          "MaximumDisplayGapMs": 283.50530000000003,
+          "DisplayGapsOver50Ms": 138
+        }
+      ],
+      "Errors": []
+    },
+    {
+      "Case": "BlackKey",
+      "ProcessId": 56308,
+      "Video": "ping.mp4",
+      "CaptureStart": "2026-10-08T14:42:36.9162744+00:00",
+      "CaptureEnd": "2026-10-08T14:42:57.0611955+00:00",
+      "CpuPercentOfMachine": 2.983820539418665,
+      "WorkingSetMiB": 241.890625,
+      "GpuEnginePercent": {
+        "3D": 0.7707123874907136,
+        "VideoDecode": 11.2296860547764,
+        "Copy": 0.04508672893245967,
+        "VideoProcessing": null
+      },
+      "GpuCounterError": null,
+      "Monitors": [
+        {
+          "MonitorName": "\\\\.\\DISPLAY1",
+          "RequestId": "all-BlackKey-74b271a6a40245b2bebe06028d3cea31-0",
+          "Confirmed": "2026-10-08T09:42:30.3563368-05:00",
+          "Stopped": "2026-10-08T09:43:02.4000593-05:00",
+          "WarmupDecoderDrops": 0,
+          "Final": {
+            "MonitorName": "\\\\.\\DISPLAY1",
+            "TransferredVideoFrames": 963,
+            "MediaEngineFramesRendered": 962,
+            "MediaEngineFramesDropped": 0,
+            "TransferCalls": 963,
+            "SubmittedPresents": 1927,
+            "MaxVideoTimestampGapMilliseconds": 33.3334,
+            "MaxPresentSubmissionGapMilliseconds": 61.5691,
+            "FrameStatisticsAvailable": true,
+            "PresentCount": 5736,
+            "PresentRefreshCount": 15422885,
+            "SyncRefreshCount": 15422885,
+            "MediaPositionSeconds": 32.1294147,
+            "SurfaceOpacity": 0
+          }
+        },
+        {
+          "MonitorName": "\\\\.\\DISPLAY2",
+          "RequestId": "all-BlackKey-74b271a6a40245b2bebe06028d3cea31-1",
+          "Confirmed": "2026-10-08T09:42:30.3517853-05:00",
+          "Stopped": "2026-10-08T09:43:02.4000546-05:00",
+          "WarmupDecoderDrops": 0,
+          "Final": {
+            "MonitorName": "\\\\.\\DISPLAY2",
+            "TransferredVideoFrames": 962,
+            "MediaEngineFramesRendered": 961,
+            "MediaEngineFramesDropped": 1,
+            "TransferCalls": 962,
+            "SubmittedPresents": 1927,
+            "MaxVideoTimestampGapMilliseconds": 66.6667,
+            "MaxPresentSubmissionGapMilliseconds": 62.5994,
+            "FrameStatisticsAvailable": true,
+            "PresentCount": 5736,
+            "PresentRefreshCount": 15422885,
+            "SyncRefreshCount": 15422885,
+            "MediaPositionSeconds": 32.117522,
+            "SurfaceOpacity": 0
+          }
+        },
+        {
+          "MonitorName": "\\\\.\\DISPLAY3",
+          "RequestId": "all-BlackKey-74b271a6a40245b2bebe06028d3cea31-2",
+          "Confirmed": "2026-10-08T09:42:30.3899657-05:00",
+          "Stopped": "2026-10-08T09:43:02.4315054-05:00",
+          "WarmupDecoderDrops": 0,
+          "Final": {
+            "MonitorName": "\\\\.\\DISPLAY3",
+            "TransferredVideoFrames": 962,
+            "MediaEngineFramesRendered": 961,
+            "MediaEngineFramesDropped": 1,
+            "TransferCalls": 962,
+            "SubmittedPresents": 1926,
+            "MaxVideoTimestampGapMilliseconds": 66.6666,
+            "MaxPresentSubmissionGapMilliseconds": 61.4101,
+            "FrameStatisticsAvailable": true,
+            "PresentCount": 5735,
+            "PresentRefreshCount": 15422886,
+            "SyncRefreshCount": 15422886,
+            "MediaPositionSeconds": 32.1169512,
+            "SurfaceOpacity": 0
+          }
+        }
+      ],
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\all-BlackKey-74b271a6a40245b2bebe06028d3cea31-presents.csv",
+      "UnattributedPresentEvents": 49,
+      "SwapChains": [
+        {
+          "SwapChain": "0x216838E1150",
+          "Presents": 1189,
+          "Displayed": 1137,
+          "Undisplayed": 52,
+          "P95DisplayGapMs": 17.5146,
+          "MaximumDisplayGapMs": 66.6897,
+          "DisplayGapsOver50Ms": 5
+        },
+        {
+          "SwapChain": "0x216C7EA03E0",
+          "Presents": 830,
+          "Displayed": 21,
+          "Undisplayed": 809,
+          "P95DisplayGapMs": 2850.0607,
+          "MaximumDisplayGapMs": 2850.0607,
+          "DisplayGapsOver50Ms": 16
+        },
+        {
+          "SwapChain": "0x216C829D570",
+          "Presents": 1102,
+          "Displayed": 18,
+          "Undisplayed": 1084,
+          "P95DisplayGapMs": 7683.270600000001,
+          "MaximumDisplayGapMs": 7683.270600000001,
+          "DisplayGapsOver50Ms": 15
+        }
+      ],
+      "Errors": []
+    },
+    {
+      "Case": "BlackKeyAndKeystone",
+      "ProcessId": 56308,
+      "Video": "ping.mp4",
+      "CaptureStart": "2026-10-08T14:43:13.6758707+00:00",
+      "CaptureEnd": "2026-10-08T14:43:33.868726+00:00",
+      "CpuPercentOfMachine": 2.8848559439151304,
+      "WorkingSetMiB": 238.74609375,
+      "GpuEnginePercent": {
+        "3D": 1.1145624872891464,
+        "VideoDecode": 12.45733977629977,
+        "Copy": 0.04927112552183106,
+        "VideoProcessing": null
+      },
+      "GpuCounterError": null,
+      "Monitors": [
+        {
+          "MonitorName": "\\\\.\\DISPLAY3",
+          "RequestId": "all-BlackKeyAndKeystone-e96bc288248c49b9b2c4d5616490c8ec-2",
+          "Confirmed": "2026-10-08T09:43:06.8126031-05:00",
+          "Stopped": "2026-10-08T09:43:38.8662682-05:00",
+          "WarmupDecoderDrops": 1,
+          "Final": {
+            "MonitorName": "\\\\.\\DISPLAY3",
+            "TransferredVideoFrames": 963,
+            "MediaEngineFramesRendered": 962,
+            "MediaEngineFramesDropped": 1,
+            "TransferCalls": 963,
+            "SubmittedPresents": 1902,
+            "MaxVideoTimestampGapMilliseconds": 66.6666,
+            "MaxPresentSubmissionGapMilliseconds": 65.7093,
+            "FrameStatisticsAvailable": true,
+            "PresentCount": 7638,
+            "PresentRefreshCount": 15425054,
+            "SyncRefreshCount": 15425054,
+            "MediaPositionSeconds": 32.1634322,
+            "SurfaceOpacity": 0
+          }
+        },
+        {
+          "MonitorName": "\\\\.\\DISPLAY2",
+          "RequestId": "all-BlackKeyAndKeystone-e96bc288248c49b9b2c4d5616490c8ec-1",
+          "Confirmed": "2026-10-08T09:43:06.8127998-05:00",
+          "Stopped": "2026-10-08T09:43:38.8662683-05:00",
+          "WarmupDecoderDrops": 1,
+          "Final": {
+            "MonitorName": "\\\\.\\DISPLAY2",
+            "TransferredVideoFrames": 963,
+            "MediaEngineFramesRendered": 962,
+            "MediaEngineFramesDropped": 1,
+            "TransferCalls": 963,
+            "SubmittedPresents": 1904,
+            "MaxVideoTimestampGapMilliseconds": 66.6666,
+            "MaxPresentSubmissionGapMilliseconds": 65.7173,
+            "FrameStatisticsAvailable": true,
+            "PresentCount": 7640,
+            "PresentRefreshCount": 15425054,
+            "SyncRefreshCount": 15425054,
+            "MediaPositionSeconds": 32.1633782,
+            "SurfaceOpacity": 0
+          }
+        },
+        {
+          "MonitorName": "\\\\.\\DISPLAY1",
+          "RequestId": "all-BlackKeyAndKeystone-e96bc288248c49b9b2c4d5616490c8ec-0",
+          "Confirmed": "2026-10-08T09:43:06.7800277-05:00",
+          "Stopped": "2026-10-08T09:43:38.8337574-05:00",
+          "WarmupDecoderDrops": 1,
+          "Final": {
+            "MonitorName": "\\\\.\\DISPLAY1",
+            "TransferredVideoFrames": 963,
+            "MediaEngineFramesRendered": 962,
+            "MediaEngineFramesDropped": 1,
+            "TransferCalls": 963,
+            "SubmittedPresents": 1900,
+            "MaxVideoTimestampGapMilliseconds": 66.6666,
+            "MaxPresentSubmissionGapMilliseconds": 66.6625,
+            "FrameStatisticsAvailable": true,
+            "PresentCount": 7636,
+            "PresentRefreshCount": 15425052,
+            "SyncRefreshCount": 15425052,
+            "MediaPositionSeconds": 32.1677193,
+            "SurfaceOpacity": 0
+          }
+        }
+      ],
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\all-BlackKeyAndKeystone-e96bc288248c49b9b2c4d5616490c8ec-presents.csv",
+      "UnattributedPresentEvents": 139,
+      "SwapChains": [
+        {
+          "SwapChain": "0x216838E1150",
+          "Presents": 1141,
+          "Displayed": 537,
+          "Undisplayed": 604,
+          "P95DisplayGapMs": 83.8527,
+          "MaximumDisplayGapMs": 183.67010000000002,
+          "DisplayGapsOver50Ms": 126
+        },
+        {
+          "SwapChain": "0x216C7EA03E0",
+          "Presents": 1112,
+          "Displayed": 289,
+          "Undisplayed": 823,
+          "P95DisplayGapMs": 183.381,
+          "MaximumDisplayGapMs": 449.9556,
+          "DisplayGapsOver50Ms": 146
+        },
+        {
+          "SwapChain": "0x216C829D570",
+          "Presents": 1124,
+          "Displayed": 299,
+          "Undisplayed": 825,
+          "P95DisplayGapMs": 199.82070000000002,
+          "MaximumDisplayGapMs": 366.9841,
+          "DisplayGapsOver50Ms": 129
+        }
+      ],
+      "Errors": []
+    }
+  ]
+}

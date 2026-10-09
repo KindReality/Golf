@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <Compile Include="../Experience/ExperienceRequest.cs" Link="ExperienceRequest.cs" />
+    <Compile Include="../Experience/OutputSelection.cs" Link="OutputSelection.cs" />
+    <Compile Include="../Experience/MediaPath.cs" Link="MediaPath.cs" />
+    <Compile Include="../Experience/AudioSamples.cs" Link="AudioSamples.cs" />
+    <Compile Include="../Experience/RoutedAudioProvider.cs" Link="RoutedAudioProvider.cs" />
+    <Compile Include="../Experience/ConfigurationFileReader.cs" Link="ConfigurationFileReader.cs" />
+    <Compile Include="../Experience/KeystoneOptions.cs" Link="KeystoneOptions.cs" />
+    <Compile Include="../Experience/ExperienceOptions.cs" Link="ExperienceOptions.cs" />
+    <Compile Include="../Experience/BlackKeyOptions.cs" Link="BlackKeyOptions.cs" />
+    <Compile Include="../Experience/MonitorSelection.cs" Link="MonitorSelection.cs" />
+    <Compile Include="../Experience/PlaybackTiming.cs" Link="PlaybackTiming.cs" />
+  </ItemGroup>
+</Project>

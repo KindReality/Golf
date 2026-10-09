@@ -1,0 +1,112 @@
+{
+  "Machine": "ALPHA",
+  "LogicalProcessors": 32,
+  "Gpu": [
+    {
+      "Name": "Meta Virtual Monitor",
+      "DriverVersion": "11.1.45.729"
+    },
+    {
+      "Name": "NVIDIA GeForce RTX 4070 Ti",
+      "DriverVersion": "32.0.15.9186"
+    }
+  ],
+  "Results": [
+    {
+      "Label": "before",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\Experience\\benchmark-results\\before-benchmark-Plain-39038e3495f14f72a43c0de1c251d412-presents.csv",
+      "ProfilerExitCode": 0,
+      "Case": "Plain",
+      "RequestId": "benchmark-Plain-39038e3495f14f72a43c0de1c251d412",
+      "SampleSeconds": 15.9465042,
+      "CpuPercentOfMachine": 1.457509884831059,
+      "WorkingSetMiB": 223.17578125,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "3D": 22.156327366996877,
+        "VideoDecode": 6.71457402108709,
+        "Copy": 0.0
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": {
+        "RenderingTier": 2,
+        "PixelShader20Supported": true
+      },
+      "RenderTiming": {
+        "ElapsedSeconds": 22.2169198,
+        "VideoPositionSeconds": 22.2185263,
+        "RenderCallbackSamples": 705,
+        "MeanCallbackGapMs": 31.543238439716333,
+        "P95CallbackGapMs": 33.3441,
+        "MaximumCallbackGapMs": 99.9996,
+        "CallbackGapsOver50Ms": 24,
+        "Measurement": "WPF rendering callbacks, not presented or decoded video frames"
+      },
+      "Errors": []
+    },
+    {
+      "Label": "before",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\Experience\\benchmark-results\\before-benchmark-BlackKey-d4a4a8dbfac048129dd84590c6c4782d-presents.csv",
+      "ProfilerExitCode": 0,
+      "Case": "BlackKey",
+      "RequestId": "benchmark-BlackKey-d4a4a8dbfac048129dd84590c6c4782d",
+      "SampleSeconds": 15.1761307,
+      "CpuPercentOfMachine": 1.6666282895151925,
+      "WorkingSetMiB": 242.390625,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "3D": 22.55714641523443,
+        "VideoDecode": 6.705528335358681,
+        "Copy": 0.0
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": {
+        "RenderingTier": 2,
+        "PixelShader20Supported": true
+      },
+      "RenderTiming": {
+        "ElapsedSeconds": 21.8595324,
+        "VideoPositionSeconds": 21.8623526,
+        "RenderCallbackSamples": 686,
+        "MeanCallbackGapMs": 31.895811516034982,
+        "P95CallbackGapMs": 33.9028,
+        "MaximumCallbackGapMs": 83.9391,
+        "CallbackGapsOver50Ms": 19,
+        "Measurement": "WPF rendering callbacks, not presented or decoded video frames"
+      },
+      "Errors": []
+    },
+    {
+      "Label": "before",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\Experience\\benchmark-results\\before-benchmark-BlackKeyAndKeystone-45bd9fae0e434f25aa582b511df6c0be-presents.csv",
+      "ProfilerExitCode": 0,
+      "Case": "BlackKeyAndKeystone",
+      "RequestId": "benchmark-BlackKeyAndKeystone-45bd9fae0e434f25aa582b511df6c0be",
+      "SampleSeconds": 15.1576367,
+      "CpuPercentOfMachine": 1.5301435068040654,
+      "WorkingSetMiB": 226.71484375,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "3D": 36.523159370108665,
+        "VideoDecode": 6.797112075958539,
+        "Copy": 0.0
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": {
+        "RenderingTier": 2,
+        "PixelShader20Supported": true
+      },
+      "RenderTiming": {
+        "ElapsedSeconds": 22.0433179,
+        "VideoPositionSeconds": 22.0448214,
+        "RenderCallbackSamples": 715,
+        "MeanCallbackGapMs": 30.86342,
+        "P95CallbackGapMs": 49.9993,
+        "MaximumCallbackGapMs": 202.8172,
+        "CallbackGapsOver50Ms": 29,
+        "Measurement": "WPF rendering callbacks, not presented or decoded video frames"
+      },
+      "Errors": []
+    }
+  ]
+}

@@ -1,0 +1,124 @@
+{
+  "Machine": "ALPHA",
+  "LogicalProcessors": 32,
+  "Gpu": [
+    {
+      "Name": "Meta Virtual Monitor",
+      "DriverVersion": "11.1.45.729"
+    },
+    {
+      "Name": "NVIDIA GeForce RTX 4070 Ti",
+      "DriverVersion": "32.0.15.9186"
+    }
+  ],
+  "Results": [
+    {
+      "Application": "ExperienceX",
+      "Label": "dx11-comparison",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\dx11-comparison-benchmark-Plain-83d6ea19ed1947f88a5857b34928c9e1-presents.csv",
+      "PresentEventCount": 591,
+      "PresentationStatus": "Captured present events; these are not decoded video frames",
+      "ProfilerExitCode": 0,
+      "Case": "Plain",
+      "RequestId": "benchmark-Plain-83d6ea19ed1947f88a5857b34928c9e1",
+      "SampleSeconds": 10.1128371,
+      "CpuPercentOfMachine": 5.166314183979093,
+      "WorkingSetMiB": 161.73046875,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "Copy": 0.022308985575681752,
+        "3D": 4.791796939029543,
+        "VideoDecode": 9.894895558223658
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": null,
+      "RenderTiming": {
+        "MonitorName": "\\\\.\\DISPLAY1",
+        "TransferredVideoFrames": 600,
+        "TransferCalls": 600,
+        "SubmittedPresents": 1218,
+        "MaxVideoTimestampGapMilliseconds": 66.6667,
+        "MaxPresentSubmissionGapMilliseconds": 100.4806,
+        "FrameStatisticsAvailable": true,
+        "PresentCount": 1215,
+        "PresentRefreshCount": 15283950,
+        "SyncRefreshCount": 15283950,
+        "MediaPositionSeconds": 20.107645,
+        "SurfaceOpacity": 0
+      },
+      "Errors": []
+    },
+    {
+      "Application": "ExperienceX",
+      "Label": "dx11-comparison",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\dx11-comparison-benchmark-BlackKey-09a9d22fdc404922bdd0eef5908a7ccd-presents.csv",
+      "PresentEventCount": 592,
+      "PresentationStatus": "Captured present events; these are not decoded video frames",
+      "ProfilerExitCode": 0,
+      "Case": "BlackKey",
+      "RequestId": "benchmark-BlackKey-09a9d22fdc404922bdd0eef5908a7ccd",
+      "SampleSeconds": 10.085844,
+      "CpuPercentOfMachine": 5.3592673429214255,
+      "WorkingSetMiB": 172.4453125,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "Copy": 0.024341615882045607,
+        "3D": 4.771887659076961,
+        "VideoDecode": 10.269856648179356
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": null,
+      "RenderTiming": {
+        "MonitorName": "\\\\.\\DISPLAY1",
+        "TransferredVideoFrames": 596,
+        "TransferCalls": 596,
+        "SubmittedPresents": 1263,
+        "MaxVideoTimestampGapMilliseconds": 166.6667,
+        "MaxPresentSubmissionGapMilliseconds": 226.7389,
+        "FrameStatisticsAvailable": true,
+        "PresentCount": 2478,
+        "PresentRefreshCount": 15285427,
+        "SyncRefreshCount": 15285427,
+        "MediaPositionSeconds": 20.1965607,
+        "SurfaceOpacity": 0
+      },
+      "Errors": []
+    },
+    {
+      "Application": "ExperienceX",
+      "Label": "dx11-comparison",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\dx11-comparison-benchmark-BlackKeyAndKeystone-82f7943ceee84ed3bf0d18ee906349bd-presents.csv",
+      "PresentEventCount": 591,
+      "PresentationStatus": "Captured present events; these are not decoded video frames",
+      "ProfilerExitCode": 0,
+      "Case": "BlackKeyAndKeystone",
+      "RequestId": "benchmark-BlackKeyAndKeystone-82f7943ceee84ed3bf0d18ee906349bd",
+      "SampleSeconds": 10.0824598,
+      "CpuPercentOfMachine": 5.574152834708054,
+      "WorkingSetMiB": 172.4296875,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "Copy": 0.024833435912384343,
+        "3D": 4.63225600935196,
+        "VideoDecode": 10.395718309898234
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": null,
+      "RenderTiming": {
+        "MonitorName": "\\\\.\\DISPLAY1",
+        "TransferredVideoFrames": 596,
+        "TransferCalls": 596,
+        "SubmittedPresents": 1253,
+        "MaxVideoTimestampGapMilliseconds": 133.3333,
+        "MaxPresentSubmissionGapMilliseconds": 178.464,
+        "FrameStatisticsAvailable": true,
+        "PresentCount": 3731,
+        "PresentRefreshCount": 15286868,
+        "SyncRefreshCount": 15286868,
+        "MediaPositionSeconds": 20.1433384,
+        "SurfaceOpacity": 0
+      },
+      "Errors": []
+    }
+  ]
+}

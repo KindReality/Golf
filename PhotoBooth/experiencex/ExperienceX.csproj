@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
+    <PackageReference Include="Vortice.DirectComposition" Version="3.8.3" />
+    <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
+    <Compile Include="..\Shared\Telemetry.cs" Link="Diagnostics\Telemetry.cs" />
+    <Compile Include="..\Shared\Networking\*.cs" Link="Networking\Shared\%(Filename)%(Extension)" />
+  </ItemGroup>
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>ExperienceX</AssemblyName>
+    <RootNamespace>ExperienceX</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <ApplicationIcon Condition="Exists('Media\icon.ico')">Media\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Update="appsettings.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <None Update="Restart-Experience.cmd;Restart-Experience.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="Shaders\VideoVS.cso" />
+    <EmbeddedResource Include="Shaders\VideoPS.cso" />
+    <EmbeddedResource Include="Shaders\CalibrationPS.cso" />
+    <None Update="Media\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="SeedExperienceXConfiguration" AfterTargets="CopyFilesToOutputDirectory">
+    <Copy SourceFiles="appsettings.json" DestinationFiles="$(TargetDir)appsettings.defaults.json" />
+    <Copy SourceFiles="appsettings.json" DestinationFiles="$(TargetDir)appsettings.json" Condition="!Exists('$(TargetDir)appsettings.json') and !Exists('$(TargetDir)appsettings.json.bak')" />
+  </Target>
+  <Target Name="UntrackLiveExperienceXConfiguration" BeforeTargets="_CleanGetCurrentAndPriorFileWrites;CoreClean" Condition="Exists('$(IntermediateOutputPath)$(CleanFile)')">
+    <!-- Older builds tracked appsettings.json as generated output. Never clean user calibration. -->
+    <ReadLinesFromFile File="$(IntermediateOutputPath)$(CleanFile)">
+      <Output TaskParameter="Lines" ItemName="_ExperienceXTrackedFiles" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <_ExperienceXTrackedFiles Remove="@(_ExperienceXTrackedFiles)" Condition="'%(_ExperienceXTrackedFiles.Filename)%(_ExperienceXTrackedFiles.Extension)' == 'appsettings.json'" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)$(CleanFile)" Lines="@(_ExperienceXTrackedFiles)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
+  <Target Name="SeedPublishedExperienceXConfiguration" AfterTargets="Publish">
+    <Copy SourceFiles="appsettings.json" DestinationFiles="$(PublishDir)appsettings.defaults.json" />
+    <Copy SourceFiles="appsettings.json" DestinationFiles="$(PublishDir)appsettings.json" Condition="!Exists('$(PublishDir)appsettings.json') and !Exists('$(PublishDir)appsettings.json.bak')" />
+  </Target>
+</Project>

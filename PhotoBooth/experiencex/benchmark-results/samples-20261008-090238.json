@@ -1,0 +1,127 @@
+{
+  "Machine": "ALPHA",
+  "LogicalProcessors": 32,
+  "Gpu": [
+    {
+      "Name": "Meta Virtual Monitor",
+      "DriverVersion": "11.1.45.729"
+    },
+    {
+      "Name": "NVIDIA GeForce RTX 4070 Ti",
+      "DriverVersion": "32.0.15.9186"
+    }
+  ],
+  "Results": [
+    {
+      "Application": "Experience",
+      "Label": "wpf-comparison",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\wpf-comparison-benchmark-Plain-7c1913d36b8f4ece9cac4abe3192605e-presents.csv",
+      "PresentEventCount": 0,
+      "PresentationStatus": "No present events captured; dropped video frames cannot be determined",
+      "ProfilerExitCode": 0,
+      "Case": "Plain",
+      "RequestId": "benchmark-Plain-7c1913d36b8f4ece9cac4abe3192605e",
+      "SampleSeconds": 11.1951781,
+      "CpuPercentOfMachine": 3.144664409135215,
+      "WorkingSetMiB": 212.0625,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "Copy": 0.0,
+        "3D": 11.315001018057224,
+        "VideoDecode": 3.9545584018067315
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": null,
+      "RenderTiming": {
+        "ElapsedSeconds": 20.0491322,
+        "VideoPositionSeconds": 20.1058267,
+        "RenderCallbackSamples": 727,
+        "OmittedCallbackSamples": 0,
+        "MeanCallbackGapMs": 27.626887070151284,
+        "P95CallbackGapMs": 50.0015,
+        "MaximumCallbackGapMs": 101.1301,
+        "CallbackGapsOver50Ms": 40,
+        "ProcessManagedAllocationBytes": 1961928,
+        "Gen0Collections": 0,
+        "Gen1Collections": 0,
+        "Gen2Collections": 0,
+        "Measurement": "WPF rendering callbacks, not presented or decoded video frames"
+      },
+      "Errors": []
+    },
+    {
+      "Application": "Experience",
+      "Label": "wpf-comparison",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\wpf-comparison-benchmark-BlackKey-a16c23f4e085485bb4638465256b24c5-presents.csv",
+      "PresentEventCount": 0,
+      "PresentationStatus": "No present events captured; dropped video frames cannot be determined",
+      "ProfilerExitCode": 0,
+      "Case": "BlackKey",
+      "RequestId": "benchmark-BlackKey-a16c23f4e085485bb4638465256b24c5",
+      "SampleSeconds": 10.1335927,
+      "CpuPercentOfMachine": 3.131987064173203,
+      "WorkingSetMiB": 257.1328125,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "Copy": 0.0,
+        "3D": 11.179259760697354,
+        "VideoDecode": 3.9645754520901955
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": null,
+      "RenderTiming": {
+        "ElapsedSeconds": 20.0716051,
+        "VideoPositionSeconds": 20.0734123,
+        "RenderCallbackSamples": 712,
+        "OmittedCallbackSamples": 0,
+        "MeanCallbackGapMs": 28.23175154494382,
+        "P95CallbackGapMs": 50.0033,
+        "MaximumCallbackGapMs": 116.6662,
+        "CallbackGapsOver50Ms": 47,
+        "ProcessManagedAllocationBytes": 1655624,
+        "Gen0Collections": 0,
+        "Gen1Collections": 0,
+        "Gen2Collections": 0,
+        "Measurement": "WPF rendering callbacks, not presented or decoded video frames"
+      },
+      "Errors": []
+    },
+    {
+      "Application": "Experience",
+      "Label": "wpf-comparison",
+      "PresentationCsv": "C:\\Source\\Repos\\Golf\\PhotoBooth\\experiencex\\benchmark-results\\wpf-comparison-benchmark-BlackKeyAndKeystone-7c5c4f5a31474d37a200f6c98e841f02-presents.csv",
+      "PresentEventCount": 0,
+      "PresentationStatus": "No present events captured; dropped video frames cannot be determined",
+      "ProfilerExitCode": 0,
+      "Case": "BlackKeyAndKeystone",
+      "RequestId": "benchmark-BlackKeyAndKeystone-7c5c4f5a31474d37a200f6c98e841f02",
+      "SampleSeconds": 10.0959209,
+      "CpuPercentOfMachine": 3.2065471981857545,
+      "WorkingSetMiB": 273.12890625,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "Copy": 0.0,
+        "3D": 13.369115169539407,
+        "VideoDecode": 3.9429809896814696
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": null,
+      "RenderTiming": {
+        "ElapsedSeconds": 20.0452661,
+        "VideoPositionSeconds": 20.047467,
+        "RenderCallbackSamples": 686,
+        "OmittedCallbackSamples": 0,
+        "MeanCallbackGapMs": 29.276708600583092,
+        "P95CallbackGapMs": 49.9981,
+        "MaximumCallbackGapMs": 118.6437,
+        "CallbackGapsOver50Ms": 32,
+        "ProcessManagedAllocationBytes": 1751736,
+        "Gen0Collections": 0,
+        "Gen1Collections": 0,
+        "Gen2Collections": 0,
+        "Measurement": "WPF rendering callbacks, not presented or decoded video frames"
+      },
+      "Errors": []
+    }
+  ]
+}

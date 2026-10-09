@@ -214,9 +214,9 @@
                         Orientation="Vertical">
                 <Button x:Name="btnTrigger1" Content="Trigger 1" Style="{StaticResource DevButtonStyle}" Click="BtnTrigger1_Click"/>
                 <Button x:Name="btnTrigger2" Content="Trigger 2" Style="{StaticResource DevButtonStyle}" Click="BtnTrigger2_Click"/>
-                <Button x:Name="btnTrigger3" Content="Trigger 3" Style="{StaticResource DevButtonStyle}" Click="BtnTrigger3_Click"/>
-                <Button x:Name="btnTrigger4" Content="Trigger 4" Style="{StaticResource DevButtonStyle}" Click="BtnTrigger4_Click"/>
-                <Button x:Name="btnTrigger5" Content="Trigger 5" Style="{StaticResource DevButtonStyle}" Click="BtnTrigger5_Click"/>
+                <Button x:Name="btnTrigger3" Content="Trigger 3" ToolTip="Play ping.mp4 on Display One" Style="{StaticResource DevButtonStyle}" Click="BtnTrigger3_Click"/>
+                <Button x:Name="btnTrigger4" Content="Trigger 4" ToolTip="Play ping.mp4 on Projector" Style="{StaticResource DevButtonStyle}" Click="BtnTrigger4_Click"/>
+                <Button x:Name="btnTrigger5" Content="Trigger 5" ToolTip="Play ping.mp4 on Display Two" Style="{StaticResource DevButtonStyle}" Click="BtnTrigger5_Click"/>
             </StackPanel>
         </Grid>
 

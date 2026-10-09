@@ -396,3 +396,10 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+.tools/
+.codex-remote-attachments/
+
+# Media assets are supplied separately and never committed.
+[Mm]edia/
+restart-fixture-*/

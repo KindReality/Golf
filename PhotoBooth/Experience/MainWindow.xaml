@@ -1,0 +1,17 @@
+<Window x:Class="Experience.MainWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="Experience" WindowStyle="None" ResizeMode="NoResize"
+ AllowsTransparency="True" Background="Transparent" Opacity="1"
+ Topmost="True" ShowActivated="False" WindowStartupLocation="Manual">
+ <Grid x:Name="OutputSurface" Background="Black" ClipToBounds="True">
+  <Grid x:Name="VideoSurface" Background="Black">
+  <MediaElement x:Name="VideoPlayer" LoadedBehavior="Manual"
+   UnloadedBehavior="Stop" Stretch="Uniform" IsHitTestVisible="False"
+   MediaOpened="VideoOpened" MediaEnded="VideoEnded" MediaFailed="VideoFailed" />
+  </Grid>
+  <Border x:Name="KeystoneOutput" Background="Black" Visibility="Collapsed" IsHitTestVisible="False">
+   <Viewport3D x:Name="KeystoneViewport" ClipToBounds="True" />
+  </Border>
+ </Grid>
+</Window>

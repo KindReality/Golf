@@ -1,0 +1,103 @@
+{
+  "Machine": "ALPHA",
+  "LogicalProcessors": 32,
+  "Gpu": [
+    {
+      "Name": "Meta Virtual Monitor",
+      "DriverVersion": "11.1.45.729"
+    },
+    {
+      "Name": "NVIDIA GeForce RTX 4070 Ti",
+      "DriverVersion": "32.0.15.9186"
+    }
+  ],
+  "Results": [
+    {
+      "Case": "Plain",
+      "RequestId": "benchmark-Plain-800aaa6d12184e9b951c2ed364836f5f",
+      "SampleSeconds": 10.7536123,
+      "CpuPercentOfMachine": 1.4620813742745775,
+      "WorkingSetMiB": 181.96484375,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "Copy": 0.0,
+        "VideoDecode": 5.988166883983839,
+        "3D": 22.56034270888925
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": {
+        "RenderingTier": 2,
+        "PixelShader20Supported": true
+      },
+      "RenderTiming": {
+        "ElapsedSeconds": 17.0557971,
+        "VideoPositionSeconds": 17.0965738,
+        "RenderCallbackSamples": 529,
+        "MeanCallbackGapMs": 32.270243667296754,
+        "P95CallbackGapMs": 33.3355,
+        "MaximumCallbackGapMs": 67.2358,
+        "CallbackGapsOver50Ms": 7,
+        "Measurement": "WPF rendering callbacks, not presented or decoded video frames"
+      },
+      "Errors": []
+    },
+    {
+      "Case": "BlackKey",
+      "RequestId": "benchmark-BlackKey-5d7411875ab049ccb9be89df24e155a1",
+      "SampleSeconds": 10.1089893,
+      "CpuPercentOfMachine": 1.1689008563892733,
+      "WorkingSetMiB": 200.796875,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "Copy": 0.0,
+        "VideoDecode": 6.725082083980324,
+        "3D": 23.370697370492444
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": {
+        "RenderingTier": 2,
+        "PixelShader20Supported": true
+      },
+      "RenderTiming": {
+        "ElapsedSeconds": 16.3460178,
+        "VideoPositionSeconds": 16.3472647,
+        "RenderCallbackSamples": 565,
+        "MeanCallbackGapMs": 28.912148141592937,
+        "P95CallbackGapMs": 33.3357,
+        "MaximumCallbackGapMs": 116.6662,
+        "CallbackGapsOver50Ms": 4,
+        "Measurement": "WPF rendering callbacks, not presented or decoded video frames"
+      },
+      "Errors": []
+    },
+    {
+      "Case": "BlackKeyAndKeystone",
+      "RequestId": "benchmark-BlackKeyAndKeystone-d6ee7be75c374db1a906940aacda4daf",
+      "SampleSeconds": 10.1067657,
+      "CpuPercentOfMachine": 1.2657826578486924,
+      "WorkingSetMiB": 220.3125,
+      "GpuEnginePercent": {
+        "VideoProcessing": null,
+        "Copy": 0.0,
+        "VideoDecode": 7.415478318586833,
+        "3D": 35.69848232102633
+      },
+      "GpuCounterError": null,
+      "RenderingCapabilities": {
+        "RenderingTier": 2,
+        "PixelShader20Supported": true
+      },
+      "RenderTiming": {
+        "ElapsedSeconds": 16.3397707,
+        "VideoPositionSeconds": 16.3403994,
+        "RenderCallbackSamples": 603,
+        "MeanCallbackGapMs": 27.089431509121038,
+        "P95CallbackGapMs": 33.3365,
+        "MaximumCallbackGapMs": 116.6662,
+        "CallbackGapsOver50Ms": 2,
+        "Measurement": "WPF rendering callbacks, not presented or decoded video frames"
+      },
+      "Errors": []
+    }
+  ]
+}

@@ -1,4 +1,5 @@
-﻿using OpenCvSharp;
+using PhotoBooth.Diagnostics;
+using OpenCvSharp;
 using OpenCvSharp.WpfExtensions;
 using System;
 using System.Diagnostics;
@@ -31,6 +32,8 @@ namespace SaftApp
         private int    _previewWidth         = 1920;
         private int    _previewHeight        = 1080;
         private bool   _developerMode        = false;
+        private long _framesCaptured;
+        private long _frameReadFailures;
 
         // ── Runtime state ─────────────────────────────────────────────────────
         private AppState _state = AppState.Idle;
@@ -81,6 +84,10 @@ namespace SaftApp
         public MainWindow()
         {
             LoadTimingConfiguration();
+            Telemetry.SetHealthProvider(() => new { State = _state.ToString(), CaptureRunning = _captureRunning,
+                FramesCaptured = Interlocked.Read(ref _framesCaptured), FrameReadFailures = Interlocked.Read(ref _frameReadFailures) });
+            Telemetry.Info("CameraConfigured", new { DeveloperMode = _developerMode,
+                TargetFps = _targetFps, EnableSerial = _enableSerial });
 
             if (_developerMode)
             {
@@ -92,6 +99,12 @@ namespace SaftApp
             }
 
             InitializeComponent();
+            videoPlayer.MediaOpened += (_, _) => Telemetry.Info("MediaOpened", new
+            {
+                Width = videoPlayer.NaturalVideoWidth, Height = videoPlayer.NaturalVideoHeight,
+                DurationSeconds = videoPlayer.NaturalDuration.HasTimeSpan ? (double?)videoPlayer.NaturalDuration.TimeSpan.TotalSeconds : null
+            });
+            videoPlayer.MediaFailed += (_, args) => Telemetry.Error("PlaybackFailed", args.ErrorException);
 
             if (!_developerMode)
             {
@@ -138,18 +151,19 @@ namespace SaftApp
                         if (s.TryGetProperty("BaudRate", out var br)) _serialOptions.BaudRate = br.GetInt32();
                         if (s.TryGetProperty("AutoOpen", out var ao)) _serialOptions.AutoOpen = ao.GetBoolean();
                     }
-                    catch (Exception ex) { Debug.WriteLine(ex); _serialOptions = null; }
+                    catch (Exception ex) { Telemetry.Legacy(ex); _serialOptions = null; }
                 }
                 else
                 {
                     _serialOptions = null;
                 }
             }
-            catch (Exception ex) { Debug.WriteLine(ex); }
+            catch (Exception ex) { Telemetry.Legacy(ex); }
         }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            StartNetwork();
             ApplyDeveloperMode();
             _faceCascade = TryLoadFaceCascade();
             PrepareVideo();
@@ -169,7 +183,7 @@ namespace SaftApp
             try
             {
                 var searchDirs = GetPictureSearchDirectories().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                Debug.WriteLine($"[Picture] Search directories: {string.Join(" | ", searchDirs)}");
+                Telemetry.Legacy($"[Picture] Search directories: {string.Join(" | ", searchDirs)}");
 
                 var newest = searchDirs
                     .Where(d => { try { return Directory.Exists(d); } catch { return false; } })
@@ -194,11 +208,11 @@ namespace SaftApp
 
                 if (newest is null)
                 {
-                    Debug.WriteLine("[Picture] Prepare skipped: no saved pictures found in any search directory.");
+                    Telemetry.Legacy("[Picture] Prepare skipped: no saved pictures found in any search directory.");
                     return;
                 }
 
-                Debug.WriteLine($"[Picture] Loading: {newest.FullName} ({newest.Length} bytes)");
+                Telemetry.Legacy($"[Picture] Loading: {newest.FullName} ({newest.Length} bytes)");
 
                 var bmp = new BitmapImage();
                 bmp.BeginInit();
@@ -210,11 +224,11 @@ namespace SaftApp
                 _lastCapturedImage = bmp;
                 imgPreviewButton.Source = bmp;
 
-                Debug.WriteLine($"[Picture] Prepared latest picture: {newest.FullName} ({bmp.PixelWidth}x{bmp.PixelHeight})");
+                Telemetry.Legacy($"[Picture] Prepared latest picture: {newest.FullName} ({bmp.PixelWidth}x{bmp.PixelHeight})");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Picture] Prepare failed: {ex}");
+                Telemetry.Legacy($"[Picture] Prepare failed: {ex}");
             }
         }
 
@@ -253,7 +267,7 @@ namespace SaftApp
                 {
                     _videoUri = null;
                     _videoPrepared = false;
-                    Debug.WriteLine("[Video] Preload skipped: file not found.");
+                    Telemetry.Legacy("[Video] Preload skipped: file not found.");
                     return;
                 }
 
@@ -268,36 +282,36 @@ namespace SaftApp
                 videoPlayer.Position = TimeSpan.Zero;
                 videoPlayer.Volume   = 1;
                 _videoPrepared = true;
-                Debug.WriteLine($"[Video] Prepared: {resolved}");
+                Telemetry.Legacy($"[Video] Prepared: {resolved}");
             }
             catch (Exception ex)
             {
                 _videoPrepared = false;
                 _videoUri = null;
-                Debug.WriteLine($"[Video] Prepare failed: {ex}");
+                Telemetry.Legacy($"[Video] Prepare failed: {ex}");
             }
         }
 
         private void ApplyDeveloperMode()
         {
             overlayGrid.Visibility = _developerMode ? Visibility.Visible : Visibility.Collapsed;
-            Debug.WriteLine(_developerMode ? "[DeveloperMode] ON" : "[DeveloperMode] OFF");
+            Telemetry.Legacy(_developerMode ? "[DeveloperMode] ON" : "[DeveloperMode] OFF");
         }
 
         private void TransitionTo(AppState next)
         {
-            Debug.WriteLine($"[Transition] Request {_state} -> {next} | transitioning={_isTransitioning} | pending={_pendingState?.ToString() ?? "null"}");
+            Telemetry.Legacy($"[Transition] Request {_state} -> {next} | transitioning={_isTransitioning} | pending={_pendingState?.ToString() ?? "null"}");
 
             if (_isTransitioning)
             {
                 _pendingState = next;
-                Debug.WriteLine($"[Transition] Queued {_pendingState}");
+                Telemetry.Legacy($"[Transition] Queued {_pendingState}");
                 return;
             }
 
             if (_state == next && next != AppState.Capture)
             {
-                Debug.WriteLine($"[Transition] Ignored duplicate state {_state}");
+                Telemetry.Legacy($"[Transition] Ignored duplicate state {_state}");
                 return;
             }
 
@@ -306,12 +320,12 @@ namespace SaftApp
                 || (_state == AppState.Capture && next == AppState.Preview)
                 || (_state == AppState.Preview && next == AppState.Idle))
             {
-                Debug.WriteLine($"[Transition] Direct {_state} -> {next}");
+                Telemetry.Legacy($"[Transition] Direct {_state} -> {next}");
                 EnterState(next);
                 return;
             }
 
-            Debug.WriteLine($"[Transition] Animated {_state} -> {next}");
+            Telemetry.Legacy($"[Transition] Animated {_state} -> {next}");
             _pendingState = next;
             _isTransitioning = true;
 
@@ -321,7 +335,7 @@ namespace SaftApp
             rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
             rectTransition.Opacity = 0;
 
-            Debug.WriteLine($"[Transition] Starting TransitionIn for {_state} -> {next}");
+            Telemetry.Legacy($"[Transition] Starting TransitionIn for {_state} -> {next}");
             PlayAnimation(
                 "TransitionIn",
                 duration: TimeSpan.FromSeconds(_transitionInSeconds),
@@ -331,7 +345,7 @@ namespace SaftApp
 
         private void OnGlobalTransitionInCompleted(object? sender, EventArgs e)
         {
-            Debug.WriteLine($"[Transition] TransitionIn completed | pending={_pendingState?.ToString() ?? "null"}");
+            Telemetry.Legacy($"[Transition] TransitionIn completed | pending={_pendingState?.ToString() ?? "null"}");
 
             if (_pendingState is null)
             {
@@ -341,10 +355,10 @@ namespace SaftApp
 
             var next = _pendingState.Value;
             _pendingState = null;
-            Debug.WriteLine($"[Transition] Entering state {next}");
+            Telemetry.Legacy($"[Transition] Entering state {next}");
             EnterState(next);
 
-            Debug.WriteLine($"[Transition] Starting TransitionOut for {next}");
+            Telemetry.Legacy($"[Transition] Starting TransitionOut for {next}");
             PlayAnimation(
                 "TransitionOut",
                 duration: TimeSpan.FromSeconds(_transitionOutSeconds),
@@ -354,12 +368,12 @@ namespace SaftApp
 
         private void OnGlobalTransitionOutCompleted(object? sender, EventArgs e)
         {
-            Debug.WriteLine($"[Transition] TransitionOut completed | pending={_pendingState?.ToString() ?? "null"}");
+            Telemetry.Legacy($"[Transition] TransitionOut completed | pending={_pendingState?.ToString() ?? "null"}");
             EndTransition();
 
             if (_pendingState is AppState queued)
             {
-                Debug.WriteLine($"[Transition] Processing queued state {queued}");
+                Telemetry.Legacy($"[Transition] Processing queued state {queued}");
                 _pendingState = null;
                 TransitionTo(queued);
             }
@@ -367,7 +381,7 @@ namespace SaftApp
 
         private void EndTransition()
         {
-            Debug.WriteLine("[Transition] EndTransition");
+            Telemetry.Legacy("[Transition] EndTransition");
             rectTransition.BeginAnimation(UIElement.OpacityProperty, null);
             rectTransition.Opacity    = 0;
             rectTransition.Visibility = Visibility.Collapsed;
@@ -377,7 +391,7 @@ namespace SaftApp
 
         private void EnterState(AppState next)
         {
-            Debug.WriteLine($"[State] Enter {next}");
+            Telemetry.Legacy($"[State] Enter {next}");
             _state = next;
 
             switch (_state)
@@ -403,7 +417,7 @@ namespace SaftApp
 
         private void EnterIdleState()
         {
-            Debug.WriteLine("[State:Idle] EnterIdleState");
+            Telemetry.Legacy("[State:Idle] EnterIdleState");
             HideAllContent();
             SetCountdownText(string.Empty, 0);
 
@@ -414,12 +428,12 @@ namespace SaftApp
             if (!_previewLoop.IsEnabled)
                 _previewLoop.Start();
 
-            Debug.WriteLine($"[State:Idle] camera={(_capture is null ? "null" : "ok")}, previewLoop={_previewLoop.IsEnabled}");
+            Telemetry.Legacy($"[State:Idle] camera={(_capture is null ? "null" : "ok")}, previewLoop={_previewLoop.IsEnabled}");
         }
 
         private void EnterCountdownState()
         {
-            Debug.WriteLine("[State:Countdown] EnterCountdownState");
+            Telemetry.Legacy("[State:Countdown] EnterCountdownState");
             captureGrid.Visibility   = Visibility.Collapsed;
             videoGrid.Visibility     = Visibility.Collapsed;
             countdownGrid.Visibility = Visibility.Visible;
@@ -431,7 +445,7 @@ namespace SaftApp
                 _previewLoop.Start();
 
             _countdownCounter = _countdownSeconds;
-            Debug.WriteLine($"[State:Countdown] Starting countdown at {_countdownCounter}");
+            Telemetry.Legacy($"[State:Countdown] Starting countdown at {_countdownCounter}");
             ShowCountdownTick();
             _countdownTimer.Start();
         }
@@ -441,7 +455,7 @@ namespace SaftApp
             if (_state != AppState.Countdown) return;
 
             _countdownCounter--;
-            Debug.WriteLine($"[State:Countdown] Tick -> {_countdownCounter}");
+            Telemetry.Legacy($"[State:Countdown] Tick -> {_countdownCounter}");
 
             if (_countdownCounter > 0)
             {
@@ -450,20 +464,20 @@ namespace SaftApp
             }
 
             _countdownTimer.Stop();
-            Debug.WriteLine("[State:Countdown] Complete -> Capture");
+            Telemetry.Legacy("[State:Countdown] Complete -> Capture");
             TransitionTo(AppState.Capture);
         }
 
         private void ShowCountdownTick()
         {
-            Debug.WriteLine($"[State:Countdown] ShowCountdownTick {_countdownCounter}");
+            Telemetry.Legacy($"[State:Countdown] ShowCountdownTick {_countdownCounter}");
             SetCountdownText(_countdownCounter.ToString(), 1);
             PlayAnimation("CountdownNumberInOut");
         }
 
         private void EnterCaptureState()
         {
-            Debug.WriteLine("[State:Capture] EnterCaptureState");
+            Telemetry.Legacy("[State:Capture] EnterCaptureState");
             HideAllContent();
             SetCountdownText(string.Empty, 0);
 
@@ -472,7 +486,7 @@ namespace SaftApp
 
             if (src is null || src.Empty())
             {
-                Debug.WriteLine("[State:Capture] No frame -> Idle");
+                Telemetry.Legacy("[State:Capture] No frame -> Idle");
                 SetCountdownText("No frame", 1);
                 src?.Dispose();
                 TransitionTo(AppState.Idle);
@@ -496,13 +510,13 @@ namespace SaftApp
                         imgCapture.Source       = bitmap;
                         imgPreviewButton.Source = bitmap;
                         captureGrid.Visibility  = Visibility.Visible;
-                        Debug.WriteLine("[State:Capture] Capture image assigned to imgCapture");
+                        Telemetry.Legacy("[State:Capture] Capture image assigned to imgCapture");
                     });
                 }
-                catch (Exception ex) { Debug.WriteLine($"[State:Capture] {ex}"); src.Dispose(); }
+                catch (Exception ex) { Telemetry.Legacy($"[State:Capture] {ex}"); src.Dispose(); }
             });
 
-            Debug.WriteLine("[State:Capture] Queue Preview transition");
+            Telemetry.Legacy("[State:Capture] Queue Preview transition");
             _ = Dispatcher.BeginInvoke(new Action(() => TransitionTo(AppState.Preview)), DispatcherPriority.Background);
         }
 
@@ -520,15 +534,15 @@ namespace SaftApp
                     encoder.Frames.Add(BitmapFrame.Create(bitmap));
                     using var fs = File.Create(path);
                     encoder.Save(fs);
-                    Debug.WriteLine($"[Capture] Saved: {path}");
+                    Telemetry.Legacy($"[Capture] Saved: {path}");
                 }
-                catch (Exception ex) { Debug.WriteLine($"{ex}"); }
+                catch (Exception ex) { Telemetry.Legacy($"{ex}"); }
             });
         }
 
         private void EnterPreviewState()
         {
-            Debug.WriteLine("[State:Preview] EnterPreviewState");
+            Telemetry.Legacy("[State:Preview] EnterPreviewState");
             videoGrid.Visibility     = Visibility.Collapsed;
             countdownGrid.Visibility = Visibility.Collapsed;
             previewGrid.Visibility   = Visibility.Collapsed;
@@ -541,17 +555,17 @@ namespace SaftApp
                 ? Visibility.Visible
                 : Visibility.Collapsed;
 
-            Debug.WriteLine($"[State:Preview] captureVisible={captureGrid.Visibility} hasImage={imgCapture.Source is not null}");
+            Telemetry.Legacy($"[State:Preview] captureVisible={captureGrid.Visibility} hasImage={imgCapture.Source is not null}");
 
             _previewTimer       = new DispatcherTimer { Interval = TimeSpan.FromSeconds(_previewSeconds) };
             _previewTimer.Tick += OnPreviewTimerTick;
             _previewTimer.Start();
-            Debug.WriteLine($"[State:Preview] Preview timer started for {_previewSeconds}s");
+            Telemetry.Legacy($"[State:Preview] Preview timer started for {_previewSeconds}s");
         }
 
         private void OnPreviewTimerTick(object? sender, EventArgs e)
         {
-            Debug.WriteLine("[State:Preview] Timer elapsed -> Idle");
+            Telemetry.Legacy("[State:Preview] Timer elapsed -> Idle");
             _previewTimer?.Stop();
             _previewTimer = null;
             if (_state != AppState.Preview) return;
@@ -560,7 +574,7 @@ namespace SaftApp
 
         private void EnterVideoState()
         {
-            Debug.WriteLine("[State:Video] EnterVideoState");
+            Telemetry.Legacy("[State:Video] EnterVideoState");
             HideAllContent();
             videoGrid.Visibility = Visibility.Visible;
             PlayLocalVideo("media\\video.mp4");
@@ -568,7 +582,7 @@ namespace SaftApp
 
         private void VideoPlayer_MediaEnded(object sender, RoutedEventArgs e)
         {
-            Debug.WriteLine("[State:Video] MediaEnded -> Idle");
+            Telemetry.Legacy("[State:Video] MediaEnded -> Idle");
             _videoTimer?.Stop();
             _videoTimer = null;
             TransitionTo(AppState.Idle);
@@ -579,7 +593,7 @@ namespace SaftApp
         {
             try
             {
-                Debug.WriteLine($"[Animation] Begin {resourceKey} duration={(duration.HasValue ? duration.Value.ToString() : "resource-default")} target={(target as FrameworkElement)?.Name ?? target?.GetType().Name ?? "window"}");
+                Telemetry.Legacy($"[Animation] Begin {resourceKey} duration={(duration.HasValue ? duration.Value.ToString() : "resource-default")} target={(target as FrameworkElement)?.Name ?? target?.GetType().Name ?? "window"}");
                 var sb = ((Storyboard)FindResource(resourceKey)).Clone();
 
                 if (target is not null)
@@ -595,15 +609,15 @@ namespace SaftApp
                 if (onCompleted is not null)
                     sb.Completed += onCompleted;
 
-                sb.Completed += (_, __) => Debug.WriteLine($"[Animation] Completed {resourceKey}");
+                sb.Completed += (_, __) => Telemetry.Legacy($"[Animation] Completed {resourceKey}");
                 sb.Begin(this, handoffBehavior: HandoffBehavior.SnapshotAndReplace, isControllable: true);
             }
-            catch (Exception ex) { Debug.WriteLine($"[Animation] {resourceKey}: {ex}"); }
+            catch (Exception ex) { Telemetry.Legacy($"[Animation] {resourceKey}: {ex}"); }
         }
 
         private void StopAllStateTimers()
         {
-            Debug.WriteLine("[Timers] StopAllStateTimers");
+            Telemetry.Legacy("[Timers] StopAllStateTimers");
             _countdownTimer.Stop();
             _previewTimer?.Stop();
             _previewTimer = null;
@@ -613,15 +627,17 @@ namespace SaftApp
 
         private async Task StartCameraAsync(int cameraIndex)
         {
+            Telemetry.Info("CameraOpenRequested", new { CameraIndex = cameraIndex });
             if (_capture is not null && _capture.IsOpened()) return;
 
             await StopCameraAsync();
 
             VideoCapture? cap = new VideoCapture(cameraIndex, VideoCaptureAPIs.DSHOW);
             if (!cap.IsOpened()) { cap.Release(); cap.Dispose(); cap = new VideoCapture(cameraIndex, VideoCaptureAPIs.ANY); }
-            if (!cap.IsOpened()) { cap.Release(); cap.Dispose(); SetCountdownText("Camera not found", 1); return; }
+            if (!cap.IsOpened()) { cap.Release(); cap.Dispose(); Telemetry.Warning("CameraUnavailable", new { CameraIndex = cameraIndex }); SetCountdownText("Camera not found", 1); return; }
 
             TrySetHighestResolution(cap);
+            Telemetry.Info("CameraOpened", new { CameraIndex = cameraIndex, Width = cap.FrameWidth, Height = cap.FrameHeight, Fps = cap.Fps });
 
             var env = Environment.GetEnvironmentVariable("PhotoBoothWorking");
             if (string.IsNullOrWhiteSpace(env))
@@ -710,7 +726,8 @@ namespace SaftApp
                 }
 
                 if (cap is null || full is null || prev is null) { Thread.Sleep(5); continue; }
-                if (!cap.Read(full) || full.Empty()) { Thread.Sleep(5); continue; }
+                if (!cap.Read(full) || full.Empty()) { Interlocked.Increment(ref _frameReadFailures); Thread.Sleep(5); continue; }
+                Interlocked.Increment(ref _framesCaptured);
 
                 Cv2.Resize(full, prev, new OpenCvSharp.Size(_previewWidth, _previewHeight),
                            interpolation: InterpolationFlags.Area);
@@ -811,7 +828,7 @@ namespace SaftApp
                         FaceLayer.Children.Clear();
                 });
             }
-            catch (Exception ex) { Debug.WriteLine($"[FaceDetect] {ex.Message}"); }
+            catch (Exception ex) { Telemetry.Legacy($"[FaceDetect] {ex.Message}"); }
             finally
             {
                 frame.Dispose();
@@ -848,18 +865,18 @@ namespace SaftApp
 
             if (found is null)
             {
-                Debug.WriteLine("[FaceDetect] haarcascade_frontalface_default.xml not found — face detection disabled.");
+                Telemetry.Legacy("[FaceDetect] haarcascade_frontalface_default.xml not found — face detection disabled.");
                 return null;
             }
 
             try
             {
                 var cc = new CascadeClassifier(found);
-                if (cc.Empty()) { cc.Dispose(); Debug.WriteLine("[FaceDetect] Cascade empty."); return null; }
-                Debug.WriteLine($"[FaceDetect] Cascade loaded: {found}");
+                if (cc.Empty()) { cc.Dispose(); Telemetry.Legacy("[FaceDetect] Cascade empty."); return null; }
+                Telemetry.Legacy($"[FaceDetect] Cascade loaded: {found}");
                 return cc;
             }
-            catch (Exception ex) { Debug.WriteLine($"[FaceDetect] Load failed: {ex.Message}"); return null; }
+            catch (Exception ex) { Telemetry.Legacy($"[FaceDetect] Load failed: {ex.Message}"); return null; }
         }
 
         // Called on UI thread after each detection pass.
@@ -929,9 +946,13 @@ namespace SaftApp
             if (_state != AppState.Idle || _isTransitioning) return;
             TransitionTo(AppState.Countdown);
         }
-        private void BtnTrigger3_Click(object sender, RoutedEventArgs e) { }
-        private void BtnTrigger4_Click(object sender, RoutedEventArgs e) { }
-        private void BtnTrigger5_Click(object sender, RoutedEventArgs e) { }
+        private async void BtnTrigger3_Click(object sender, RoutedEventArgs e)
+            => await SendExperienceAsync("video", "ping.mp4", "Trigger3", "Display One");
+
+        private async void BtnTrigger4_Click(object sender, RoutedEventArgs e)
+            => await SendExperienceAsync("video", "ping.mp4", "Trigger4", "Projector");
+        private async void BtnTrigger5_Click(object sender, RoutedEventArgs e)
+            => await SendExperienceAsync("video", "ping.mp4", "Trigger5", "Display Two");
 
         private async Task InitializeSerialAsync()
         {
@@ -946,7 +967,7 @@ namespace SaftApp
                 if (_serialOptions.AutoOpen)
                 {
                     bool ok = await _serialService.OpenAsync();
-                    Debug.WriteLine($"[Serial] Open ({_serialOptions.PortName}@{_serialOptions.BaudRate}) → {ok}");
+                    Telemetry.Legacy($"[Serial] Open ({_serialOptions.PortName}@{_serialOptions.BaudRate}) → {ok}");
 
                     if (!ok)
                         SetCountdownText($"Serial {_serialOptions.PortName ?? "?"} not open", 1);
@@ -957,11 +978,11 @@ namespace SaftApp
                     }
                 }
             }
-            catch (Exception ex) { Debug.WriteLine(ex); }
+            catch (Exception ex) { Telemetry.Legacy(ex); }
         }
 
         private void Serial_StatusChanged(object? sender, SerialStatusEventArgs e)
-            => Trace.WriteLine($"[Serial] {e}");
+            => Telemetry.Legacy($"[Serial] {e}");
 
         private void Serial_LineReceived(object? sender, string line)
         {
@@ -985,7 +1006,7 @@ namespace SaftApp
                     ParseDebugBreakBeam(upper);
                 }
             }
-            catch (Exception ex) { Debug.WriteLine(ex); }
+            catch (Exception ex) { Telemetry.Legacy(ex); }
         }
 
         private void ParseDebugManualButton(string upper)
@@ -1078,7 +1099,7 @@ namespace SaftApp
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Video] {ex}");
+                Telemetry.Legacy($"[Video] {ex}");
                 SetCountdownText("Video error", 1);
                 TransitionTo(AppState.Idle);
             }
@@ -1118,6 +1139,7 @@ namespace SaftApp
 
         protected override async void OnClosed(EventArgs e)
         {
+            await StopNetworkAsync();
             await StopCameraAsync();
             _faceCascade?.Dispose();
             _faceCascade = null;
@@ -1132,7 +1154,7 @@ namespace SaftApp
                                    ?? Path.Combine(AppContext.BaseDirectory, "media", "icon.png");
                 if (string.IsNullOrWhiteSpace(iconPath) || !File.Exists(iconPath))
                 {
-                    Debug.WriteLine("[Branding] icon.png not found");
+                    Telemetry.Legacy("[Branding] icon.png not found");
                     return;
                 }
 
@@ -1187,17 +1209,17 @@ namespace SaftApp
                         {
                             var icoUri = new Uri(icoPath, UriKind.Absolute);
                             this.Icon = BitmapFrame.Create(icoUri);
-                            Debug.WriteLine($"[Branding] Window.Icon set from {icoPath}");
+                            Telemetry.Legacy($"[Branding] Window.Icon set from {icoPath}");
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"[Branding] Failed to set Window.Icon from {icoPath}: {ex.Message}");
+                            Telemetry.Legacy($"[Branding] Failed to set Window.Icon from {icoPath}: {ex.Message}");
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[Branding] Window icon assignment failed: {ex}");
+                    Telemetry.Legacy($"[Branding] Window icon assignment failed: {ex}");
                 }
 
                 // Also set the preview button to the icon if no last captured image
@@ -1211,14 +1233,14 @@ namespace SaftApp
                     bi.Freeze();
                     _lastCapturedImage = bi;
                     imgPreviewButton.Source = bi;
-                    Debug.WriteLine($"[Branding] Set preview button image to icon.png");
+                    Telemetry.Legacy($"[Branding] Set preview button image to icon.png");
                 }
 
                 // Note: Taskbar uses Window.Icon and the application embedded icon. Ensure ApplicationIcon is set in the project file.
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[Branding] failed: {ex}");
+                Telemetry.Legacy($"[Branding] failed: {ex}");
             }
         }
     }

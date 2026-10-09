@@ -1,0 +1,29 @@
+<Project>
+  <PropertyGroup>
+    <!-- Environment variables are exposed as MSBuild properties. -->
+    <PhotoBoothOneDriveRoot Condition="'$(PhotoBoothOneDriveRoot)' == ''">$(OneDrive)</PhotoBoothOneDriveRoot>
+    <PhotoBoothOneDriveRoot Condition="'$(PhotoBoothOneDriveRoot)' == ''">$(OneDriveConsumer)</PhotoBoothOneDriveRoot>
+    <PhotoBoothOneDriveRoot Condition="'$(PhotoBoothOneDriveRoot)' == ''">$(OneDriveCommercial)</PhotoBoothOneDriveRoot>
+    <PhotoBoothBinRoot Condition="'$(PhotoBoothBinRoot)' == '' and '$(PhotoBoothOneDriveRoot)' != ''">$(PhotoBoothOneDriveRoot)\Home Technologies\Bin</PhotoBoothBinRoot>
+    <CopyBuildOutputToOneDrive Condition="'$(CopyBuildOutputToOneDrive)' == ''">true</CopyBuildOutputToOneDrive>
+  </PropertyGroup>
+
+  <Target Name="CopyPhotoBoothBuildOutput" AfterTargets="Build"
+          Condition="'$(CopyBuildOutputToOneDrive)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and ('$(MSBuildProjectName)' == 'Camera' or '$(MSBuildProjectName)' == 'Experience' or '$(MSBuildProjectName)' == 'ExperienceX')">
+    <Warning Condition="'$(PhotoBoothBinRoot)' == ''" Text="OneDrive is not configured. Skipping the PhotoBooth output copy. Set PhotoBoothOneDriveRoot or PhotoBoothBinRoot to choose a destination." />
+    <PropertyGroup>
+      <_PhotoBoothDestination>$(PhotoBoothBinRoot)\$(MSBuildProjectName)\</_PhotoBoothDestination>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(PhotoBoothBinRoot)' != ''">
+      <_PhotoBoothBuildFiles Include="$(TargetDir)**\*"
+          Exclude="$(TargetDir)logs\**\*;$(TargetDir)Output\**\*;$(TargetDir)experience.log" />
+      <_PhotoBoothBuildFiles Remove="$(TargetDir)appsettings.json" Condition="'$(MSBuildProjectName)' == 'ExperienceX' and (Exists('$(_PhotoBoothDestination)appsettings.json') or Exists('$(_PhotoBoothDestination)appsettings.json.bak'))" />
+      <_PhotoBoothBuildFiles Remove="$(TargetDir)appsettings.json.bak;$(TargetDir)appsettings.json.lock;$(TargetDir)appsettings.json.*.tmp;$(TargetDir)appsettings.json.rejected-*" Condition="'$(MSBuildProjectName)' == 'ExperienceX'" />
+    </ItemGroup>
+    <Copy Condition="'$(PhotoBoothBinRoot)' != ''" SourceFiles="@(_PhotoBoothBuildFiles)"
+          DestinationFiles="@(_PhotoBoothBuildFiles->'$(_PhotoBoothDestination)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Message Condition="'$(PhotoBoothBinRoot)' != ''" Importance="high"
+             Text="$(MSBuildProjectName) build output copied to $(_PhotoBoothDestination)" />
+  </Target>
+</Project>
