@@ -15,7 +15,7 @@ using Vortice.MediaFoundation;
 namespace ExperienceX;
 
 // Created and disposed on the render worker. No UI thread may touch these resources.
-internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, string _monitor) : IDisposable
+internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, string _display) : IDisposable
 {
     private ID3D11Device _device = null!;
     private ID3D11DeviceContext _context = null!;
@@ -31,6 +31,10 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     private ID3D11Buffer _constants = null!;
     private ID3D11SamplerState _sampler = null!;
     private ID3D11BlendState _videoBlend = null!;
+    private ID3D11VertexShader _matVs = null!;
+    private ID3D11PixelShader _matPs = null!;
+    private ID3D11InputLayout _matLayout = null!;
+    private ID3D11RasterizerState _matRasterizer = null!;
     private IMFDXGIDeviceManager _deviceManager = null!;
     private ID3D11Texture2D? _videoTexture;
     private ID3D11ShaderResourceView? _videoView;
@@ -91,12 +95,17 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         _constants = _device.CreateBuffer((uint)Marshal.SizeOf<Constants>(), BindFlags.ConstantBuffer);
         _sampler = _device.CreateSamplerState(new SamplerDescription(Filter.MinMagMipLinear, TextureAddressMode.Clamp));
         _videoBlend = CreateVideoBlendState(_device);
+        var matShader = Shader("MatVS.cso");
+        _matVs = _device.CreateVertexShader(matShader);
+        _matPs = _device.CreatePixelShader(Shader("MatPS.cso"));
+        _matLayout = _device.CreateInputLayout([new InputElementDescription("POSITION", 0, Format.R32G32_Float, 0, 0)], matShader);
+        _matRasterizer = _device.CreateRasterizerState(RasterizerDescription.CullNone);
         _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
         _deviceManager.ResetDevice(_device).CheckError();
         CreateTarget();
         Telemetry.Info("DirectXRendererReady", new
         {
-            MonitorName = _monitor,
+            DisplayName = _display,
             Adapter = adapter.Description.Description,
             Renderer = "D3D11 + DirectComposition + Media Foundation",
             FrameLatency = 1,
@@ -156,12 +165,23 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     }
     public void DrawVideo(double opacity, ExperienceOptions options, (Vector4, Vector4, Vector4) transform, int _videoWidth, int _videoHeight, Color4 background)
     {
+        BeginFrame(background);
+        DrawLayer(_videoView, opacity, options, transform, _videoWidth, _videoHeight);
+    }
+    public void BeginFrame(Color4 background)
+    {
         AssertOwnerThread();
         _context.OMSetRenderTargets(_rtv!);
         _context.ClearRenderTargetView(_rtv!, background);
+    }
+    public void DrawLayer(ID3D11ShaderResourceView? view, double opacity, ExperienceOptions options, (Vector4, Vector4, Vector4) transform, int _videoWidth, int _videoHeight, BlackKeyOptions? blackKey = null)
+    {
+        AssertOwnerThread();
+
         _context.OMSetBlendState(_videoBlend);
-        if (_videoView is not null && opacity > 0)
+        if (view is not null && opacity > 0)
         {
+            var key = blackKey ?? options.BlackKey;
             var (r0, r1, r2) = transform;
             var videoAspect = (float)_videoWidth / _videoHeight;
             var targetAspect = (float)_width / _height;
@@ -170,19 +190,37 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
                 Row0 = r0,
                 Row1 = r1,
                 Row2 = r2,
-                Effects = new((float)opacity, (float)options.BlackKey.Threshold, (float)options.BlackKey.Softness, options.BlackKey.Enabled ? 1 : 0),
+                Effects = new((float)opacity, (float)key.Threshold, (float)key.Softness, key.Enabled ? 1 : 0),
                 Aspect = new(Math.Min(1, videoAspect / targetAspect), Math.Min(1, targetAspect / videoAspect), 0, 0)
             };
             _context.UpdateSubresource(in data, _constants);
             _context.RSSetViewport(0, 0, _width, _height);
             _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+            _context.IASetInputLayout(null);
             _context.VSSetShader(_vs);
             _context.PSSetShader(_ps);
             _context.PSSetConstantBuffer(0, _constants);
             _context.PSSetSampler(0, _sampler);
-            _context.PSSetShaderResource(0, _videoView);
+            _context.PSSetShaderResource(0, view);
             _context.Draw(3, 0);
         }
+    }
+    internal void DrawMat(ID3D11Buffer vertices, int count)
+    {
+        AssertOwnerThread();
+        _context.PSUnsetShaderResource(0);
+        _context.OMSetBlendState(null);
+        _context.RSSetState(_matRasterizer);
+        _context.RSSetViewport(0, 0, _width, _height);
+        _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+        _context.IASetInputLayout(_matLayout);
+        _context.IASetVertexBuffer(0, vertices, 8);
+        _context.VSSetShader(_matVs);
+        _context.PSSetShader(_matPs);
+        _context.Draw((uint)count, 0);
+        _context.IASetVertexBuffer(0, null!, 0);
+        _context.IASetInputLayout(null);
+        _context.RSSetState(null);
     }
     public void CommitAndWait()
     {
@@ -198,12 +236,12 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     public void Dispose()
     {
         AssertOwnerThread();
-        IDisposable?[] resources = [_videoView, _videoTexture, _rtv, _videoBlend, _sampler, _constants, _ps, _vs, _latency, _visual, _target, _composition, _swapChain, _deviceManager, _context, _device];
+        IDisposable?[] resources = [_videoView, _videoTexture, _rtv, _matRasterizer, _matLayout, _matPs, _matVs, _videoBlend, _sampler, _constants, _ps, _vs, _latency, _visual, _target, _composition, _swapChain, _deviceManager, _context, _device];
         foreach (var resource in resources)
             try
             {
                 resource?.Dispose();
             }
-            catch (Exception ex) { Telemetry.Warning("GraphicsResourceCleanupFailed", new { MonitorName = _monitor, Reason = ex.Message }); }
+            catch (Exception ex) { Telemetry.Warning("GraphicsResourceCleanupFailed", new { DisplayName = _display, Reason = ex.Message }); }
     }
 }

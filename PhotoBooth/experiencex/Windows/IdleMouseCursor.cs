@@ -6,7 +6,7 @@ using Forms = System.Windows.Forms;
 
 namespace ExperienceX;
 
-// One owner for all monitor windows: every Hide has a matching Show on the UI thread.
+// One owner for all display windows: every Hide has a matching Show on the UI thread.
 internal sealed class IdleMouseCursor : IDisposable
 {
     private static readonly TimeSpan IdleDelay = TimeSpan.FromSeconds(5);
@@ -42,7 +42,8 @@ internal sealed class IdleMouseCursor : IDisposable
 
     internal void Poll()
     {
-        if (_disposed) return;
+        if (_disposed)
+            return;
         var focused = _focused();
         var position = _position();
         var now = _now();
@@ -55,7 +56,8 @@ internal sealed class IdleMouseCursor : IDisposable
 
     private void SetHidden(bool hidden)
     {
-        if (_hidden == hidden) return;
+        if (_hidden == hidden)
+            return;
         _setHidden(hidden);
         _hidden = hidden;
     }
@@ -63,14 +65,16 @@ internal sealed class IdleMouseCursor : IDisposable
     private static bool ApplicationHasFocus()
     {
         var foreground = GetForegroundWindow();
-        if (foreground == nint.Zero) return false;
+        if (foreground == nint.Zero)
+            return false;
         GetWindowThreadProcessId(foreground, out var process);
         return process == Environment.ProcessId;
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+            return;
         _disposed = true;
         _timer.Stop();
         _timer.Tick -= Tick;

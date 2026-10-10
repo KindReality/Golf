@@ -11,21 +11,43 @@ internal sealed class UdpBroadcastListener(Func<BroadcastOptions> options,
     private readonly RequestDeduplicator _duplicates = new();
     private readonly List<Task> _loops = [];
     private Binding? _binding;
+    private Binding? _eventsBinding;
     private bool _stopping;
     public int Port => _binding is null ? 0 : ((IPEndPoint)_binding.Client.Client.LocalEndPoint!).Port;
+    public int EventsPort => _eventsBinding is null ? 0 : ((IPEndPoint)_eventsBinding.Client.Client.LocalEndPoint!).Port;
+
+    public void Bind(int commandsPort, int eventsPort)
+    {
+        ObjectDisposedException.ThrowIf(_stopping, this);
+        if (commandsPort == eventsPort) throw new ArgumentException("Events and commands require different ports.");
+        var commands = new Binding(commandsPort);
+        Binding events;
+        try { events = new Binding(eventsPort); }
+        catch { commands.Dispose(); throw; }
+        _binding?.Stop();
+        _eventsBinding?.Stop();
+        _binding = commands;
+        _eventsBinding = events;
+        _loops.RemoveAll(task => task.IsCompleted);
+        _loops.Add(ListenAsync(commands, "command"));
+        _loops.Add(ListenAsync(events, "event"));
+        Telemetry.Info("UdpListening", new { Address = "0.0.0.0", CommandsPort = Port, EventsPort, DeviceName = options().EffectiveDeviceName, Broadcast = true });
+    }
 
     public void Bind(int port)
     {
         ObjectDisposedException.ThrowIf(_stopping, this);
         var replacement = new Binding(port);
         _binding?.Stop();
+        _eventsBinding?.Stop();
+        _eventsBinding = null;
         _binding = replacement;
         _loops.RemoveAll(task => task.IsCompleted);
         _loops.Add(ListenAsync(replacement));
         Telemetry.Info("UdpListening", new { Address = "0.0.0.0", Port, DeviceName = options().EffectiveDeviceName, Broadcast = true });
     }
 
-    private async Task ListenAsync(Binding binding)
+    private async Task ListenAsync(Binding binding, string? expectedType = null)
     {
         using var owner = binding;
         var token = binding.Cancellation.Token;
@@ -42,6 +64,11 @@ internal sealed class UdpBroadcastListener(Func<BroadcastOptions> options,
                     continue;
                 }
                 var current = options();
+                if (expectedType is not null && message.Type != expectedType)
+                {
+                    Telemetry.Warning("UdpWrongMessagePort", new { ExpectedType = expectedType, message.Type }, message.RequestId);
+                    continue;
+                }
                 if (!message.Targets(current.EffectiveDeviceName))
                 {
                     Telemetry.Debug("UdpTargetIgnored", new { message.Device, DeviceName = current.EffectiveDeviceName }, message.RequestId);
@@ -76,6 +103,7 @@ internal sealed class UdpBroadcastListener(Func<BroadcastOptions> options,
         if (_stopping) return;
         _stopping = true;
         _binding?.Stop();
+        _eventsBinding?.Stop();
         await Task.WhenAll(_loops).ConfigureAwait(false);
     }
 

@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <Target Name="CopyPhotoBoothBuildOutput" AfterTargets="Build"
-          Condition="'$(CopyBuildOutputToOneDrive)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and ('$(MSBuildProjectName)' == 'Camera' or '$(MSBuildProjectName)' == 'Experience' or '$(MSBuildProjectName)' == 'ExperienceX')">
+          Condition="'$(CopyBuildOutputToOneDrive)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and ('$(MSBuildProjectName)' == 'Camera' or '$(MSBuildProjectName)' == 'Experience' or '$(MSBuildProjectName)' == 'ExperienceX' or '$(MSBuildProjectName)' == 'Controller')">
     <Warning Condition="'$(PhotoBoothBinRoot)' == ''" Text="OneDrive is not configured. Skipping the PhotoBooth output copy. Set PhotoBoothOneDriveRoot or PhotoBoothBinRoot to choose a destination." />
     <PropertyGroup>
       <_PhotoBoothDestination>$(PhotoBoothBinRoot)\$(MSBuildProjectName)\</_PhotoBoothDestination>

@@ -41,7 +41,7 @@ Channel numbers start at **1**, in the selected device's configured Windows chan
 
 Video playback is independent per monitor. Audio playback is independent per **resolved endpoint ID and channel**. New valid requests replace playback only in the same slot, after the replacement audio is prepared. Omitted-channel audio has its own slot and can mix with numbered-channel audio. Video's embedded sound remains enabled unless `mute` is true; it uses the normal video audio output. Standalone audio runs independently of all video windows. `mute` defaults to false for both experience types and never changes system volume or other playbacks.
 
-There is currently **no stop command**. Playback finishes at the file's end or its configured maximum, whichever comes first. Optional `requestId` and `source` are carried into telemetry. Malformed requests, unsupported experience names, unavailable files, and invalid channels are rejected without replacing valid playback. Files must resolve inside the configured media directory; URL and rooted-path requests are rejected.
+There is currently **no stop command**. Playback finishes at the file's natural end. Optional `requestId` and `source` are carried into telemetry. Malformed requests, unsupported experience names, unavailable files, and invalid channels are rejected without replacing valid playback. Files must resolve inside the configured media directory; URL and rooted-path requests are rejected.
 
 ```powershell
 ./Experience/Send-Experience.ps1 -Value ping.mp4
@@ -58,18 +58,16 @@ Edit `appsettings.json` beside the running executable. Builds copy source config
 | DefaultMonitorName | empty | Monitor used by commands without a monitor; empty means primary |
 | MonitorAliases | {} | User-managed alias-to-Windows-monitor map; aliases work in commands and DefaultMonitorName |
 | DefaultAudioDevice | empty | Audio endpoint name or ID used by commands without a device; empty means system multimedia default |
-| MaxVideoPlaybackLength | 10 | Maximum video duration, seconds |
-| MaxAudioPlaybackLength | 10 | Maximum standalone audio duration, seconds |
-| TransitionInSeconds | 5 | Video opacity fade-in duration |
-| TransitionOutSeconds | 1 | Video opacity fade-out duration |
-| AudioTransitionInSeconds | 5 | Standalone audio volume fade-in duration |
-| AudioTransitionOutSeconds | 1 | Standalone audio volume fade-out duration |
+| TransitionInSeconds | 0.5 | Video opacity fade-in duration |
+| TransitionOutSeconds | 3 | Video opacity fade-out duration |
+| AudioTransitionInSeconds | 0.5 | Standalone audio volume fade-in duration |
+| AudioTransitionOutSeconds | 3 | Standalone audio volume fade-out duration |
 | VideoDirectory | Media | Local video directory, relative to the executable or absolute |
 | AudioDirectory | Media | Local audio directory, relative to the executable or absolute |
 | UdpPort | 21324 | IPv4 UDP listen port |
 | DeveloperMode | false | true: separate 800×600 ordinary windows centered on each monitor, without desktop transparency or topmost enforcement |
 
-Lengths must be greater than zero and at most 86400 seconds. Fade durations range from zero (immediate) to 3600 seconds. Each video starts with shader alpha exactly zero; fade-in begins only after playback position advances. Video keeps advancing throughout fade-out. At completion the shader emits zero alpha and the live player is retained through two distinct WPF rendering callbacks before being closed. This allows the transparent scene to be submitted; callbacks are not proof of physical display presentation. Fade-out starts early enough to complete before the natural end or maximum duration; short experiences shorten the fade. Audio fades and its duration limit are applied per sample, with normal device buffering latency. Live duration changes affect active playback. Video and audio settings are independent. Legacy `MonitorName` and `maxPlaybackLength` are read as `DefaultMonitorName` and `MaxVideoPlaybackLength` when the new keys are absent.
+Fade durations range from zero (immediate) to 3600 seconds. Each video starts with shader alpha exactly zero; fade-in begins only after playback position advances. Video keeps advancing throughout fade-out. At completion the shader emits zero alpha and the live player is retained through two distinct WPF rendering callbacks before being closed. This allows the transparent scene to be submitted; callbacks are not proof of physical display presentation. Fade-out starts early enough to complete before the natural end; short experiences shorten the fade. Audio fades are applied per sample, with normal device buffering latency. Video and audio settings are independent. Legacy `MonitorName` is read as `DefaultMonitorName` when the new keys are absent.
 
 Available monitor names, audio device names/IDs/channel counts, selections, request IDs, playback replacement, completion and failures are logged in machine-prefixed JSONL files under `logs/Experience`. No Windows Event Log is used. PlaybackPerformance reports WPF callback timing and process allocation/GC counts; it cannot count presented or decoded video frames.
 

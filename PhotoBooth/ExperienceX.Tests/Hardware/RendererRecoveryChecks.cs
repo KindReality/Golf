@@ -26,7 +26,7 @@ internal static class RendererRecoveryChecks
     {
         using var window = new Forms.Form { Text = "ExperienceX renderer verification", Width = 640, Height = 360, ShowInTaskbar = false };
         var hwnd = window.Handle;
-        var options = new ExperienceOptions { ConfigurationMode = true, DisplayKeystones = new() { ["TEST"] = new() } };
+        var options = new ExperienceOptions { ConfigurationMode = true, DisplayScreens = new() { ["TEST"] = new() { new ScreenOptions { Points = new() } } } };
         int fail = 0;
         using var hidden = new ManualResetEventSlim();
         using (var renderer = new VideoRenderer(hwnd, 640, 360, options, "TEST", () => hidden.Set(), () =>
@@ -36,11 +36,11 @@ internal static class RendererRecoveryChecks
         }))
         {
             Wait(() => renderer.State == RendererState.Idle);
-            if (!renderer.ConfirmKeystoneAsync(options.KeystoneFor("TEST")).GetAwaiter().GetResult())
+            if (!renderer.ConfirmPointsAsync(options.PointsFor("TEST")).GetAwaiter().GetResult())
                 throw new Exception("Renderer did not acknowledge applied geometry.");
             var count = renderer.TransformComputationCount;
             for (int i = 0; i < 20; i++)
-                if (!renderer.ConfirmKeystoneAsync(options.KeystoneFor("TEST")).GetAwaiter().GetResult())
+                if (!renderer.ConfirmPointsAsync(options.PointsFor("TEST")).GetAwaiter().GetResult())
                     throw new Exception("Repeated renderer confirmation failed.");
             if (renderer.TransformComputationCount != count)
                 throw new Exception("Unchanged keystone was recomputed per frame.");
@@ -55,12 +55,12 @@ internal static class RendererRecoveryChecks
             renderer.Dispose();
             if (!renderer.Stopped)
                 throw new Exception("Failed graphics worker did not stop.");
-            if (renderer.ConfirmKeystoneAsync(options.KeystoneFor("TEST")).GetAwaiter().GetResult())
+            if (renderer.ConfirmPointsAsync(options.PointsFor("TEST")).GetAwaiter().GetResult())
                 throw new Exception("Failed renderer acknowledged a save.");
         }
         using var restored = new VideoRenderer(hwnd, 640, 360, options, "TEST", () => { });
         Wait(() => restored.State == RendererState.Idle);
-        if (!restored.ConfirmKeystoneAsync(options.KeystoneFor("TEST")).GetAwaiter().GetResult())
+        if (!restored.ConfirmPointsAsync(options.PointsFor("TEST")).GetAwaiter().GetResult())
             throw new Exception("Recreated renderer did not present the calibration.");
         restored.Dispose();
         using var blocked = new ManualResetEventSlim();

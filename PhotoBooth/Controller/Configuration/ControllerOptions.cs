@@ -1,0 +1,117 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using PhotoBooth.Networking;
+
+namespace Controller.Configuration;
+
+internal sealed record BuildEnvironment(string Environment, int DefaultTriggerCooldownMilliseconds)
+{
+    public static BuildEnvironment Load(string path)
+    {
+        var value = JsonSerializer.Deserialize<BuildEnvironment>(File.ReadAllText(path)) ?? throw new ArgumentException("Missing build environment.");
+        if (value.Environment is not ("Development" or "Production") || value.DefaultTriggerCooldownMilliseconds != (value.Environment == "Production" ? 10000 : 1000))
+            throw new ArgumentException("Build environment must be Development (1000 ms) or Production (10000 ms).");
+        return value;
+    }
+}
+
+internal sealed record ControllerOptions : BroadcastOptions
+{
+    public ControllerOptions() => UdpSendAttempts = 1;
+    public ArduinoOptions[] Arduinos { get; init; } = [];
+    public TriggerOptions[] Triggers { get; init; } = [];
+    public SceneOptions[] Scenes { get; init; } = [];
+    public PlaylistOptions[] Playlists { get; init; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public JsonElement Telemetry { get; init; }
+    [JsonIgnore] public BuildEnvironment Build { get; init; } = new("Development", 1000);
+    internal static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, WriteIndented = true };
+    public static ControllerOptions Parse(string text, BuildEnvironment environment)
+    {
+        using var document = JsonDocument.Parse(text); RejectDuplicates(document.RootElement);
+        var value = JsonSerializer.Deserialize<ControllerOptions>(text, Json) ?? throw new ArgumentException("Configuration must be an object.");
+        value = value with { Build = environment }; value.Validate(); return value;
+    }
+    public PlaylistOptions Playlist(string name, string? type = null) => Playlists.FirstOrDefault(p => Same(p.Name, name) && (type is null || p.Type == type)) ?? throw new ArgumentException($"Missing {type ?? ""} playlist: {name}.");
+    public SceneOptions Scene(string name) => Scenes.FirstOrDefault(s => Same(s.Name, name)) ?? throw new ArgumentException($"Unknown scene: {name}.");
+    private void Validate()
+    {
+        ValidateNetwork();
+        if (UdpPort is not null) throw new ArgumentException("Use UdpEventsPort and UdpCommandsPort.");
+        if (Arduinos is null || Triggers is null || Playlists is null || Scenes is null || Arduinos.Any(a => a is null) || Triggers.Any(t => t is null) || Playlists.Any(p => p is null) || Scenes.Any(s => s is null) || Arduinos.Length > 128 || Triggers.Length > 4096 || Playlists.Length > 4096 || Scenes.Length > 4096)
+            throw new ArgumentException("Configuration lists require objects; maximum 128 Arduinos and 4096 triggers/playlists/scenes.");
+        Unique(Arduinos.Select(a => a.Name), "Arduino"); Unique(Arduinos.Select(a => a.Port), "serial port");
+        Unique(Triggers.Select(t => t.Name), "trigger"); Unique(Playlists.Select(p => p.Name), "playlist"); Unique(Scenes.Select(s => s.Name), "scene");
+        foreach (var arduino in Arduinos)
+            if (!arduino.Port.StartsWith("COM", StringComparison.OrdinalIgnoreCase) || !int.TryParse(arduino.Port.AsSpan(3), out var number) || number <= 0 || arduino.BaudRate is < 300 or > 2000000) throw new ArgumentException($"Invalid serial settings: {arduino.Name}.");
+        foreach (var playlist in Playlists)
+        {
+            if (playlist.Type is not ("ambient" or "storyboard") || playlist.Items is null || playlist.Items.Any(i => i is null) || playlist.Items.Length > 1000) throw new ArgumentException($"Invalid playlist type/items: {playlist.Name}.");
+            Unique(playlist.Items.Select(i => i.Name), $"item in {playlist.Name}");
+            foreach (var item in playlist.Items)
+            {
+                if (item.DelayMilliseconds is < 0 or > 86400000 || item.CooldownMilliseconds is < 0 or > 86400000 || item.Commands is null || item.Commands.Any(c => c is null) || item.Commands.Length is 0 or > 1000) throw new ArgumentException($"Invalid timing/commands: {playlist.Name}/{item.Name}.");
+                if (playlist.Type == "ambient")
+                {
+                    if (item.DelayMilliseconds != 0 || item.MinIntervalMilliseconds is null or < 1 or > 86400000 || item.MaxIntervalMilliseconds is null or < 1 or > 86400000 || item.MaxIntervalMilliseconds < item.MinIntervalMilliseconds || item.CooldownMilliseconds > item.MaxIntervalMilliseconds) throw new ArgumentException($"Ambient intervals must be valid and include cooldown: {playlist.Name}/{item.Name}.");
+                }
+                else if (item.MinIntervalMilliseconds is not null || item.MaxIntervalMilliseconds is not null) throw new ArgumentException($"Storyboard items use delays, not frequency: {playlist.Name}/{item.Name}.");
+                foreach (var command in item.Commands)
+                {
+                    if (command.Playlist is { } nested)
+                    {
+                        Playlist(nested, "storyboard");
+                        if (command.Device is not null || command.Payload.ValueKind != JsonValueKind.Undefined || command.Transport != "udp" || command.Type != "command") throw new ArgumentException("Local Playlist references cannot include transport/payload fields.");
+                        continue;
+                    }
+                    if (command.Transport is not ("udp" or "arduino") || command.Type is not ("command" or "event") || command.Payload.ValueKind != JsonValueKind.Object) throw new ArgumentException($"Invalid command: {playlist.Name}/{item.Name}.");
+                    if (command.Transport == "arduino" && (command.Type != "command" || !Arduinos.Any(a => Same(a.Name, command.Device)))) throw new ArgumentException($"Unknown Arduino target: {command.Device}.");
+                    BroadcastEnvelope.Create(this, command.Type, command.Device!, command.Payload);
+                    if (command.Type == "event") RequireInput(command.Payload);
+                }
+            }
+        }
+        var complete = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Visit(string name, HashSet<string> stack)
+        {
+            if (complete.Contains(name)) return;
+            if (!stack.Add(name)) throw new ArgumentException($"Nested playlist cycle at {name}.");
+            if (stack.Count > BroadcastEnvelope.MaximumHops) throw new ArgumentException("Nested playlists cannot exceed eight levels.");
+            foreach (var child in Playlist(name).Items.SelectMany(i => i.Commands).Where(c => c.Playlist is not null)) Visit(child.Playlist!, stack);
+            stack.Remove(name); complete.Add(name);
+        }
+        foreach (var playlist in Playlists) Visit(playlist.Name, new(StringComparer.OrdinalIgnoreCase));
+        foreach (var scene in Scenes)
+        {
+            Playlist(scene.AmbientPlaylist, "ambient");
+            if (scene.ActivatingPlaylist is not null) Playlist(scene.ActivatingPlaylist, "storyboard");
+            if (scene.DeactivatingPlaylist is not null) Playlist(scene.DeactivatingPlaylist, "storyboard");
+        }
+        foreach (var trigger in Triggers)
+        {
+            Playlist(trigger.Playlist, "storyboard");
+            if (trigger.CooldownMilliseconds is < 0 or > 86400000 || trigger.IntervalMilliseconds is < 1 or > 86400000) throw new ArgumentException($"Invalid trigger timing: {trigger.Name}.");
+            if (trigger.IntervalMilliseconds is not null)
+            {
+                if (trigger.SourceDevice is not null || trigger.Input is not null || trigger.Event is not null) throw new ArgumentException("A timed trigger cannot also match an event.");
+            }
+            else { ValidateName(trigger.SourceDevice, "SourceDevice", false); ValidateName(trigger.Input, "Input", false); ValidateName(trigger.Event, "Event", false); }
+        }
+    }
+    public static void RequireInput(JsonElement payload) => ValidateName(Text(payload, "input"), "input", false);
+    internal static string? Text(JsonElement body, string name) => body.ValueKind == JsonValueKind.Object && body.EnumerateObject().FirstOrDefault(p => Same(p.Name, name)).Value is { ValueKind: JsonValueKind.String } value ? value.GetString()?.Trim() : null;
+    internal static bool Same(string? left, string? right) => string.Equals(left?.Trim(), right?.Trim(), StringComparison.OrdinalIgnoreCase);
+    private static void Unique(IEnumerable<string> values, string kind)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in values) { ValidateName(name, kind, false); if (name != name.Trim() || name.Contains('/') || !names.Add(name)) throw new ArgumentException($"Duplicate/invalid {kind}: {name}."); }
+    }
+    private static void RejectDuplicates(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var field in value.EnumerateObject()) { if (!names.Add(field.Name)) throw new ArgumentException($"Duplicate field: {field.Name}."); RejectDuplicates(field.Value); }
+        }
+        else if (value.ValueKind == JsonValueKind.Array) foreach (var item in value.EnumerateArray()) RejectDuplicates(item);
+    }
+}

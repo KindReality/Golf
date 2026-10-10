@@ -1,7 +1,7 @@
 namespace ExperienceX;
 
 // A fixed set of command categories, each retaining only its newest pending value.
-internal sealed class RendererMailbox
+internal sealed class RendererMailbox(int capacity = RendererMailbox.Capacity)
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, (Action Run, Action? Replaced)> _pending = [];
@@ -20,7 +20,7 @@ internal sealed class RendererMailbox
                 _pending[key] = (run, replaced);
                 discard = old.Replaced;
             }
-            else if (_pending.Count < Capacity)
+            else if (_pending.Count < capacity)
             {
                 _pending.Add(key, (run, replaced));
                 _order.Enqueue(key);

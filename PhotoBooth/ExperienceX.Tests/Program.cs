@@ -4,9 +4,71 @@ internal static class TestSuites
 {
     public static async Task RunAsync(string[] arguments)
     {
+        if (arguments.SequenceEqual(["--all-screen-playback"]))
+        {
+            await AllScreenPlaybackChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--video-loop"]))
+        {
+            VideoLoopChecks.Run();
+            await VideoLoopHardwareChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--media-discovery"]))
+        {
+            await MediaDiscoveryChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--desktop-transparency"]))
+        {
+            await DesktopTransparencyChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--configuration-visibility"]))
+        {
+            await CalibrationVisibilityChecks.Run();
+            await DesktopTransparencyChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--screen-transparency"]))
+        {
+            await ScreenTransparencyChecks.Run();
+            await MediaDiscoveryChecks.Run();
+            await ScreenChromaKeyHardwareChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--screen-workflow"]))
+        {
+            await ScreenEditingWorkflowChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--mats"]))
+        {
+            await MatChecks.Run();
+            await MatHardwareChecks.Run();
+            return;
+        }
         if (arguments.SequenceEqual(["--cursor"]))
         {
             IdleMouseCursorChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--screens"]))
+        {
+            await ScreenChecks.Run();
+            await MatChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--screens-hardware"]))
+        {
+            GpuShaderChecks.Run();
+            await ScreenChromaKeyHardwareChecks.Run();
+            await MatHardwareChecks.Run();
+            await CalibrationVisibilityChecks.Run();
+            await MultiScreenHardwareChecks.Run();
+            await RendererRecoveryChecks.RunAsync();
+            await WindowRecoveryChecks.Run();
             return;
         }
         if (arguments.SequenceEqual(["--keyboard"]))
@@ -27,9 +89,14 @@ internal static class TestSuites
         if (unit)
         {
             CoreChecks.Run();
+            VideoLoopChecks.Run();
+            await ScreenChecks.Run();
+            await MatChecks.Run();
             IdleMouseCursorChecks.Run();
-            MonitorBackgroundChecks.Run();
+            DisplayBackgroundChecks.Run();
             await BackgroundPersistenceChecks.Run();
+            BackgroundSelectionChecks.Run();
+            await ScreenTransparencyChecks.Run();
             AudioVolumeChecks.Run();
             CoordinatedAudioChecks.Run();
             await LocalConfigurationChecks.Run();
@@ -46,8 +113,12 @@ internal static class TestSuites
         }
         if (hardware)
         {
+            await ScreenEditingWorkflowChecks.Run();
             await CoordinatedAudioHardwareChecks.RunAsync();
             GpuShaderChecks.Run();
+            await ScreenChromaKeyHardwareChecks.Run();
+            await MatHardwareChecks.Run();
+            await MultiScreenHardwareChecks.Run();
             await CalibrationVisibilityChecks.Run();
             await RendererRecoveryChecks.RunAsync();
             await WindowRecoveryChecks.Run();

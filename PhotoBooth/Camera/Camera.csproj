@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\Telemetry.cs" Link="Diagnostics\Telemetry.cs" />
+    <Compile Include="..\Shared\Appearance\DarkWindowChrome.cs" Link="Appearance\DarkWindowChrome.cs" />
     <Compile Include="..\Shared\Networking\*.cs" Link="Networking\Shared\%(Filename)%(Extension)" />
   </ItemGroup>
   <PropertyGroup>

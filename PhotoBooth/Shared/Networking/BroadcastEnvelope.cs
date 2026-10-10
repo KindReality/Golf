@@ -45,6 +45,7 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
             BroadcastOptions.ValidateName(fields.Event, "event", false);
         if (fields.HopCount is < 0 or > MaximumHops)
             throw new ArgumentException($"hopCount must be between 0 and {MaximumHops}.");
+        BroadcastChain.Validate(body);
         if (!double.IsFinite(fields.ProcessingTimeoutSeconds) || fields.ProcessingTimeoutSeconds is <= 0 or > 300)
             throw new ArgumentException("processingTimeoutSeconds must be greater than zero and at most 300.");
         return new(body, type, fields.Device!.Trim(), fields.Source!.Trim(), fields.RequestId!.Trim(),
@@ -56,13 +57,14 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         ExpiresAt is { } deadline && deadline <= now ||
         Stopwatch.GetElapsedTime(ReceivedTimestamp, timestamp ?? Stopwatch.GetTimestamp()).TotalSeconds >= ProcessingTimeoutSeconds;
 
-    public static byte[] Create(BroadcastOptions options, string type, string device, object payload, string? requestId = null)
+    public static byte[] Create(BroadcastOptions options, string type, string device, object payload, string? requestId = null,
+        BroadcastChain? chain = null)
     {
         options.ValidateNetwork();
         var body = JsonSerializer.SerializeToNode(payload, Json) as JsonObject ?? throw new ArgumentException("Payload must be an object.");
         // Reserve envelope fields so callers cannot accidentally override routing or retry identity.
         foreach (var key in body.Select(property => property.Key).ToArray())
-            if (new[] { "type", "device", "source", "requestId", "expiresAt", "hopCount", "processingTimeoutSeconds" }.Contains(key, StringComparer.OrdinalIgnoreCase))
+            if (new[] { "type", "device", "source", "requestId", "expiresAt", "hopCount", "processingTimeoutSeconds", "correlationId", "originSource", "causationId", "actionHistory" }.Contains(key, StringComparer.OrdinalIgnoreCase))
                 body.Remove(key);
         body["type"] = type;
         body["device"] = device;
@@ -70,7 +72,14 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         body["requestId"] = requestId ?? Guid.NewGuid().ToString("N");
         // Local monotonic time avoids requiring clock synchronization on an offline LAN.
         body["processingTimeoutSeconds"] = options.RequestLifetimeSeconds;
-        body["hopCount"] = 0;
+        body["hopCount"] = chain?.HopCount ?? 0;
+        if (chain is not null)
+        {
+            body["correlationId"] = chain.CorrelationId;
+            body["originSource"] = chain.OriginSource;
+            if (!string.IsNullOrEmpty(chain.CausationId)) body["causationId"] = chain.CausationId;
+            body["actionHistory"] = JsonSerializer.SerializeToNode(chain.ActionHistory, Json);
+        }
         var bytes = JsonSerializer.SerializeToUtf8Bytes(body, Json);
         Parse(bytes);
         return bytes;

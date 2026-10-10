@@ -104,7 +104,6 @@ internal sealed class CoordinatedAudioPlayback : IDisposable
                     Request.Mute,
                     Volume = Request.VolumePercent,
                     Coordinated = true,
-                    options.MaxAudioPlaybackLength,
                     options.AudioTransitionInSeconds,
                     options.AudioTransitionOutSeconds
                 }, Request.RequestId);
@@ -132,7 +131,7 @@ internal sealed class CoordinatedAudioPlayback : IDisposable
                                 Request.Channel,
                                 Volume = Request.VolumePercent,
                                 output.PositionSeconds,
-                                Reason = source.DurationSeconds <= options.MaxAudioPlaybackLength ? "MediaEnded" : "MaximumPlaybackLength",
+                                Reason = "MediaEnded",
                                 output.Underruns,
                                 Coordinated = true
                             }, Request.RequestId);

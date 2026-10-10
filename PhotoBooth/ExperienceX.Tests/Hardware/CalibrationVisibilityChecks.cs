@@ -25,7 +25,7 @@ internal static class CalibrationVisibilityChecks
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         await completion.Task.WaitAsync(TimeSpan.FromSeconds(15));
-        Console.WriteLine("Production GPU readback passed visible corner orbs before clicking, after release/cancel, with grid disabled, and removal when configuration mode exits.");
+        Console.WriteLine("Production GPU readback passed faint unselected video fills, stronger selected fills, polygon clipping, mat behavior, persistent corner orbs and removal when configuration mode exits.");
     }
 
     private static void Check()
@@ -44,7 +44,7 @@ internal static class CalibrationVisibilityChecks
             {
                 graphics.DrawVideo(0, options, default, 0, 0, new(0, 0, 0, 0));
                 if (overlay.Visible(options))
-                    overlay.Draw(graphics, options, "TEST", new KeystoneTransformCache());
+                    overlay.Draw(graphics, options, "TEST", new PointTransformCache(), "screen1");
                 using var buffer = graphics.SwapChain.GetBuffer<ID3D11Texture2D>(0);
                 graphics.Context.CopyResource(staging, buffer);
                 var mapped = graphics.Context.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
@@ -69,7 +69,16 @@ internal static class CalibrationVisibilityChecks
             overlay.Configure(options);
             if (!overlay.Animating(options))
                 throw new Exception("Idle configuration mode did not schedule throbbing corner animation.");
-            CornersVisible(Render());
+            var unselected = Render();
+            CornersVisible(unselected);
+            var centerOffset = (120 * 640 + 200) * 4;
+            if (unselected[centerOffset + 3] < 8 || unselected[centerOffset + 3] > 15 || unselected[centerOffset] <= unselected[centerOffset + 2])
+                throw new Exception("Unselected video screen did not have a faint blue fill while idle.");
+            overlay.SelectScreen(true);
+            var filled = Render();
+            if (filled[centerOffset + 3] < 30 || filled[centerOffset + 3] > 60 || filled[centerOffset] <= filled[centerOffset + 2])
+                throw new Exception("Selected screen did not have a mostly transparent blue fill.");
+            overlay.SelectScreen(false);
             overlay.Show(0);
             var selected = Render();
             if (selected[(1 * 640 + 1) * 4] <= selected[(1 * 640 + 1) * 4 + 2])
@@ -78,6 +87,13 @@ internal static class CalibrationVisibilityChecks
             CornersVisible(Render());
             Thread.Sleep(400);
             CornersVisible(Render());
+            options = options with { Points = new() { Enabled = true, TopLeft = new(.25, .25), TopRight = new(.75, .25), BottomLeft = new(.25, .75), BottomRight = new(.75, .75) } };
+            var clipped = Render();
+            if (clipped[3] != 0 || clipped[centerOffset + 3] < 8)
+                throw new Exception("Unselected fill did not stay inside the video's points.");
+            options = options with { DisplayScreens = new() { ["TEST"] = [new() { Type = "mat", Points = options.Points }] } };
+            if (Render()[centerOffset + 3] != 0)
+                throw new Exception("The unselected video tint was applied to a mat screen.");
             options = options with
             {
                 ConfigurationMode = false

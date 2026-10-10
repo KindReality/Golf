@@ -31,18 +31,18 @@ internal static class LocalConfigurationChecks
             var app = Path.Combine(directory, "application");
             Directory.CreateDirectory(app);
             var local = Path.Combine(app, "appsettings.json");
-            const string settings = "{\"MaxVideoPlaybackLength\":17,\"configurationMode\":false,\"Custom\":\"preserved\"}";
+            const string settings = "{\"TransitionInSeconds\":17,\"configurationMode\":false,\"Custom\":\"preserved\"}";
             File.WriteAllText(local, settings);
             Check(LocalConfiguration.Initialize(expected, app) == local, "First launch did not migrate live settings.");
             Check(File.ReadAllText(expected) == settings, "Migration changed settings or removed unknown fields.");
-            File.WriteAllText(local, "{\"MaxVideoPlaybackLength\":22}");
+            File.WriteAllText(local, "{\"TransitionInSeconds\":22}");
             Check(LocalConfiguration.Initialize(expected, app) is null && File.ReadAllText(expected) == settings, "Existing local settings were overwritten.");
 
             Directory.CreateDirectory(Path.GetDirectoryName(previousPath)!);
             File.WriteAllText(previousPath, settings);
             var migratedPath = Path.Combine(directory, "from-onedrive", "appsettings.json");
             Check(LocalConfiguration.Initialize(migratedPath, app, previousPath) == previousPath && File.ReadAllText(migratedPath) == settings, "Current OneDrive settings were not migrated before executable-local settings.");
-            File.WriteAllText(previousPath, "{\"MaxVideoPlaybackLength\":40}");
+            File.WriteAllText(previousPath, "{\"TransitionInSeconds\":40}");
             Check(LocalConfiguration.Initialize(migratedPath, app, previousPath) is null && File.ReadAllText(migratedPath) == settings, "Later OneDrive changes overwrote local settings.");
             File.WriteAllText(previousPath, "{incomplete");
             File.WriteAllText(previousPath + ".bak", settings);
@@ -55,13 +55,13 @@ internal static class LocalConfigurationChecks
             Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
             File.WriteAllText(backupPath + ".bak", settings);
             Check(LocalConfiguration.Initialize(backupPath, app) is null && !File.Exists(backupPath), "Local backup was ignored during initialization.");
-            Check(new KeystoneConfigurationStore(backupPath).RecoverAtStartup() && File.ReadAllText(backupPath).TrimEnd() == settings, "Local backup could not be recovered.");
+            Check(new PointConfigurationStore(backupPath).RecoverAtStartup() && File.ReadAllText(backupPath).TrimEnd() == settings, "Local backup could not be recovered.");
 
             File.WriteAllText(local, "{incomplete");
             File.WriteAllText(local + ".bak", settings);
             var migrationPath = Path.Combine(directory, "migration", "appsettings.json");
             Check(LocalConfiguration.Initialize(migrationPath, app) == local + ".bak" && File.ReadAllText(migrationPath) == settings, "Valid local backup did not take precedence over defaults.");
-            File.WriteAllText(local + ".bak", "{\"MaxVideoPlaybackLength\":-1}");
+            File.WriteAllText(local + ".bak", "{\"TransitionInSeconds\":-1}");
             var defaultsPath = Path.Combine(app, "appsettings.defaults.json");
             File.WriteAllText(defaultsPath, settings);
             var templatePath = Path.Combine(directory, "template", "appsettings.json");

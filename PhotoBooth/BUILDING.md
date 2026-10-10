@@ -6,6 +6,7 @@ Successful Camera and Experience builds automatically copy the runnable output a
 %OneDrive%\Home Technologies\Bin\Camera
 %OneDrive%\Home Technologies\Bin\Experience
 %OneDrive%\Home Technologies\Bin\ExperienceX
+%OneDrive%\Home Technologies\Bin\Controller
 ```
 
 MSBuild reads OneDrive from the environment; OneDriveConsumer and OneDriveCommercial are fallbacks. No username or absolute OneDrive location is hardcoded. When no root is available, a warning is shown and the copy is skipped.

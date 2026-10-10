@@ -22,18 +22,25 @@ internal static class AudioVolumeChecks
             throw new Exception("Invalid request volume accepted: " + value);
         }
 
-        var options = new ExperienceOptions { AudioTransitionInSeconds = 0, AudioTransitionOutSeconds = 0, MaxAudioPlaybackLength = 1 };
+        var options = new ExperienceOptions { AudioTransitionInSeconds = 0, AudioTransitionOutSeconds = 0 };
         foreach (var volume in new[] { 0.0, 12.5, 50, 100 })
         {
-            var provider = new RoutedAudioProvider(new TestSamples(), 2, 2, false, 2, options, volume);
+            var provider = new RoutedAudioProvider(new TestSamples(), 2, 2, false, 1, options, volume);
             var buffer = new float[96000];
             if (provider.Read(buffer, 0, buffer.Length) != buffer.Length || provider.PositionSeconds != 1 ||
-                provider.Read(buffer, 0, 2) != 0 || provider.EndReason != "MaximumPlaybackLength")
-                throw new Exception("Volume changed playback timing or maximum duration.");
+                provider.Read(buffer, 0, 2) != 0)
+                throw new Exception("Volume changed playback timing or natural media duration.");
             for (var i = 0; i < buffer.Length; i++)
                 if (Math.Abs(buffer[i] - (i % 2 == 1 ? 0.5 * volume / 100 : 0)) > 1e-6)
                     throw new Exception("Per-track volume or channel isolation failed.");
         }
+        var longTrack = new RoutedAudioProvider(new TestSamples(), 2, null, false, 20, options);
+        var second = new float[96000];
+        for (var time = 0; time < 20; time++)
+            if (longTrack.Read(second, 0, second.Length) != second.Length || second.Any(sample => sample != 0.5f))
+                throw new Exception("Long-running audio stopped or faded before its natural end.");
+        if (longTrack.PositionSeconds != 20 || longTrack.Read(second, 0, second.Length) != 0)
+            throw new Exception("Long-running audio did not finish at its natural end.");
         var muted = new RoutedAudioProvider(new TestSamples(), 2, null, true, 1, options, 80);
         var samples = new float[200];
         if (muted.Read(samples, 0, samples.Length) != samples.Length || samples.Any(sample => sample != 0))
@@ -52,7 +59,7 @@ internal static class AudioVolumeChecks
         var bytesProvider = new RoutedAudioProvider(new TestSamples(), 2, null, false, 1, options, 25);
         bytesProvider.UpdateOptions(options with
         {
-            MaxAudioPlaybackLength = 0.5
+            AudioTransitionOutSeconds = 0.5
         });
         var bytes = new byte[800];
         if (((IWaveProvider)bytesProvider).Read(bytes, 0, bytes.Length) != bytes.Length ||

@@ -7,7 +7,11 @@ namespace PhotoBooth.Networking;
 public record BroadcastOptions
 {
     public string? DeviceName { get; init; }
-    public int UdpPort { get; init; } = 21325;
+    // UdpPort is accepted only by legacy callers; new deployments use separate destination ports.
+    public int? UdpPort { get; init; }
+    public int UdpEventsPort { get; init; } = 54242;
+    public int UdpCommandsPort { get; init; } = 54243;
+    public int PortFor(string type) => UdpPort ?? (type == "event" ? UdpEventsPort : UdpCommandsPort);
     public string UdpBroadcastAddress { get; init; } = "255.255.255.255";
     public string? UdpInterfaceAddress { get; init; }
     public int UdpSendAttempts { get; init; } = 3;
@@ -20,7 +24,7 @@ public record BroadcastOptions
     public void ValidateNetwork()
     {
         ValidateName(EffectiveDeviceName, "DeviceName", false);
-        if (UdpPort is < 1 or > 65535 || UdpSendAttempts is < 1 or > 5 ||
+        if (UdpPort is < 1 or > 65535 || UdpEventsPort is < 1 or > 65535 || UdpCommandsPort is < 1 or > 65535 || UdpEventsPort == UdpCommandsPort || UdpSendAttempts is < 1 or > 5 ||
             UdpRetryDelayMilliseconds is < 20 or > 1000 ||
             !double.IsFinite(RequestLifetimeSeconds) || RequestLifetimeSeconds is <= 0 or > 300 ||
             !double.IsFinite(RequestDeduplicationSeconds) || RequestDeduplicationSeconds is <= 0 or > 3600 ||

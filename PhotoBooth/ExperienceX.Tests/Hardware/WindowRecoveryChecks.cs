@@ -13,9 +13,9 @@ internal static class WindowRecoveryChecks
         {
             var dispatcher = Dispatcher.CurrentDispatcher;
             var options = new ExperienceOptions { DeveloperMode = true };
-            var monitor = Forms.Screen.PrimaryScreen?.DeviceName ?? throw new Exception("A display is required for the recovery integration test.");
+            var display = Forms.Screen.PrimaryScreen?.DeviceName ?? throw new Exception("A display is required for the recovery integration test.");
             int inject = 0, phase = 0;
-            using var window = new MainWindow(monitor, options, () =>
+            using var window = new MainWindow(display, options, () =>
             {
                 if (Interlocked.Exchange(ref inject, 0) == 1)
                     throw new COMException("Injected one-shot device failure", unchecked((int)0x887A0005));
@@ -46,14 +46,14 @@ internal static class WindowRecoveryChecks
                     }
                     else if (phase == 1 && window.State == RendererState.Failed)
                     {
-                        window.RefreshMonitor();
+                        window.RefreshDisplay();
                         if (window.Visible)
-                            throw new Exception("Failed monitor surface remained visible.");
+                            throw new Exception("Failed display surface remained visible.");
                         phase = 2;
                     }
                     else if (phase == 2)
                     {
-                        window.RefreshMonitor();
+                        window.RefreshDisplay();
                         if (window.State == RendererState.Idle && window.Visible)
                             End(null);
                     }
@@ -74,6 +74,6 @@ internal static class WindowRecoveryChecks
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         await completion.Task.WaitAsync(TimeSpan.FromSeconds(20));
-        Console.WriteLine("Passed automatic per-monitor hiding, retry, DirectX recreation, and transparent window restoration after an injected device failure.");
+        Console.WriteLine("Passed automatic per-display hiding, retry, DirectX recreation, and transparent window restoration after an injected device failure.");
     }
 }

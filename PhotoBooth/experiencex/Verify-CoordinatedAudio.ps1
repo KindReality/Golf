@@ -11,7 +11,7 @@ $client = [Net.Sockets.UdpClient]::new()
 $client.EnableBroadcast=$true
 function Send-Request($request) {
     $bytes=ConvertTo-ExperienceBroadcastBytes -Request $request -Configuration ($saved|ConvertFrom-Json)
-    [void]$client.Send($bytes,$bytes.Length,'255.255.255.255',($saved|ConvertFrom-Json).UdpPort)
+    [void]$client.Send($bytes,$bytes.Length,'255.255.255.255',($saved|ConvertFrom-Json).UdpCommandsPort)
 }
 function Read-Events {
     @(Get-ChildItem (Join-Path $runtime 'logs\ExperienceX') -Filter ("*-$($app.Id)-*.jsonl") | ForEach-Object {
@@ -29,14 +29,13 @@ function Wait-Event($name, $id) {
 try {
     if (Get-Process ExperienceX -ErrorAction SilentlyContinue) { throw 'Stop ExperienceX before this verification.' }
     $config = $saved | ConvertFrom-Json
-    $config.MaxAudioPlaybackLength = $PlaybackSeconds
     $config.AudioTransitionInSeconds = 0.25
     $config.AudioTransitionOutSeconds = 0.5
     $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath
     # Silent audio reaches actual WASAPI devices without audible test noise.
     $writer = [IO.BinaryWriter]::new([IO.File]::Create($tone))
     try {
-        $data = [byte[]]::new(48000 * 2 * 2 * ($PlaybackSeconds + 2))
+        $data = [byte[]]::new(48000 * 2 * 2 * $PlaybackSeconds)
         $writer.Write([Text.Encoding]::ASCII.GetBytes('RIFF')); $writer.Write([int](36 + $data.Length))
         $writer.Write([Text.Encoding]::ASCII.GetBytes('WAVEfmt ')); $writer.Write([int]16)
         $writer.Write([int16]1); $writer.Write([int16]2); $writer.Write([int]48000)
@@ -75,7 +74,7 @@ try {
         $started=@($events | Where-Object { $_.Event -eq 'AudioPlaybackStarted' -and $_.RequestId -eq $id })
         $completed=@($events | Where-Object { $_.Event -eq 'AudioPlaybackCompleted' -and $_.RequestId -eq $id })
         if ($started.Count -ne $counts[$suffix] -or $completed.Count -ne $counts[$suffix]) { throw "Wrong playback/completion count for $suffix : $($started.Count)/$($completed.Count)" }
-        if ($completed | Where-Object { $_.Data.PositionSeconds -gt ($PlaybackSeconds + 0.01) -or $_.Data.Reason -ne 'MaximumPlaybackLength' }) { throw 'Coordinated playback exceeded its deadline.' }
+        if ($completed | Where-Object { $_.Data.PositionSeconds -gt ($PlaybackSeconds + 0.01) -or $_.Data.Reason -ne 'MediaEnded' }) { throw 'Coordinated playback did not finish at the natural media end.' }
     }
     if (-not ($events | Where-Object { $_.Event -eq 'UdpDuplicateSuppressed' -and $_.RequestId -eq ($prefix+'-array') })) { throw 'Grouped retry was not suppressed.' }
     if (-not ($events | Where-Object { $_.Event -eq 'AudioDeviceUnavailable' -and $_.RequestId -eq ($prefix+'-virtual') })) { throw 'Missing group member was not logged.' }

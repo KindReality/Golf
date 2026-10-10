@@ -6,7 +6,26 @@ public sealed record ExperienceRequest
 {
     public string Experience { get; init; } = "";
     public string Value { get; init; } = "";
-    public string? MonitorName
+    public bool Loop { get; init; }
+    public string? Command { get; init; }
+    public string? PlaybackRequestId { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsStop => string.Equals(Command, "stop", StringComparison.OrdinalIgnoreCase);
+    public string? Screen
+    {
+        get; init;
+    }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? ScreenId
+    {
+        get; init;
+    }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? ScreenName
+    {
+        get; init;
+    }
+    public string? DisplayName
     {
         get; init;
     }
@@ -51,7 +70,16 @@ public sealed record ExperienceRequest
         if (!string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(request.Experience, "audio", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Only video and audio experiences are supported.");
-        if (string.IsNullOrWhiteSpace(request.Value))
+        if (request.Command is not null && !string.Equals(request.Command, "play", StringComparison.OrdinalIgnoreCase) && !request.IsStop)
+            throw new ArgumentException("Video commands support play or stop.");
+        if (request.IsStop && (!string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(request.PlaybackRequestId) || request.PlaybackRequestId.Length > 128 || request.Loop))
+            throw new ArgumentException("Stopping video requires playbackRequestId and cannot enable looping.");
+        if (!request.IsStop && request.PlaybackRequestId is not null)
+            throw new ArgumentException("playbackRequestId is only used to stop an existing video.");
+        if (request.Loop && !string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Looping is supported for video only.");
+        if (!request.IsStop && string.IsNullOrWhiteSpace(request.Value))
             throw new ArgumentException("A media filename is required.");
         if (request.Channel is <= 0)
             throw new ArgumentException("Channel numbers start at 1.");

@@ -41,18 +41,6 @@ Reject(identity with { TopRight = new(0.1, 0.9) });
 Console.WriteLine("Passed identity, perspective corner/center, straight-line, and invalid-corner checks.");
 var defaults = new ExperienceOptions();
 defaults.Validate();
-if (defaults.MaxVideoPlaybackLength != 10) throw new Exception("Expected ten-second default.");
-var configured = System.Text.Json.JsonSerializer.Deserialize<ExperienceOptions>("{\"MaxVideoPlaybackLength\":2.5}",
-    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-configured.Validate();
-if (configured.MaxVideoPlaybackLength != 2.5) throw new Exception("Configuration key not read.");
-foreach (var invalid in new[] { 0.0, -1, double.NaN, double.PositiveInfinity, 86401 })
-{
-    try { (defaults with { MaxVideoPlaybackLength = invalid }).Validate(); }
-    catch (ArgumentException) { continue; }
-    throw new Exception("Invalid maximum playback length accepted.");
-}
-Console.WriteLine("Passed playback length defaults, JSON setting, and validation checks.");
 string[] displays = ["DISPLAY1", "DISPLAY2"];
 if (MonitorSelection.Select(" display2 ", false, displays, "DISPLAY1") != "DISPLAY2") throw new Exception("Assigned selection failed.");
 if (MonitorSelection.Select("DISPLAY3", false, displays, "DISPLAY1") is not null) throw new Exception("Production fell back.");
@@ -75,17 +63,16 @@ using (var replacement = new Mutex(true, mutexName, out var restartAdmitted))
     replacement.ReleaseMutex();
 }
 Console.WriteLine("Passed production/developer monitor, disconnect/reconnect, and single-instance mutex checks.");
-var beforeFade = PlaybackTiming.Evaluate(10, 8, 100, 8, 1);
-if (beforeFade.ShouldFade || beforeFade.RemainingSeconds != 2) throw new Exception("Fade started early.");
-var maximumFade = PlaybackTiming.Evaluate(10, 9, 100, 9, 1);
-if (!maximumFade.ShouldFade || maximumFade.FadeSeconds != 1 || maximumFade.StopReason != "MaximumPlaybackLength") throw new Exception("Maximum fade scheduling failed.");
-var naturalFade = PlaybackTiming.Evaluate(10, 3, 4, 3, 1);
-if (!naturalFade.ShouldFade || naturalFade.StopReason != "MediaEnded") throw new Exception("Natural end scheduling failed.");
-var shortVideo = PlaybackTiming.Evaluate(10, 0, 0.5, 0, 5);
+var beforeFade = PlaybackTiming.Evaluate(100, 50, 1);
+if (beforeFade.ShouldFade || beforeFade.RemainingSeconds != 50) throw new Exception("Video faded before its natural end.");
+var naturalFade = PlaybackTiming.Evaluate(100, 99, 1);
+if (!naturalFade.ShouldFade || naturalFade.FadeSeconds != 1 || naturalFade.StopReason != "MediaEnded") throw new Exception("Natural end scheduling failed.");
+var shortVideo = PlaybackTiming.Evaluate(0.5, 0, 5);
 if (!shortVideo.ShouldFade || shortVideo.FadeSeconds != 0.5) throw new Exception("Short video fade not shortened.");
-if (PlaybackTiming.Evaluate(10, 11, null, 11, 1).RemainingSeconds != 0) throw new Exception("Deadline missed.");
-if (PlaybackTiming.Evaluate(10, 9, null, 9, 0).ShouldFade) throw new Exception("Zero fade started early.");
-Console.WriteLine("Passed natural/maximum deadline, short-video, and zero-fade checks.");
+var unknownDuration = PlaybackTiming.Evaluate(null, 100000, 1);
+if (unknownDuration.ShouldFade || !double.IsPositiveInfinity(unknownDuration.RemainingSeconds)) throw new Exception("Unknown-duration video stopped prematurely.");
+if (PlaybackTiming.Evaluate(100, 99, 0).ShouldFade || !PlaybackTiming.Evaluate(100, 100, 0).ShouldFade) throw new Exception("Zero fade timing failed.");
+Console.WriteLine("Passed natural-end, long-running video, unknown-duration, short-video, and zero-fade checks.");
 new BlackKeyOptions().Validate();
 foreach (var invalidKey in new[] { new BlackKeyOptions { Threshold = -1 }, new BlackKeyOptions { Softness = double.NaN },
     new BlackKeyOptions { Threshold = 0.9, Softness = 0.2 } })
@@ -110,18 +97,12 @@ try
 finally { File.Delete(configTestPath); }
 Console.WriteLine("Passed configuration creation, edit, and deletion checks.");
 
-var migrated = ExperienceOptions.Parse("{\"MonitorName\":\"DISPLAY2\",\"maxPlaybackLength\":7}");
-if (migrated.DefaultMonitorName != "DISPLAY2" || migrated.MaxVideoPlaybackLength != 7 || migrated.MaxAudioPlaybackLength != 10)
+var migrated = ExperienceOptions.Parse("{\"MonitorName\":\"DISPLAY2\"}");
+if (migrated.DefaultMonitorName != "DISPLAY2")
     throw new Exception("Legacy configuration migration failed.");
-var renamed = ExperienceOptions.Parse("{\"MonitorName\":\"OLD\",\"DefaultMonitorName\":\"NEW\",\"MaxAudioPlaybackLength\":3,\"AudioTransitionInSeconds\":0.2}");
-if (renamed.DefaultMonitorName != "NEW" || renamed.MaxAudioPlaybackLength != 3 || renamed.AudioTransitionInSeconds != 0.2)
+var renamed = ExperienceOptions.Parse("{\"MonitorName\":\"OLD\",\"DefaultMonitorName\":\"NEW\",\"AudioTransitionInSeconds\":0.2}");
+if (renamed.DefaultMonitorName != "NEW" || renamed.AudioTransitionInSeconds != 0.2)
     throw new Exception("Independent configuration settings failed.");
-foreach (var invalid in new[] { 0.0, -1, double.NaN, 86401 })
-{
-    try { (defaults with { MaxAudioPlaybackLength = invalid }).Validate(); }
-    catch (ArgumentException) { continue; }
-    throw new Exception("Invalid audio playback limit accepted.");
-}
 if (OutputSelection.Monitor(null, "DISPLAY2", displays, "DISPLAY1") != "DISPLAY2" ||
     OutputSelection.Monitor("DISPLAY1", "DISPLAY2", displays, "DISPLAY1") != "DISPLAY1" ||
     OutputSelection.Monitor(null, "MISSING", displays, "DISPLAY1") is not null)
@@ -170,20 +151,20 @@ if (routed[0] != 0.2f || routed[1] != 0.6f || routed.Skip(2).Any(v => v != 0)) t
 if (AudioSamples.Gain(0, 10, 5, 1) != 0 || AudioSamples.Gain(5, 10, 5, 1) != 1 ||
     AudioSamples.Gain(10, 10, 5, 1) != 0 || AudioSamples.Gain(9.5, 10, 5, 1) >= 1)
     throw new Exception("Audio fades failed.");
-var provider = new RoutedAudioProvider(new TestSamples(), 8, 8, false, 20,
-    defaults with { MaxAudioPlaybackLength = 0.01, AudioTransitionInSeconds = 0, AudioTransitionOutSeconds = 0 });
+var provider = new RoutedAudioProvider(new TestSamples(), 8, 8, false, 0.01,
+    defaults with { AudioTransitionInSeconds = 0, AudioTransitionOutSeconds = 0 });
 var sampleBuffer = new float[8000];
 var samplesRead = provider.Read(sampleBuffer, 0, sampleBuffer.Length);
 if (samplesRead != 480 * 8 || provider.Read(sampleBuffer, 0, sampleBuffer.Length) != 0 ||
-    Math.Abs(provider.PositionSeconds - 0.01) > 1e-9) throw new Exception("Sample-accurate maximum failed.");
+    Math.Abs(provider.PositionSeconds - 0.01) > 1e-9) throw new Exception("Sample-accurate natural audio end failed.");
 for (var i = 0; i < samplesRead; i++)
     if (sampleBuffer[i] != (i % 8 == 7 ? 0.5f : 0)) throw new Exception("Output provider leaked to another channel.");
 var mutedProvider = new RoutedAudioProvider(new TestSamples(), 2, 1, true, 1, defaults);
 if (mutedProvider.Read(sampleBuffer, 0, 100) != 100 || sampleBuffer.Take(100).Any(v => v != 0)) throw new Exception("Mute failed.");
 var naturalEndProvider = new RoutedAudioProvider(new TestSamples(), 2, null, false, 0.005, defaults);
-if (naturalEndProvider.Read(sampleBuffer, 0, sampleBuffer.Length) != 240 * 2 || naturalEndProvider.EndReason != "MediaEnded")
+if (naturalEndProvider.Read(sampleBuffer, 0, sampleBuffer.Length) != 240 * 2)
     throw new Exception("Natural audio deadline failed.");
-Console.WriteLine("Passed default/explicit output routing, configuration migration, command validation, numbered channels, mute, audio fades and sample-accurate limits.");
+Console.WriteLine("Passed default/explicit output routing, configuration migration, command validation, numbered channels, mute, audio fades and sample-accurate natural ends.");
 
 sealed class TestSamples : NAudio.Wave.ISampleProvider
 {

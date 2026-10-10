@@ -15,6 +15,8 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
     {
         _listener = new(() => options(), async (message, token) =>
         {
+            // Controllers own discovery commands; clients only consume the discovery events.
+            if (ControllerDiscovery.IsRequest(message)) return;
             if (message.Type == "event")
             {
                 await dispatcher.InvokeAsync(() =>
@@ -60,11 +62,15 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
                     message.Device,
                     request.Experience,
                     request.Value,
-                    request.MonitorName,
+                    request.Screen,
+                    request.DisplayName,
                     request.AudioDevice,
                     request.AudioDevices,
                     request.Channel,
                     request.Mute,
+                    request.Loop,
+                    request.Command,
+                    request.PlaybackRequestId,
                     Volume = request.VolumePercent,
                     message.Source
                 }, message.RequestId);
@@ -74,5 +80,6 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
     }
 
     public void Bind(int port) => _listener.Bind(port);
+    public void Bind(int commandsPort, int eventsPort) => _listener.Bind(commandsPort, eventsPort);
     public ValueTask DisposeAsync() => _listener.DisposeAsync();
 }

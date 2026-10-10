@@ -113,7 +113,6 @@ internal sealed class AudioManager(Dispatcher dispatcher) : IDisposable
                 request.Mute,
                 Volume = request.VolumePercent,
                 ActivePlaybacks = _playing.Count,
-                options.MaxAudioPlaybackLength,
                 options.AudioTransitionInSeconds,
                 options.AudioTransitionOutSeconds
             }, request.RequestId);
@@ -172,7 +171,7 @@ internal sealed class AudioManager(Dispatcher dispatcher) : IDisposable
                 playback.Request.Channel,
                 Volume = playback.Request.VolumePercent,
                 playback.PositionSeconds,
-                Reason = playback.EndReason
+                Reason = "MediaEnded"
             }, playback.Request.RequestId);
         playback.Dispose();
     }

@@ -12,8 +12,8 @@ internal static class CoordinatedAudioHardwareChecks
         try
         {
             using (var writer = new WaveFileWriter(path, WaveFormat.CreateIeeeFloatWaveFormat(48000, 2)))
-                writer.WriteSamples(new float[48000 * 2 * 4], 0, 48000 * 2 * 4);
-            var options = new ExperienceOptions { MaxAudioPlaybackLength = 1.5, AudioTransitionInSeconds = 0.1, AudioTransitionOutSeconds = 0.2 };
+                writer.WriteSamples(new float[48000 * 2 * 12], 0, 48000 * 2 * 12);
+            var options = new ExperienceOptions { AudioTransitionInSeconds = 0.1, AudioTransitionOutSeconds = 0.2 };
             var request = new ExperienceRequest { Experience = "audio", Value = path, Mute = true, RequestId = "hardware-audio-" + Guid.NewGuid() };
             // Cancellation after preparation but before starting must release every native client.
             using (var prepared = new CoordinatedAudioPlayback(devices, path, request, options))
@@ -33,6 +33,9 @@ internal static class CoordinatedAudioHardwareChecks
                 await Task.Delay(150);
                 if (playing.ActiveOutputCount != devices.Length - 1)
                     throw new Exception("Inventory removal did not preserve the other outputs.");
+                await Task.Delay(10000);
+                if (completed.Task.IsCompleted || playing.ActiveOutputCount != devices.Length - 1)
+                    throw new Exception("Coordinated audio stopped before the twelve-second file ended.");
                 if (await completed.Task.WaitAsync(TimeSpan.FromSeconds(10)) is Exception error)
                     throw error;
                 if (playing.ActiveOutputCount != 0)

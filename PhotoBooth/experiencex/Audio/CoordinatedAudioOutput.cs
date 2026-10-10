@@ -108,7 +108,7 @@ internal sealed class CoordinatedAudioOutput : IDisposable
         }
         else if (now - _lastProgress > 2)
             throw new TimeoutException("Audio device clock stopped advancing.");
-        var end = Math.Min(source.DurationSeconds, options.MaxAudioPlaybackLength);
+        var end = source.DurationSeconds;
         PositionSeconds = Math.Clamp(now + _latency - startTime, 0, end);
         if (_mapping.Frame >= _endFrame - 1)
         {
@@ -137,7 +137,7 @@ internal sealed class CoordinatedAudioOutput : IDisposable
         }
         var step = _cursor.Plan(desired, source.SampleRate, source.SampleRate / _mapping.Rate);
         source.Ensure((long)Math.Ceiling(_cursor.Position + available * step) + AudioResampler.Taps);
-        end = Math.Min(source.DurationSeconds, options.MaxAudioPlaybackLength);
+        end = source.DurationSeconds;
         var pointer = _render.GetBuffer(available);
         var released = false;
         try

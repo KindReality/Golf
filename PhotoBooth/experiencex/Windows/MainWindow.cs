@@ -6,36 +6,57 @@ using PhotoBooth.Diagnostics;
 namespace ExperienceX;
 
 // Only window management runs on the UI dispatcher. Decoding and rendering own a worker thread.
-public sealed class MainWindow : Forms.Form, IKeystoneSurface
+public sealed class MainWindow : Forms.Form, IPointSurface
 {
-    private readonly string _monitor;
+    private readonly string _display;
     // Form's base constructor calls CreateParams before this constructor assigns the supplied options.
     private ExperienceOptions _options = new();
     private VideoRenderer? _renderer;
     private TopmostGuard? _guard;
     private bool _available;
-    private KeystoneCalibration? _calibration;
+    private PointCalibration? _calibration;
     private bool _mouseHeld;
+    private ScreenSurface? _dragScreen;
+    private ScreenSurface? _pendingNameEdit;
+    private System.Drawing.Point _mouseDownPosition;
+    private readonly Dictionary<string, ScreenSurface> _surfaces = new(StringComparer.OrdinalIgnoreCase);
+    private readonly PointHitCycle _pointCycle = new(), _screenCycle = new();
+    private readonly PointHitCycle _edgeCycle = new();
+    private ScreenNameEditor? _nameEditor;
+    private ScreenSurface? _editingScreen;
+    private string? _originalName;
+    internal event Action<bool>? TextEditingChanged;
+    internal event Action<ScreenSurface, string, string>? RenameRequested;
+    internal VideoRenderer? Renderer => _renderer;
+    internal ScreenOptions? ScreenDefinition(string id) => _options.ScreensFor(_display).FirstOrDefault(s => s.Id == id);
+    internal IEnumerable<ScreenSurface> Surfaces => _options.ScreensFor(_display).Select(s => Surface(s.Id));
+    internal ScreenSurface Surface(string id)
+    {
+        if (!_surfaces.TryGetValue(id, out var surface))
+            _surfaces[id] = surface = new(this, id);
+        return surface;
+    }
+
     private readonly RendererRecovery _recovery = new();
     private bool _recovering, _waitingForRenderer, _closing;
     private readonly Action? _beforePresent;
-    private readonly AsyncTaskScope _tasks = new("Monitor window");
-    internal void AttachCalibration(KeystoneCalibration calibration) => _calibration = calibration;
-    internal string MonitorName => _monitor;
-    string IKeystoneSurface.MonitorName => _monitor;
-    int IKeystoneSurface.PixelWidth => ClientSize.Width;
-    int IKeystoneSurface.PixelHeight => ClientSize.Height;
-    void IKeystoneSurface.ShowCalibration(int point) => ShowCalibration(point);
-    void IKeystoneSurface.FadeCalibration() => FadeCalibration();
-    void IKeystoneSurface.FlashCalibration(int point, bool success) => FlashCalibration(point, success);
-    void IKeystoneSurface.FlashCalibrationPoints(int pointMask)
+    private readonly AsyncTaskScope _tasks = new("Display window");
+    internal void AttachCalibration(PointCalibration calibration) => _calibration = calibration;
+    internal string DisplayName => _display;
+    string IPointSurface.DisplayName => _display;
+    int IPointSurface.PixelWidth => ClientSize.Width;
+    int IPointSurface.PixelHeight => ClientSize.Height;
+    void IPointSurface.ShowCalibration(int point) => ShowCalibration(point);
+    void IPointSurface.FadeCalibration() => FadeCalibration();
+    void IPointSurface.FlashCalibration(int point, bool success) => FlashCalibration(point, success);
+    void IPointSurface.FlashCalibrationPoints(int pointMask)
     {
         _renderer?.FlashCalibrationPoints(pointMask, true);
         _guard?.EnsureTopmost("RemoteCalibrationSaved", true);
     }
-    void IKeystoneSurface.PreviewKeystone(KeystoneOptions? value) => PreviewKeystone(value);
-    Task<bool> IKeystoneSurface.ConfirmCalibrationAsync(KeystoneOptions expected) => _renderer?.ConfirmKeystoneAsync(expected) ?? Task.FromResult(false);
-    void IKeystoneSurface.ReleaseCalibrationCapture() => ReleaseCalibrationCapture();
+    void IPointSurface.PreviewPoints(PointOptions? value) => PreviewPoints(value);
+    Task<bool> IPointSurface.ConfirmCalibrationAsync(PointOptions expected) => _renderer?.ConfirmPointsAsync(expected) ?? Task.FromResult(false);
+    void IPointSurface.ReleaseCalibrationCapture() => ReleaseCalibrationCapture();
     internal RendererState State => _renderer?.State ?? RendererState.Starting;
     protected override bool ShowWithoutActivation => !_options.ConfigurationMode;
     protected override Forms.CreateParams CreateParams
@@ -49,13 +70,13 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
             return p;
         }
     }
-    public MainWindow(string monitor, ExperienceOptions options) : this(monitor, options, null) { }
-    internal MainWindow(string monitor, ExperienceOptions options, Action? beforePresent)
+    public MainWindow(string display, ExperienceOptions options) : this(display, options, null) { }
+    internal MainWindow(string display, ExperienceOptions options, Action? beforePresent)
     {
         _beforePresent = beforePresent;
-        _monitor = monitor;
+        _display = display;
         _options = options;
-        Text = "ExperienceX — " + monitor;
+        Text = "ExperienceX — " + display;
         FormBorderStyle = options.DeveloperMode ? Forms.FormBorderStyle.Sizable : Forms.FormBorderStyle.None;
         ShowInTaskbar = options.DeveloperMode;
         TopMost = !options.DeveloperMode;
@@ -63,31 +84,31 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
     }
     public void Start()
     {
-        RefreshMonitor();
+        RefreshDisplay();
         var dispatcher = Dispatcher.CurrentDispatcher;
         _renderer = CreateRenderer(dispatcher);
-        _guard = new TopmostGuard(Handle, Dispatcher.CurrentDispatcher, () => Visible && (State != RendererState.Idle || _options.ConfigurationMode || MonitorBackground.For(_monitor, _options).A > 0), () => _renderer?.RequestId);
+        _guard = new TopmostGuard(Handle, Dispatcher.CurrentDispatcher, () => Visible && (State != RendererState.Idle || _options.ConfigurationMode || _options.ScreensFor(_display).Any(s => s.IsMat) || DisplayBackground.For(_display, _options).A > 0), () => _renderer?.RequestId);
         ClientSizeChanged += (_, _) => _renderer?.Resize(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
         if (_available)
             ShowSurface();
     }
-    public void RefreshMonitor()
+    public void RefreshDisplay()
     {
         if (_closing)
             return;
-        var screen = Forms.Screen.AllScreens.FirstOrDefault(s => s.DeviceName.Equals(_monitor, StringComparison.OrdinalIgnoreCase));
+        var screen = Forms.Screen.AllScreens.FirstOrDefault(s => s.DeviceName.Equals(_display, StringComparison.OrdinalIgnoreCase));
         if (screen is null)
         {
             if (_available)
             {
-                _calibration?.Cancel("MonitorUnavailable");
+                _calibration?.Cancel("DisplayUnavailable");
                 Hide();
-                _renderer?.Stop("MonitorUnavailable");
+                _renderer?.Stop("DisplayUnavailable");
             }
             if (_available || _renderer is null)
-                Telemetry.Warning("MonitorUnavailable", new
+                Telemetry.Warning("DisplayUnavailable", new
                 {
-                    MonitorName = _monitor
+                    DisplayName = _display
                 });
             _available = false;
             return;
@@ -112,13 +133,13 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
             ShowSurface();
             Telemetry.Info("RendererRecovered", new
             {
-                MonitorName = _monitor
+                DisplayName = _display
             });
         }
         else if (!Visible && !_recovering && !_waitingForRenderer && _renderer is not null)
             ShowSurface();
     }
-    private VideoRenderer CreateRenderer(Dispatcher dispatcher) => new(Handle, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height), _options, _monitor,
+    private VideoRenderer CreateRenderer(Dispatcher dispatcher) => new(Handle, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height), _options, _display,
         () => { if (!_closing && !dispatcher.HasShutdownStarted) dispatcher.BeginInvoke(new Action(() => { if (!_closing) Hide(); })); }, _beforePresent);
     private async Task RecoverRendererAsync()
     {
@@ -129,7 +150,7 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
         var old = _renderer;
         Telemetry.Warning("RendererRecoveryStarted", new
         {
-            MonitorName = _monitor,
+            DisplayName = _display,
             Attempt = _recovery.Attempts
         });
         try
@@ -148,7 +169,7 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
             _recovery.Failed(DateTimeOffset.UtcNow);
             Telemetry.Error("RendererRecoveryFailed", ex, new
             {
-                MonitorName = _monitor,
+                DisplayName = _display,
                 RetryAt = _recovery.NextAttempt
             });
         }
@@ -158,6 +179,10 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
     {
         var changed = _options.ConfigurationMode != options.ConfigurationMode;
         _options = options;
+        foreach (var id in _surfaces.Keys.Where(id => ScreenDefinition(id) is null).ToArray())
+            _surfaces.Remove(id);
+        if (_editingScreen is not null && (!options.ConfigurationMode || ScreenDefinition(_editingScreen.ScreenId)?.Name != _originalName))
+            FinishNameEdit(false);
         _renderer?.Configure(options);
         if (changed && IsHandleCreated)
         {
@@ -166,7 +191,7 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
             if (!options.ConfigurationMode)
                 ReleaseCalibrationCapture();
         }
-        RefreshMonitor();
+        RefreshDisplay();
     }
     internal void ShowCalibration(int point)
     {
@@ -175,10 +200,12 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
     }
     internal void FadeCalibration() => _renderer?.FadeCalibration();
     internal void FlashCalibration(int point, bool success) => _renderer?.FlashCalibration(point, success);
-    internal void PreviewKeystone(KeystoneOptions? value) => _renderer?.PreviewKeystone(value);
+    internal void PreviewPoints(PointOptions? value) => _renderer?.PreviewPoints(value);
     internal void ReleaseCalibrationCapture()
     {
         _mouseHeld = false;
+        _dragScreen = null;
+        _pendingNameEdit = null;
         Capture = false;
     }
     protected override void OnMouseDown(Forms.MouseEventArgs e)
@@ -186,25 +213,151 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
         base.OnMouseDown(e);
         if (!_options.ConfigurationMode || e.Button != Forms.MouseButtons.Left)
             return;
-        _calibration?.Begin(this, (double)e.X / Math.Max(1, ClientSize.Width - 1), (double)e.Y / Math.Max(1, ClientSize.Height - 1));
-        _mouseHeld = true;
-        Capture = true;
         Activate();
         Focus();
+        if (_nameEditor is not null)
+        {
+            FinishNameEdit(false);
+            return;
+        }
+        var selected = _calibration?.SelectedScreen as ScreenSurface;
+        _mouseDownPosition = e.Location;
+        var x = (double)e.X / Math.Max(1, ClientSize.Width - 1);
+        var y = (double)e.Y / Math.Max(1, ClientSize.Height - 1);
+        var screens = _options.ScreensFor(_display);
+        // A flat list supports any number of points, preserving screen/point overlap order.
+        var allPoints = screens.SelectMany(screen => PointEditing.Points(screen.Points).Select((p, point) => (screen, point, p))).ToArray();
+        var radius = PointEditing.HitRadius(ClientSize.Width, ClientSize.Height, _options.PointHitDiameterPercent);
+        var hits = allPoints.Select((item, index) => (item, index)).Where(t =>
+        {
+            var p = t.item.p;
+            return Math.Pow((p.X - x) * Math.Max(1, ClientSize.Width - 1), 2) + Math.Pow((p.Y - y) * Math.Max(1, ClientSize.Height - 1), 2) <= radius * radius;
+        }).Select(t => t.index).ToArray();
+        int chosen;
+        if (hits.Length > 0)
+        {
+            chosen = _pointCycle.Pick(hits);
+            _screenCycle.Pick([]);
+            var dragging = Surface(allPoints[chosen].screen.Id);
+            _mouseHeld = _calibration?.Begin(dragging, x, y, allPoints[chosen].point) == true;
+            _dragScreen = _mouseHeld ? dragging : null;
+            Capture = _mouseHeld;
+        }
+        else
+        {
+            _pointCycle.Pick([]);
+            if (selected?.DisplayName == _display && ScreenDefinition(selected.ScreenId) is { } selectedDefinition &&
+                ScreenNameLabel.Bounds(selected.ScreenName, selectedDefinition.Points, ClientSize.Width, ClientSize.Height).Contains(e.Location))
+            {
+                if (!ScreenSelection.Contains(selectedDefinition.Points, x, y))
+                {
+                    BeginNameEdit(selected);
+                    return;
+                }
+                _mouseHeld = _calibration?.BeginScreenDrag(selected, x, y) == true;
+                _dragScreen = _mouseHeld ? selected : null;
+                _pendingNameEdit = _mouseHeld ? selected : null;
+                Capture = _mouseHeld;
+                return;
+            }
+            chosen = _screenCycle.Pick(screens.Select((screen, index) => (screen, index)).Where(item => ScreenSelection.Contains(item.screen.Points, x, y)).Select(item => item.index).ToArray());
+            if (chosen < 0)
+                _calibration?.SelectScreen(null);
+            else
+            {
+                var dragging = Surface(screens[chosen].Id);
+                _mouseHeld = _calibration?.BeginScreenDrag(dragging, x, y) == true;
+                _dragScreen = _mouseHeld ? dragging : null;
+                Capture = _mouseHeld;
+            }
+        }
+    }
+    protected override void OnMouseDoubleClick(Forms.MouseEventArgs e)
+    {
+        base.OnMouseDoubleClick(e);
+        if (!_options.ConfigurationMode || e.Button != Forms.MouseButtons.Left || _nameEditor is not null) return;
+        var x = (double)e.X / Math.Max(1, ClientSize.Width - 1);
+        var y = (double)e.Y / Math.Max(1, ClientSize.Height - 1);
+        // Edge insertion has a small pixel tolerance independent of the larger point grab area.
+        var candidates = _options.ScreensFor(_display).Select((screen, index) => (screen, index,
+            edge: PolygonGeometry.ClosestEdge(screen.Points, x, y, ClientSize.Width, ClientSize.Height)))
+            .Where(item => item.screen.IsMat && item.edge.Distance <= 8 &&
+                !PointEditing.Points(item.screen.Points).Any(p => Math.Sqrt(Math.Pow((p.X - item.edge.Point.X) * (ClientSize.Width - 1), 2) +
+                    Math.Pow((p.Y - item.edge.Point.Y) * (ClientSize.Height - 1), 2)) < 2)).ToArray();
+        var chosen = _edgeCycle.Pick(candidates.Select(item => item.index).ToArray());
+        if (chosen < 0) return;
+        var target = candidates.First(item => item.index == chosen);
+        _calibration?.Cancel("InsertPoint");
+        ReleaseCalibrationCapture();
+        _calibration?.RequestInsertPoint(Surface(target.screen.Id), target.edge.Edge, target.edge.Point);
+    }
+    private void BeginNameEdit(ScreenSurface surface)
+    {
+        _calibration?.Cancel("ScreenNameEdit");
+        _editingScreen = surface;
+        _originalName = surface.ScreenName;
+        TextEditingChanged?.Invoke(true);
+        var k = ScreenDefinition(surface.ScreenId)!.Points;
+        var bounds = ScreenNameLabel.Bounds(surface.ScreenName, k, ClientSize.Width, ClientSize.Height);
+        _nameEditor = new(FinishNameEdit)
+        {
+            Text = surface.ScreenName,
+            MaxLength = 80,
+            Font = new System.Drawing.Font("Segoe UI", ScreenNameLabel.FontSize(ClientSize.Width, ClientSize.Height), System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Pixel),
+            ForeColor = System.Drawing.Color.FromArgb(8, 65, 170),
+            BackColor = System.Drawing.Color.FromArgb(200, 225, 255),
+            TextAlign = Forms.HorizontalAlignment.Center,
+            Bounds = new(Math.Clamp(bounds.X, 0, Math.Max(0, ClientSize.Width - bounds.Width)), Math.Clamp(bounds.Y, 0, Math.Max(0, ClientSize.Height - bounds.Height)), bounds.Width, bounds.Height)
+        };
+        Controls.Add(_nameEditor);
+        _nameEditor.BringToFront();
+        _nameEditor.Focus();
+        _nameEditor.SelectAll();
+    }
+    private void FinishNameEdit(bool commit)
+    {
+        if (_nameEditor is null || _editingScreen is null)
+            return;
+        var surface = _editingScreen;
+        var oldName = _originalName!;
+        var name = _nameEditor.Text.Trim();
+        var editor = _nameEditor;
+        _nameEditor = null;
+        _editingScreen = null;
+        _originalName = null;
+        Controls.Remove(editor);
+        editor.Dispose();
+        TextEditingChanged?.Invoke(false);
+        Focus();
+        if (commit)
+            RenameRequested?.Invoke(surface, oldName, name);
     }
     protected override void OnMouseMove(Forms.MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        if (_mouseHeld)
-            _calibration?.Move(this, (double)e.X / Math.Max(1, ClientSize.Width - 1), (double)e.Y / Math.Max(1, ClientSize.Height - 1));
+        if (_pendingNameEdit is not null)
+        {
+            var threshold = Forms.SystemInformation.DragSize;
+            if (Math.Abs(e.X - _mouseDownPosition.X) < Math.Max(1, threshold.Width / 2) &&
+                Math.Abs(e.Y - _mouseDownPosition.Y) < Math.Max(1, threshold.Height / 2))
+                return;
+            _pendingNameEdit = null;
+        }
+        if (_mouseHeld && _dragScreen is not null)
+            _calibration?.Move(_dragScreen, (double)e.X / Math.Max(1, ClientSize.Width - 1), (double)e.Y / Math.Max(1, ClientSize.Height - 1));
     }
     protected override void OnMouseUp(Forms.MouseEventArgs e)
     {
         base.OnMouseUp(e);
         if (e.Button != Forms.MouseButtons.Left || !_mouseHeld)
             return;
+        var dragged = _dragScreen;
+        var editName = _pendingNameEdit;
         ReleaseCalibrationCapture();
-        _calibration?.RequestFinish(this);
+        if (editName is not null)
+            BeginNameEdit(editName);
+        else if (dragged is not null)
+            _calibration?.RequestFinish(dragged);
     }
     protected override void OnMouseCaptureChanged(EventArgs e)
     {
@@ -215,12 +368,13 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
             _calibration?.Cancel("MouseCaptureLost");
         }
     }
+    private IPointSurface KeySurface() => _calibration?.SelectedScreen is ScreenSurface selected && selected.DisplayName == _display ? selected : Surfaces.FirstOrDefault() ?? (IPointSurface)this;
     protected override bool ProcessCmdKey(ref Forms.Message msg, Forms.Keys keyData) =>
-        _calibration?.Key(this, keyData) == true || base.ProcessCmdKey(ref msg, keyData);
+        (_nameEditor is null && _calibration?.Key(KeySurface(), keyData) == true) || base.ProcessCmdKey(ref msg, keyData);
     protected override void WndProc(ref Forms.Message m)
     {
         // These Forms windows run on a WPF dispatcher, without the WinForms pre-translation loop.
-        if (m.Msg == 0x100 && _calibration?.Key(this, (Forms.Keys)(int)m.WParam | ModifierKeys) == true)
+        if (_nameEditor is null && m.Msg == 0x100 && _calibration?.Key(KeySurface(), (Forms.Keys)(int)m.WParam | ModifierKeys) == true)
         {
             m.Result = 0;
             return;
@@ -240,16 +394,18 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
     public void PlayVideo(string path, ExperienceRequest request)
     {
         if (!_available)
-            throw new InvalidOperationException("Assigned monitor is unavailable.");
+            throw new InvalidOperationException("Assigned display is unavailable.");
         if (State == RendererState.Failed || _recovering || _waitingForRenderer)
             throw new InvalidOperationException("The DirectX renderer is recovering. Retry with a new request ID once ready.");
         _renderer!.Play(path, request);
         _guard?.EnsureTopmost("VideoRequest", true);
     }
+    public void StopVideoPlayback(string? source, string playbackRequestId) => _renderer?.StopPlayback(source, playbackRequestId);
     // Production awaits recovery and worker shutdown without blocking the dispatcher.
     public async Task ShutdownWindowAsync()
     {
         _closing = true;
+        FinishNameEdit(false);
         Hide();
         ReleaseCalibrationCapture();
         _guard?.Dispose();
@@ -264,6 +420,7 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
     public void ShutdownWindow()
     {
         _closing = true;
+        FinishNameEdit(false);
         _tasks.Cancel();
         Hide();
         _guard?.Dispose();
@@ -276,9 +433,9 @@ public sealed class MainWindow : Forms.Form, IKeystoneSurface
         Show();
         // Override a launcher's SW_HIDE startup hint without taking keyboard focus.
         ShowWindow(Handle, 4);
-        Telemetry.Info("MonitorSurfaceVisible", new
+        Telemetry.Info("DisplaySurfaceVisible", new
         {
-            MonitorName = _monitor,
+            DisplayName = _display,
             Visible = IsWindowVisible(Handle),
             Width = ClientSize.Width,
             Height = ClientSize.Height

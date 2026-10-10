@@ -6,12 +6,10 @@ public sealed record ExperienceOptions
     public Dictionary<string, string> MonitorAliases { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public string? DefaultAudioDevice { get; init; }
     public bool DeveloperMode { get; init; }
-    public double TransitionInSeconds { get; init; } = 5;
-    public double TransitionOutSeconds { get; init; } = 1;
-    public double MaxVideoPlaybackLength { get; init; } = 10;
-    public double MaxAudioPlaybackLength { get; init; } = 10;
-    public double AudioTransitionInSeconds { get; init; } = 5;
-    public double AudioTransitionOutSeconds { get; init; } = 1;
+    public double TransitionInSeconds { get; init; } = 0.5;
+    public double TransitionOutSeconds { get; init; } = 3;
+    public double AudioTransitionInSeconds { get; init; } = 0.5;
+    public double AudioTransitionOutSeconds { get; init; } = 3;
     public int UdpPort { get; init; } = 21324;
     public string VideoDirectory { get; init; } = "Media";
     public string AudioDirectory { get; init; } = "Media";
@@ -31,8 +29,6 @@ public sealed record ExperienceOptions
         if (UdpPort is < 1 or > 65535 ||
             !double.IsFinite(TransitionInSeconds) || TransitionInSeconds is < 0 or > 3600 ||
             !double.IsFinite(TransitionOutSeconds) || TransitionOutSeconds is < 0 or > 3600 ||
-            !double.IsFinite(MaxVideoPlaybackLength) || MaxVideoPlaybackLength is <= 0 or > 86400 ||
-            !double.IsFinite(MaxAudioPlaybackLength) || MaxAudioPlaybackLength is <= 0 or > 86400 ||
             !double.IsFinite(AudioTransitionInSeconds) || AudioTransitionInSeconds is < 0 or > 3600 ||
             !double.IsFinite(AudioTransitionOutSeconds) || AudioTransitionOutSeconds is < 0 or > 3600 ||
             string.IsNullOrWhiteSpace(VideoDirectory) || string.IsNullOrWhiteSpace(AudioDirectory))
@@ -51,8 +47,6 @@ public sealed record ExperienceOptions
             as System.Text.Json.Nodes.JsonObject ?? throw new System.Text.Json.JsonException("Configuration must be an object.");
         if (!root.ContainsKey("DefaultMonitorName") && root.TryGetPropertyValue("MonitorName", out var monitor))
             root["DefaultMonitorName"] = monitor?.DeepClone();
-        if (!root.ContainsKey("MaxVideoPlaybackLength") && root.TryGetPropertyValue("maxPlaybackLength", out var maximum))
-            root["MaxVideoPlaybackLength"] = maximum?.DeepClone();
         var options = System.Text.Json.JsonSerializer.Deserialize<ExperienceOptions>(root.ToJsonString(),
             new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
         options.Validate();

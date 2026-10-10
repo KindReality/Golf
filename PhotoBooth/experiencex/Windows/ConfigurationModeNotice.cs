@@ -34,16 +34,16 @@ internal sealed class ConfigurationModeNotice : Forms.Form
         Controls.Add(_label);
         _hide.Tick += (_, _) => { _hide.Stop(); Hide(); };
     }
-    public void Display(string message, bool error = false)
+    public void Display(string message, bool error = false, bool persistent = false, string? display = null)
     {
         _hide.Stop();
         _label.Text = message;
         _label.ForeColor = error ? Color.LightCoral : Color.Azure;
-        var screen = Forms.Screen.FromPoint(Forms.Cursor.Position).WorkingArea;
+        var screen = (Forms.Screen.AllScreens.FirstOrDefault(s => s.DeviceName.Equals(display, StringComparison.OrdinalIgnoreCase)) ?? Forms.Screen.FromPoint(Forms.Cursor.Position)).WorkingArea;
         Location = new(screen.Left + (screen.Width - Width) / 2, screen.Top + 40);
         Show();
         BringToFront();
-        _hide.Start();
+        if (!persistent) _hide.Start();
     }
     protected override void Dispose(bool disposing)
     {

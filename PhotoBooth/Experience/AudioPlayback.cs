@@ -14,7 +14,6 @@ internal sealed class AudioPlayback : IDisposable
     public string DeviceName { get; }
     public ExperienceRequest Request { get; }
     public double PositionSeconds => _provider?.PositionSeconds ?? 0;
-    public string EndReason => _provider?.EndReason ?? "MediaEnded";
 
     public AudioPlayback(AudioOutput device, string path, ExperienceRequest request, ExperienceOptions options)
     {

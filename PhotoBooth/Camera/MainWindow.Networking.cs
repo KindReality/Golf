@@ -44,25 +44,26 @@ public sealed partial class MainWindow
             var next = JsonSerializer.Deserialize<BroadcastOptions>(text,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new JsonException("Configuration must be an object.");
             using var document = JsonDocument.Parse(text);
-            // Preserve installations using the previous port setting until they choose UdpPort.
-            if (!document.RootElement.TryGetProperty("UdpPort", out _) && document.RootElement.TryGetProperty("ExperienceUdpPort", out var oldPort))
-                next = next with { UdpPort = oldPort.GetInt32() };
+            next = next with { UdpPort = null }; // The former shared port is replaced by the two configured ports.
             var target = document.RootElement.TryGetProperty("ExperienceDeviceName", out var device) ? device.GetString() : null;
             target = string.IsNullOrWhiteSpace(target) ? Environment.MachineName : target.Trim();
             BroadcastOptions.ValidateName(target, "ExperienceDeviceName", true);
             next.ValidateNetwork();
-            if (_networkListener!.Port == 0 || _networkOptions.UdpPort != next.UdpPort)
-                _networkListener.Bind(next.UdpPort);
+            if (_networkListener!.Port == 0 || _networkOptions.UdpCommandsPort != next.UdpCommandsPort || _networkOptions.UdpEventsPort != next.UdpEventsPort)
+                _networkListener.Bind(next.UdpCommandsPort, next.UdpEventsPort);
             _networkOptions = next;
             _experienceDeviceName = target;
             _networkConfiguration = text;
             _networkFailure = null;
+            devNetworkStatus.Text = target == "*" ? "All devices • broadcast" : target;
+            devNetworkStatus.ToolTip = $"{next.EffectiveDeviceName} → {target}\nEvents: {next.UdpEventsPort} · Commands: {next.UdpCommandsPort}";
             Telemetry.Info("NetworkConfigurationLoaded", new
             {
                 Path = path,
                 next.DeviceName,
                 next.EffectiveDeviceName,
-                next.UdpPort,
+                next.UdpCommandsPort,
+                next.UdpEventsPort,
                 next.UdpBroadcastAddress,
                 next.UdpInterfaceAddress,
                 ExperienceDeviceName = target
@@ -72,20 +73,23 @@ public sealed partial class MainWindow
         {
             if (_networkFailure != ex.Message) Telemetry.Error("NetworkConfigurationRejected", ex);
             _networkFailure = ex.Message;
+            devNetworkStatus.Text = "Configuration needs attention";
+            devNetworkStatus.ToolTip = ex.Message;
         }
     }
 
     // All trigger buttons share this pipeline; retries retain the same identity and payload.
-    private async Task SendExperienceAsync(string experience, string? value, string trigger, string? monitorName = null)
+    private async Task SendExperienceAsync(string experience, string? value, string trigger, string? displayName = null)
     {
         try
         {
             ReloadNetworkConfiguration();
             if (_networkConfiguration is null) throw new InvalidOperationException("No valid network configuration has been loaded. Check appsettings.json and the log.");
             var options = _networkOptions;
-            var payload = BroadcastEnvelope.Create(options, "command", _experienceDeviceName, new { experience, value, monitorName, trigger });
+            var screen = displayName is null ? null : displayName + "/screen1";
+            var payload = BroadcastEnvelope.Create(options, "command", _experienceDeviceName, new { experience, value, screen, trigger });
             var request = BroadcastEnvelope.Parse(payload);
-            Telemetry.Info("ExperienceRequested", new { request.Device, request.Source, Trigger = trigger, Experience = experience, Value = value, MonitorName = monitorName }, request.RequestId);
+            Telemetry.Info("ExperienceRequested", new { request.Device, request.Source, Trigger = trigger, Experience = experience, Value = value, Screen = screen }, request.RequestId);
             await UdpBroadcastSender.SendAsync(payload, options, _networkCancellation.Token);
         }
         catch (OperationCanceledException) when (_networkCancellation.IsCancellationRequested) { }

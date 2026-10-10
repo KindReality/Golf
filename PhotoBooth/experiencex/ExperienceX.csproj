@@ -28,6 +28,8 @@
     <EmbeddedResource Include="Shaders\VideoVS.cso" />
     <EmbeddedResource Include="Shaders\VideoPS.cso" />
     <EmbeddedResource Include="Shaders\CalibrationPS.cso" />
+    <EmbeddedResource Include="Shaders\MatVS.cso" />
+    <EmbeddedResource Include="Shaders\MatPS.cso" />
     <None Update="Media\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="SeedExperienceXConfiguration" AfterTargets="CopyFilesToOutputDirectory">

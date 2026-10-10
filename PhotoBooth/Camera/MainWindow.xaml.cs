@@ -89,16 +89,20 @@ namespace SaftApp
             Telemetry.Info("CameraConfigured", new { DeveloperMode = _developerMode,
                 TargetFps = _targetFps, EnableSerial = _enableSerial });
 
+            InitializeComponent();
+            SourceInitialized += (_, _) => PhotoBooth.Appearance.DarkWindowChrome.Apply(new System.Windows.Interop.WindowInteropHelper(this).Handle);
             if (_developerMode)
             {
                 WindowStartupLocation = WindowStartupLocation.CenterScreen;
                 WindowStyle           = WindowStyle.SingleBorderWindow;
                 ResizeMode            = ResizeMode.CanResize;
-                Width                 = 800;
-                Height                = 600;
+                Width                 = 1080;
+                Height                = 720;
+                MinWidth              = 900;
+                MinHeight             = 620;
             }
 
-            InitializeComponent();
+            ApplyDeveloperMode();
             videoPlayer.MediaOpened += (_, _) => Telemetry.Info("MediaOpened", new
             {
                 Width = videoPlayer.NaturalVideoWidth, Height = videoPlayer.NaturalVideoHeight,
@@ -295,6 +299,11 @@ namespace SaftApp
         private void ApplyDeveloperMode()
         {
             overlayGrid.Visibility = _developerMode ? Visibility.Visible : Visibility.Collapsed;
+            developerHeader.Visibility = _developerMode ? Visibility.Visible : Visibility.Collapsed;
+            previewPlaceholder.Visibility = _developerMode ? Visibility.Visible : Visibility.Collapsed;
+            presentationBorder.Margin = _developerMode ? new Thickness(24, 0, 24, 20) : new Thickness(0);
+            presentationBorder.BorderThickness = new Thickness(_developerMode ? 1 : 0);
+            presentationBorder.CornerRadius = new CornerRadius(_developerMode ? 8 : 0);
             Telemetry.Legacy(_developerMode ? "[DeveloperMode] ON" : "[DeveloperMode] OFF");
         }
 
@@ -393,6 +402,7 @@ namespace SaftApp
         {
             Telemetry.Legacy($"[State] Enter {next}");
             _state = next;
+            devStateText.Text = next.ToString().ToUpperInvariant();
 
             switch (_state)
             {
@@ -1158,43 +1168,7 @@ namespace SaftApp
                     return;
                 }
 
-                // Use System.Drawing to sample the image and compute an average primary color
-                using var bmp = new System.Drawing.Bitmap(iconPath);
-                long rSum = 0, gSum = 0, bSum = 0, count = 0;
-                int stepX = Math.Max(1, bmp.Width / 64);
-                int stepY = Math.Max(1, bmp.Height / 64);
-                for (int x = 0; x < bmp.Width; x += stepX)
-                {
-                    for (int y = 0; y < bmp.Height; y += stepY)
-                    {
-                        var p = bmp.GetPixel(x, y);
-                        if (p.A < 64) continue;
-                        rSum += p.R; gSum += p.G; bSum += p.B; count++;
-                    }
-                }
-
-                if (count == 0) return;
-
-                byte r = (byte)(rSum / count);
-                byte g = (byte)(gSum / count);
-                byte b = (byte)(bSum / count);
-
-                var primaryColor = System.Windows.Media.Color.FromRgb(r, g, b);
-
-                // Choose accent foreground (white/black) based on luminance
-                double luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
-                var accentFore = luminance > 0.6 ? System.Windows.Media.Colors.Black : System.Windows.Media.Colors.White;
-
-                // Slightly desaturate/adjust primary for UI surfaces
-                var adjusted = System.Windows.Media.Color.FromScRgb(1f,
-                    Math.Min(1f, (float)(r / 255.0 * 0.95)),
-                    Math.Min(1f, (float)(g / 255.0 * 0.95)),
-                    Math.Min(1f, (float)(b / 255.0 * 0.95)));
-
-                // Apply to resources in this window so DynamicResource picks it up
-                this.Resources["PrimaryBrush"] = new SolidColorBrush(primaryColor);
-                this.Resources["AccentBrush"]  = new SolidColorBrush(adjusted);
-                this.Resources["AccentForeground"] = new SolidColorBrush(accentFore);
+                // Branding supplies the icon; control colors come from the shared dark theme.
 
                 // Set window icon from icon.ico if available, else fallback to icon.png
                 try

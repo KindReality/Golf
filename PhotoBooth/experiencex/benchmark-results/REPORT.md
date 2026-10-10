@@ -14,6 +14,6 @@ WPF render-callback gap P95 was about 33.34 ms for every mode. The largest gaps 
 
 On this PC, the measured resource usage does not justify replacing the renderer solely for performance. Occasional long callback gaps warrant a presentation-level profiler or visual review if stutter is observed. Results should be repeated on the actual projection PC with its display connection and concurrent applications.
 
-Original settings were restored: maxPlaybackLength=10, BlackKey enabled, Keystone disabled. Camera and Experience are running again.
+Original settings were restored: BlackKey enabled, Keystone disabled. Camera and Experience are running again.
 
 Raw measurements: samples-20261007-210909.json. Re-run with `./Experience/Measure-Playback.ps1` from a PowerShell terminal while Camera is closed. The script temporarily changes playback configuration and restores it in finally; it requires a built Experience app, ping.mp4, and access to GPU performance counters. The added PlaybackPerformance telemetry records bounded WPF render-callback timing for future playback diagnostics.

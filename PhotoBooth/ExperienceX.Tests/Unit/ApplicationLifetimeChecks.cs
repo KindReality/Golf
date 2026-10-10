@@ -32,15 +32,17 @@ internal static class ApplicationLifetimeChecks
         if (timeline.Started || timeline.Opacity != 0)
             throw new Exception("Video timeline did not reset transparently.");
         timeline.Start();
-        var middle = timeline.AdvanceAt(2.5, options, 100, 2.5, false);
+        var middle = timeline.AdvanceAt(0.25, options, 100, 0.25, false);
         if (middle.Opacity != 0.5 || middle.Complete)
             throw new Exception("Video fade-in timing changed.");
-        timeline.AdvanceAt(8, options, 100, 8, false);
-        var fade = timeline.AdvanceAt(9, options, 100, 9, false);
-        if (!fade.FadeStarted || fade.FadeSeconds != 1)
-            throw new Exception("Fade-out did not start before the maximum.");
-        if (timeline.AdvanceAt(9.5, options, 100, 9.5, false).Opacity != 0.5 || !timeline.AdvanceAt(10, options, 100, 10, false).Complete)
-            throw new Exception("Video fade did not finish at its deadline.");
+        var playing = timeline.AdvanceAt(50, options, 100, 50, false);
+        if (playing.Complete || playing.FadeStarted || playing.Opacity != 1)
+            throw new Exception("Long-running video did not continue playing.");
+        var fade = timeline.AdvanceAt(97, options, 100, 97, false);
+        if (!fade.FadeStarted || fade.FadeSeconds != 3)
+            throw new Exception("Fade-out did not start before the natural end.");
+        if (timeline.AdvanceAt(98.5, options, 100, 98.5, false).Opacity != 0.5 || !timeline.AdvanceAt(100, options, 100, 100, false).Complete)
+            throw new Exception("Video fade did not finish at the natural end.");
         timeline.Reset();
         timeline.Start();
         if (timeline.AdvanceAt(0, options, 0.5, 0, false).FadeSeconds != 0.5 || !timeline.AdvanceAt(0.5, options, 0.5, 0.5, true).Complete)

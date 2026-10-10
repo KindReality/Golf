@@ -1,0 +1,92 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="ThemeBackground" Color="#0B1019"/>
+    <SolidColorBrush x:Key="ThemeSurface" Color="#131C29"/>
+    <SolidColorBrush x:Key="ThemeRaised" Color="#192638"/>
+    <SolidColorBrush x:Key="ThemeBorder" Color="#2A3C50"/>
+    <SolidColorBrush x:Key="ThemeText" Color="#E5EDF4"/>
+    <SolidColorBrush x:Key="ThemeMuted" Color="#93A6BA"/>
+    <SolidColorBrush x:Key="ThemeAccent" Color="#63D7E8"/>
+    <SolidColorBrush x:Key="ThemeSelection" Color="#1E3D4E"/>
+
+    <Style x:Key="ThemeFocus" TargetType="Control">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate><Rectangle Margin="-3" Stroke="{StaticResource ThemeAccent}" StrokeThickness="1" RadiusX="8" RadiusY="8"/></ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="DarkButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="{StaticResource ThemeRaised}"/>
+        <Setter Property="Foreground" Value="{StaticResource ThemeText}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource ThemeBorder}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Padding" Value="12,8"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{StaticResource ThemeFocus}"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Surface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="True"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Surface" Property="Background" Value="{StaticResource ThemeSelection}"/>
+                            <Setter TargetName="Surface" Property="BorderBrush" Value="{StaticResource ThemeAccent}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Background" Value="#265061"/></Trigger>
+                        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.45"/></Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource DarkButtonStyle}">
+        <Setter Property="Background" Value="{StaticResource ThemeSelection}"/>
+        <Setter Property="BorderBrush" Value="#3D7B8F"/>
+        <Setter Property="Foreground" Value="{StaticResource ThemeAccent}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style x:Key="DevButtonStyle" TargetType="Button" BasedOn="{StaticResource DarkButtonStyle}">
+        <Setter Property="Height" Value="52"/>
+        <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+    <Style x:Key="SectionCaption" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource ThemeMuted}"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Margin" Value="0,0,0,12"/>
+    </Style>
+    <Style TargetType="ToolTip">
+        <Setter Property="Foreground" Value="{StaticResource ThemeText}"/>
+        <Setter Property="Background" Value="{StaticResource ThemeRaised}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource ThemeBorder}"/>
+        <Setter Property="Padding" Value="12,8"/>
+        <Setter Property="FontFamily" Value="Segoe UI"/>
+        <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <Style TargetType="ScrollBar">
+        <Setter Property="Width" Value="8"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Track x:Name="PART_Track" IsDirectionReversed="True">
+                        <Track.DecreaseRepeatButton><RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/></Track.DecreaseRepeatButton>
+                        <Track.Thumb>
+                            <Thumb>
+                                <Thumb.Template><ControlTemplate><Border Background="#334B61" CornerRadius="4" Margin="2,0"/></ControlTemplate></Thumb.Template>
+                            </Thumb>
+                        </Track.Thumb>
+                        <Track.IncreaseRepeatButton><RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/></Track.IncreaseRepeatButton>
+                    </Track>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

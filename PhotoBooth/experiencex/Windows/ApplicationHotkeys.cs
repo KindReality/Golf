@@ -7,29 +7,62 @@ namespace ExperienceX;
 // A message-only window receives shortcuts even while another application has focus.
 internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action close, Action toggleBackground) : Forms.NativeWindow, IDisposable
 {
-    internal const int ConfigurationId = 0x584B, CloseId = 0x5858, BackgroundId = 0x5854;
+    internal const int ConfigurationId = 0x584B, CloseId = 0x5858, BackgroundId = 0x5842;
+    internal const int AddId = 0x5841, VideoId = 0x5856;
+    internal const int NewId = 0x584E, MatId = 0x584D;
+    internal const int TransparencyId = 0x5854;
+    internal const int WhiteBackgroundId = 0x5857;
+    public Action? ToggleScreenTransparency { get; set; }
+    public Action? ChooseWhiteBackground { get; set; }
+    public Action? AddScreenPrefix
+    {
+        get; set;
+    }
+    public Action? AddVideoScreen
+    {
+        get; set;
+    }
+    public Action? NewScreenPrefix { get; set; }
+    public Action? AddMatScreen { get; set; }
+    private bool _addRegistered, _videoRegistered, _newRegistered, _matRegistered, _transparencyRegistered, _whiteRegistered, _editingText, _choosingBackground;
     internal const uint Modifiers = 0x4007; // MOD_NOREPEAT | MOD_CONTROL | MOD_ALT | MOD_SHIFT
     internal const uint LetterModifiers = 0x4000; // MOD_NOREPEAT
     private bool _configurationRegistered, _closeRegistered, _backgroundRegistered, _disposed;
     private bool _configurationMode;
 
-    public string[] Register(bool configurationMode = false)
+    public string[] Register(bool configurationMode = false, bool editingText = false, bool choosingBackground = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (Handle == nint.Zero)
             CreateHandle(new Forms.CreateParams { Caption = "ExperienceX.ApplicationHotkeys", Parent = new nint(-3) });
-        if (_configurationMode != configurationMode)
+        if (_configurationMode != configurationMode || _editingText != editingText || _choosingBackground != choosingBackground)
         {
             Unregister();
             _configurationMode = configurationMode;
+            _editingText = editingText;
+            _choosingBackground = choosingBackground;
         }
         List<string> unavailable = [];
+        if (editingText)
+            return [];
         var modifiers = configurationMode ? LetterModifiers : Modifiers;
         Register(ConfigurationId, 0x43, modifiers, configurationMode ? "C" : "Ctrl+Shift+Alt+C", "ConfigurationHotkey", ref _configurationRegistered, unavailable);
         if (configurationMode)
         {
             Register(CloseId, 0x58, modifiers, "X", "CloseHotkey", ref _closeRegistered, unavailable);
-            Register(BackgroundId, 0x54, modifiers, "T", "BackgroundHotkey", ref _backgroundRegistered, unavailable);
+            Register(BackgroundId, 0x42, modifiers, "B", "BackgroundHotkey", ref _backgroundRegistered, unavailable);
+            if (choosingBackground && ChooseWhiteBackground is not null)
+                Register(WhiteBackgroundId, 0x57, modifiers, "W", "WhiteBackgroundHotkey", ref _whiteRegistered, unavailable);
+            if (ToggleScreenTransparency is not null)
+                Register(TransparencyId, 0x54, modifiers, "T", "ScreenTransparencyHotkey", ref _transparencyRegistered, unavailable);
+            if (AddScreenPrefix is not null)
+                Register(AddId, 0x41, modifiers, "A", "AddScreenHotkey", ref _addRegistered, unavailable);
+            if (AddVideoScreen is not null)
+                Register(VideoId, 0x56, modifiers, "V", "AddVideoScreenHotkey", ref _videoRegistered, unavailable);
+            if (NewScreenPrefix is not null)
+                Register(NewId, 0x4E, modifiers, "N", "NewScreenHotkey", ref _newRegistered, unavailable);
+            if (AddMatScreen is not null)
+                Register(MatId, 0x4D, modifiers, "M", "AddMatScreenHotkey", ref _matRegistered, unavailable);
         }
         return unavailable.ToArray();
     }
@@ -80,11 +113,33 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 close();
                 return;
             }
-            if (message.WParam == BackgroundId && key == 0x54 && _backgroundRegistered)
+            if (message.WParam == BackgroundId && key == 0x42 && _backgroundRegistered)
             {
                 toggleBackground();
                 return;
             }
+            if (message.WParam == TransparencyId && key == 0x54 && _transparencyRegistered)
+            {
+                ToggleScreenTransparency?.Invoke();
+                return;
+            }
+            if (message.WParam == WhiteBackgroundId && key == 0x57 && _whiteRegistered)
+            {
+                ChooseWhiteBackground?.Invoke();
+                return;
+            }
+            if (message.WParam == AddId && key == 0x41 && _addRegistered)
+            {
+                AddScreenPrefix?.Invoke();
+                return;
+            }
+            if (message.WParam == VideoId && key == 0x56 && _videoRegistered)
+            {
+                AddVideoScreen?.Invoke();
+                return;
+            }
+            if (message.WParam == NewId && key == 0x4E && _newRegistered) { NewScreenPrefix?.Invoke(); return; }
+            if (message.WParam == MatId && key == 0x4D && _matRegistered) { AddMatScreen?.Invoke(); return; }
         }
         base.WndProc(ref message);
     }
@@ -107,7 +162,17 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
             UnregisterHotKey(Handle, CloseId);
         if (_backgroundRegistered)
             UnregisterHotKey(Handle, BackgroundId);
-        _configurationRegistered = _closeRegistered = _backgroundRegistered = false;
+        if (_addRegistered)
+            UnregisterHotKey(Handle, AddId);
+        if (_videoRegistered)
+            UnregisterHotKey(Handle, VideoId);
+        if (_newRegistered) UnregisterHotKey(Handle, NewId);
+        if (_matRegistered) UnregisterHotKey(Handle, MatId);
+        if (_transparencyRegistered) UnregisterHotKey(Handle, TransparencyId);
+        if (_whiteRegistered) UnregisterHotKey(Handle, WhiteBackgroundId);
+        _whiteRegistered = false;
+        _transparencyRegistered = false;
+        _configurationRegistered = _closeRegistered = _backgroundRegistered = _addRegistered = _videoRegistered = _newRegistered = _matRegistered = false;
     }
 
     [DllImport("user32.dll", SetLastError = true)]

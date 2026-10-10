@@ -30,13 +30,12 @@ internal sealed class RoutedAudioProvider : ISampleProvider, IWaveProvider
 
     public WaveFormat WaveFormat { get; }
     public double PositionSeconds => Interlocked.Read(ref _frames) / (double)WaveFormat.SampleRate;
-    public string EndReason => _duration <= Volatile.Read(ref _options).MaxAudioPlaybackLength ? "MediaEnded" : "MaximumPlaybackLength";
     public void UpdateOptions(ExperienceOptions options) => Volatile.Write(ref _options, options);
 
     public int Read(float[] buffer, int offset, int count)
     {
         var options = Volatile.Read(ref _options);
-        var end = Math.Min(_duration, options.MaxAudioPlaybackLength);
+        var end = _duration;
         var allowed = Math.Max(0L, (long)Math.Floor(end * WaveFormat.SampleRate) - _frames);
         var requested = (int)Math.Min(count / WaveFormat.Channels, allowed);
         if (requested == 0) return 0;

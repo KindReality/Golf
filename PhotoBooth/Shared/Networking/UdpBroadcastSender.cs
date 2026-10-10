@@ -1,12 +1,14 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Diagnostics;
 using PhotoBooth.Diagnostics;
 
 namespace PhotoBooth.Networking;
 
 internal static class UdpBroadcastSender
 {
-    public static async Task SendAsync(byte[] bytes, BroadcastOptions options, CancellationToken token = default)
+    public static async Task SendAsync(byte[] bytes, BroadcastOptions options, CancellationToken token = default,
+        Action<long>? sentAt = null)
     {
         options.ValidateNetwork();
         var message = BroadcastEnvelope.Parse(bytes);
@@ -27,15 +29,20 @@ internal static class UdpBroadcastSender
                 {
                     using var client = new UdpClient(AddressFamily.InterNetwork) { EnableBroadcast = true };
                     if (route.Address is not null) client.Client.Bind(new IPEndPoint(route.Address, 0));
-                    var destination = new IPEndPoint(route.Destination, options.UdpPort);
+                    var destination = new IPEndPoint(route.Destination, options.PortFor(message.Type));
+                    var timestamp = Stopwatch.GetTimestamp();
                     await client.SendAsync(bytes, destination, token).ConfigureAwait(false);
+                    sentAt?.Invoke(timestamp);
                     sent = true;
                     Telemetry.Info("UdpBroadcastSent", new
                     {
                         Destination = destination.ToString(),
                         Interface = route.Address?.ToString(),
                         InterfaceName = route.Name,
-                        message.Type, message.Device, message.Source, message.Event,
+                        message.Type,
+                        message.Device,
+                        message.Source,
+                        message.Event,
                         Bytes = bytes.Length,
                         Attempt = attempt + 1
                     }, message.RequestId);
@@ -45,9 +52,12 @@ internal static class UdpBroadcastSender
                     failure = ex;
                     Telemetry.Warning("UdpBroadcastInterfaceFailed", new
                     {
-                        Interface = route.Address?.ToString(), InterfaceName = route.Name,
-                        Destination = route.Destination.ToString(), Attempt = attempt + 1,
-                        Reason = ex.Message, ex.SocketErrorCode
+                        Interface = route.Address?.ToString(),
+                        InterfaceName = route.Name,
+                        Destination = route.Destination.ToString(),
+                        Attempt = attempt + 1,
+                        Reason = ex.Message,
+                        ex.SocketErrorCode
                     }, message.RequestId);
                 }
             }

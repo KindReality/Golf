@@ -26,7 +26,6 @@ try {
             $configuration.Keystone.TopLeft.X = 0.1
             $configuration.Keystone.TopRight.X = 0.9
         }
-        $configuration.MaxVideoPlaybackLength = $SampleSeconds + 10
         $configuration | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $configPath
         [Threading.Thread]::Sleep(2000)
         $requestId = 'benchmark-' + $case.Name + '-' + [Guid]::NewGuid().ToString('N')
@@ -62,8 +61,15 @@ try {
             })
             $engines[$engine] = if ($totals.Count -gt 0) { ($totals | Measure-Object -Average).Average } else { $null }
         }
-        # No stop command: allow the playback deadline to produce the summary.
-        [Threading.Thread]::Sleep(5000)
+        # Wait for the file to finish naturally; this timeout belongs only to the test.
+        $waitUntil = [DateTime]::UtcNow.AddMinutes(5)
+        do {
+            $log = Get-ChildItem (Join-Path $runtimeDirectory 'logs\Experience') -Filter '*.jsonl' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+            $completed = Get-Content -LiteralPath $log.FullName | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.RequestId -eq $requestId -and $_.Event -eq 'PlaybackStopped' }
+            if (!$completed) { [Threading.Thread]::Sleep(200) }
+        } while (!$completed -and [DateTime]::UtcNow -lt $waitUntil)
+        if (!$completed) { throw 'Test timed out waiting for the video file to finish naturally.' }
+        [Threading.Thread]::Sleep(200)
         $log = Get-ChildItem (Join-Path $runtimeDirectory 'logs\Experience') -Filter '*.jsonl' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
         $events = @(Get-Content -LiteralPath $log.FullName | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object RequestId -eq $requestId)
         $performance = $events | Where-Object Event -eq 'PlaybackPerformance' | Select-Object -Last 1

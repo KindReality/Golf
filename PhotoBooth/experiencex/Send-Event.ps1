@@ -1,15 +1,17 @@
 param(
     [Parameter(Mandatory)][string]$Event,
+    [Parameter(Mandatory)][string]$Input,
     [string]$Device = '*',
     [string]$Source = [Environment]::MachineName,
     [string]$BroadcastAddress = '255.255.255.255',
     [string]$InterfaceAddress,
-    [ValidateRange(1,65535)][int]$Port = 21325,
+    [ValidateRange(1,65535)][int]$Port = 54242,
     [hashtable]$Data = @{}
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Broadcast-Protocol.ps1')
-$request = @{ type='event'; device=$Device; source=$Source; event=$Event; data=$Data }
+if ([string]::IsNullOrWhiteSpace($Input) -or $Input.Trim().Length -gt 128) { throw 'A named input is required.' }
+$request = @{ type='event'; device=$Device; source=$Source; input=$Input.Trim(); event=$Event; data=$Data }
 $bytes = ConvertTo-ExperienceBroadcastBytes -Request $request
 $client = [Net.Sockets.UdpClient]::new()
 try {

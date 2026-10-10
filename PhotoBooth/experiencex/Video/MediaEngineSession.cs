@@ -34,7 +34,7 @@ internal sealed class MediaEngineSession(Action wake) : IDisposable
             if (Interlocked.Read(ref _generation) != generation)
                 return;
             if (kind == MediaEngineEvent.CanPlay)
-                _canPlay = 1;
+                Interlocked.CompareExchange(ref _canPlay, 1, 0);
             if (kind == MediaEngineEvent.Ended)
                 _ended = 1;
             if (kind == MediaEngineEvent.Error)
@@ -50,6 +50,7 @@ internal sealed class MediaEngineSession(Action wake) : IDisposable
             catch (ObjectDisposedException) { }
         });
         _engine.Muted = request.Mute;
+        _engine.Loop = request.Loop;
         _engine.SetSource(new Uri(path).AbsoluteUri).CheckError();
         _engine.Load();
     }

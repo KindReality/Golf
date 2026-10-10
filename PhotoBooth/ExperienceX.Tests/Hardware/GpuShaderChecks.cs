@@ -49,7 +49,7 @@ internal static class GpuShaderChecks
             context.PSSetShaderResource(0, srv);
             context.PSSetSampler(0, sampler);
             context.PSSetConstantBuffer(0, buffer);
-            byte[] Render(float opacity, bool key, KeystoneOptions? keystone = null, Color4? background = null)
+            byte[] Render(float opacity, bool key, PointOptions? keystone = null, Color4? background = null)
             {
                 context.ClearRenderTargetView(rtv, background ?? new Color4(0, 0, 0, 0));
                 context.OMSetBlendState(videoBlend);
@@ -76,31 +76,31 @@ internal static class GpuShaderChecks
                 throw new Exception("GPU zero-opacity surface was not completely transparent.");
             if (Alpha(Render(1, false), 3, 3) != 255)
                 throw new Exception("Disabling black key did not preserve opaque black.");
-            var warped = Render(1, false, new KeystoneOptions { Enabled = true, TopLeft = new(0.25, 0.25), TopRight = new(0.75, 0.25), BottomLeft = new(0.25, 0.75), BottomRight = new(0.75, 0.75) });
+            var warped = Render(1, false, new PointOptions { Enabled = true, TopLeft = new(0.25, 0.25), TopRight = new(0.75, 0.25), BottomLeft = new(0.25, 0.75), BottomRight = new(0.75, 0.75) });
             if (Alpha(warped, 1, 1) != 0 || Alpha(warped, 8, 8) != 255)
                 throw new Exception("GPU keystone did not clip outside its quadrilateral.");
-            var backdrop = MonitorBackground.Parse("#204060");
+            var backdrop = DisplayBackground.Parse("#204060");
             var idle = Render(0, true, background: backdrop);
             for (int p = 0; p < idle.Length; p += 4)
                 if (idle[p] != 96 || idle[p + 1] != 64 || idle[p + 2] != 32 || idle[p + 3] != 255)
-                    throw new Exception("Zero-opacity video did not preserve the opaque monitor background.");
+                    throw new Exception("Zero-opacity video did not preserve the opaque display background.");
             var overBackground = Render(0.25f, true, background: backdrop);
             int black = (3 * 16 + 3) * 4, red = (3 * 16 + 12) * 4;
             if (overBackground[black] != 96 || overBackground[black + 1] != 64 || overBackground[black + 2] != 32 || overBackground[black + 3] != 255 ||
                 Math.Abs(overBackground[red] - 72) > 1 || Math.Abs(overBackground[red + 1] - 48) > 1 || Math.Abs(overBackground[red + 2] - 88) > 1 || overBackground[red + 3] != 255)
                 throw new Exception("Premultiplied video fade or black-key transparency did not composite over the background correctly.");
-            var outsideKeystone = Render(1, false, new KeystoneOptions { Enabled = true, TopLeft = new(.25, .25), TopRight = new(.75, .25), BottomLeft = new(.25, .75), BottomRight = new(.75, .75) }, backdrop);
+            var outsideKeystone = Render(1, false, new PointOptions { Enabled = true, TopLeft = new(.25, .25), TopRight = new(.75, .25), BottomLeft = new(.25, .75), BottomRight = new(.75, .75) }, backdrop);
             if (outsideKeystone[0] != 96 || outsideKeystone[1] != 64 || outsideKeystone[2] != 32 || outsideKeystone[3] != 255)
-                throw new Exception("Keystone clipping erased the full-monitor background.");
+                throw new Exception("Points clipping erased the full-display background.");
             Console.WriteLine("GPU readback passed black key, premultiplied fades, transparent clear, and keystone clipping.");
-            Console.WriteLine("GPU readback passed solid monitor backgrounds, video fades, keyed pixels and background outside keystone bounds.");
+            Console.WriteLine("GPU readback passed solid display backgrounds, video fades, keyed pixels and background outside keystone bounds.");
             Overlay(device, context, vs, Shader);
         }
     }
     [StructLayout(LayoutKind.Sequential)]
     private struct OverlayData
     {
-        public Vector4 P0, P1, Screen, Selection, Grid, Row0, Row1, Row2;
+        public Vector4 Screen, Selection, Grid, Row0, Row1, Row2, Label;
     }
     private static void Overlay(ID3D11Device device, ID3D11DeviceContext context, ID3D11VertexShader vs, Func<string, byte[]> shader)
     {
@@ -118,10 +118,16 @@ internal static class GpuShaderChecks
         context.PSSetConstantBuffer(0, constants);
         byte[] Render(float opacity, float time, int flash = 0, float progress = -1, bool grid = false)
         {
-            var data = new OverlayData { P0 = new(.15f, .15f, .85f, .15f), P1 = new(.15f, .85f, .85f, .85f), Screen = new(w, h, time, opacity), Selection = new(0, flash, progress, 1) };
+            Vector4[] points = [new(.15f, .15f, (flash & 1) != 0 ? 1 : 0, 0), new(.85f, .15f, (flash & 2) != 0 ? 1 : 0, 1),
+                new(.85f, .85f, (flash & 8) != 0 ? 1 : 0, 3), new(.15f, .85f, (flash & 4) != 0 ? 1 : 0, 2)];
+            using var vertices = device.CreateBuffer<Vector4>(points, BindFlags.ShaderResource, ResourceUsage.Default, CpuAccessFlags.None,
+                ResourceOptionFlags.BufferStructured, structureByteStride: 16);
+            using var pointsView = device.CreateShaderResourceView(vertices);
+            context.PSSetShaderResource(1, pointsView);
+            var data = new OverlayData { Screen = new(w, h, time, opacity), Selection = new(0, flash, progress, 1), Label = new(0, 0, 0, 4) };
             if (grid)
             {
-                var inverse = VideoTransform.Inverse(new KeystoneOptions { Enabled = true, TopLeft = new(.15, .15), TopRight = new(.85, .15), BottomLeft = new(.15, .85), BottomRight = new(.85, .85) });
+                var inverse = VideoTransform.Inverse(new PointOptions { Enabled = true, TopLeft = new(.15, .15), TopRight = new(.85, .15), BottomLeft = new(.15, .85), BottomRight = new(.85, .85) });
                 data.Grid = new(1, 0, 0, 0);
                 data.Row0 = inverse.Item1;
                 data.Row1 = inverse.Item2;
@@ -139,7 +145,7 @@ internal static class GpuShaderChecks
                     Marshal.Copy(map.DataPointer + y * (int)map.RowPitch, bytes, y * w * 4, w * 4);
                 return bytes;
             }
-            finally { context.Unmap(staging, 0); }
+            finally { context.Unmap(staging, 0); context.PSUnsetShaderResource(1); }
         }
         int At(int x, int y, int channel) => (y * w + x) * 4 + channel;
         var image = Render(1, 1);

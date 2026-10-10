@@ -19,7 +19,7 @@ function Assert-Event($events, $name, $id) {
     if (-not ($events | Where-Object { $_.Event -eq $name -and $_.RequestId -eq $id })) { throw "Missing $name for $id" }
 }
 function Wait-Event($name, $id) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $deadline = [DateTime]::UtcNow.AddMinutes(5)
     do {
         if (Read-Events | Where-Object { $_.Event -eq $name -and $_.RequestId -eq $id }) { return }
         [Threading.Thread]::Sleep(200)
@@ -42,7 +42,6 @@ try {
     $config.BlackKey.Enabled = -not $DisableBlackKey
     $config.Keystone.Enabled = [bool]$EnableKeystone
     $config.DefaultMonitorName = '\\.\DISPLAY-NOT-AVAILABLE-VERIFICATION'
-    $config.MaxVideoPlaybackLength = 4; $config.MaxAudioPlaybackLength = 4
     $config.TransitionInSeconds = $VideoFadeSeconds; $config.TransitionOutSeconds = $VideoFadeSeconds
     $config.AudioTransitionInSeconds = 0.5; $config.AudioTransitionOutSeconds = 0.5
     $config | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $configPath
@@ -115,7 +114,7 @@ try {
     Assert-Event $events 'AudioDeviceUnavailable' ($prefix + '-missing-audio')
     if (-not ($events | Where-Object { $_.Event -eq 'UdpRequestInvalid' -and $_.Data.Reason -like '*Only video and audio*' })) { throw 'Removed stop command was not rejected.' }
     if ($events | Where-Object Level -eq 'Error') { throw 'Errors recorded during live verification.' }
-    if ($events | Where-Object { $_.Event -eq 'AudioPlaybackCompleted' -and $_.Data.PositionSeconds -gt 4.01 }) { throw 'Audio exceeded its configured maximum.' }
+    if ($events | Where-Object { $_.Event -eq 'AudioPlaybackCompleted' -and $_.Data.PositionSeconds -gt 8.01 }) { throw 'Audio exceeded the test media duration.' }
     "Passed per-monitor windows ($($monitors.Count)), concurrent video, replacement, independent audio devices ($($devices.Count))/channels, unavailable outputs and removed stop command."
 } finally {
     Set-Content -LiteralPath $configPath -Value $saved

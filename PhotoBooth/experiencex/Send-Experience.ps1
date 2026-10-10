@@ -2,21 +2,25 @@ param(
     [Alias('ComputerName')][string]$BroadcastAddress = '255.255.255.255',
     [string]$InterfaceAddress,
     [string]$Device = [Environment]::MachineName,
-    [ValidateRange(1,65535)][int]$Port = 21325,
+    [ValidateRange(1,65535)][int]$Port = 54243,
     [ValidateSet('video', 'audio')][string]$Experience = 'video',
     [string]$Value = 'ping.mp4',
-    [string]$MonitorName,
+    [string]$DisplayName,
+    [string]$Screen,
     [string]$AudioDevice,
     [string[]]$AudioDevices,
     [ValidateRange(1,128)][int]$Channel,
     [ValidateRange(0,100)][double]$Volume,
-    [switch]$Mute
+    [switch]$Mute,
+    [switch]$Loop
 )
 
 . (Join-Path $PSScriptRoot 'Broadcast-Protocol.ps1')
 $request = @{ type = 'command'; device = $Device; experience = $Experience; value = $Value; mute = [bool]$Mute }
+if ($Loop) { if ($Experience -ne 'video') { throw 'Loop is supported for video only.' }; $request.loop = $true }
 if ($AudioDevice -and $AudioDevices) { throw 'Use either AudioDevice or AudioDevices.' }
-if ($MonitorName) { $request.monitorName = $MonitorName }
+if ($DisplayName) { $request.displayName = $DisplayName }
+if ($Screen) { $request.screen = $Screen }
 if ($AudioDevice) { $request.audioDevice = $AudioDevice }
 if ($PSBoundParameters.ContainsKey('AudioDevices')) { $request.audioDevices = @($AudioDevices) }
 if ($PSBoundParameters.ContainsKey('Channel')) { $request.channel = $Channel }

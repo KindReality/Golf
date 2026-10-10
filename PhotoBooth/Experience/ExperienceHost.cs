@@ -161,7 +161,7 @@ internal sealed class ExperienceHost : IDisposable
 
     private void LogConfiguration() => Telemetry.Info("ConfigurationLoaded", new { Path = _configPath,
         _options.DefaultMonitorName, _options.MonitorAliases, _options.DefaultAudioDevice, _options.DeveloperMode, _options.UdpPort,
-        _options.MaxVideoPlaybackLength, _options.MaxAudioPlaybackLength, _options.TransitionInSeconds,
+        _options.TransitionInSeconds,
         _options.TransitionOutSeconds, _options.AudioTransitionInSeconds, _options.AudioTransitionOutSeconds,
         _options.VideoDirectory, _options.AudioDirectory });
 

@@ -30,10 +30,16 @@ internal static class BroadcastChecks
         var routes = BroadcastRouting.Select(defaults, interfaces);
         if (!routes.Select(route => route.Destination.ToString()).SequenceEqual(["192.168.56.255", "192.168.1.255", "10.20.255.255"]))
             throw new Exception("Automatic broadcasts did not include physical and offline LANs alongside virtual adapters.");
-        var pinned = BroadcastRouting.Select(defaults with { UdpInterfaceAddress = "192.168.1.42" }, interfaces);
+        var pinned = BroadcastRouting.Select(defaults with
+        {
+            UdpInterfaceAddress = "192.168.1.42"
+        }, interfaces);
         if (pinned.Length != 1 || pinned[0].Destination.ToString() != "192.168.1.255" || pinned[0].Address?.ToString() != "192.168.1.42")
             throw new Exception("Explicit interface selection was not retained.");
-        if (BroadcastRouting.Select(defaults with { UdpBroadcastAddress = "10.0.0.255" }, interfaces).Single().Destination.ToString() != "10.0.0.255")
+        if (BroadcastRouting.Select(defaults with
+        {
+            UdpBroadcastAddress = "10.0.0.255"
+        }, interfaces).Single().Destination.ToString() != "10.0.0.255")
             throw new Exception("Explicit broadcast destination was overridden.");
         if (defaults.EffectiveDeviceName != Environment.MachineName ||
             (defaults with

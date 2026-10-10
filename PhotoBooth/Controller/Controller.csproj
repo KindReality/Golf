@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <ControllerEnvironment Condition="'$(Configuration)' == 'Release'">Production</ControllerEnvironment>
+    <ControllerEnvironment Condition="'$(Configuration)' != 'Release'">Development</ControllerEnvironment>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.IO.Ports" Version="9.0.0" />
+    <Compile Include="..\Shared\Telemetry.cs" Link="Diagnostics\Telemetry.cs" />
+    <Compile Include="..\Shared\Appearance\DarkWindowChrome.cs" Link="Appearance\DarkWindowChrome.cs" />
+    <Compile Include="..\Shared\Networking\*.cs" Link="Networking\%(Filename)%(Extension)" />
+    <InternalsVisibleTo Include="Controller.Tests" />
+    <None Update="appsettings.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <None Update="Install-Controller.cmd;Install-Controller.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="appsettings.Development.json;appsettings.Production.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+  <Target Name="ControllerConfigurationTransform" AfterTargets="CopyFilesToOutputDirectory">
+    <Copy SourceFiles="appsettings.json" DestinationFiles="$(TargetDir)appsettings.defaults.json" />
+    <Copy SourceFiles="appsettings.$(ControllerEnvironment).json" DestinationFiles="$(TargetDir)appsettings.environment.json" />
+  </Target>
+  <Target Name="ControllerPublishConfigurationTransform" AfterTargets="Publish">
+    <Copy SourceFiles="appsettings.json" DestinationFiles="$(PublishDir)appsettings.defaults.json" />
+    <Copy SourceFiles="appsettings.$(ControllerEnvironment).json" DestinationFiles="$(PublishDir)appsettings.environment.json" />
+  </Target>
+</Project>

@@ -17,11 +17,11 @@ internal static class ConfigurationServiceChecks
                 try
                 {
                     var path = Path.Combine(folder, "appsettings.json");
-                    File.WriteAllText(path, "{\"MonitorName\":\"TEST\",\"maxPlaybackLength\":7,\"Custom\":42}");
+                    File.WriteAllText(path, "{\"DisplayName\":\"TEST\",\"TransitionInSeconds\":7,\"Custom\":42}");
                     await using var service = new ConfigurationService(dispatcher, path, () => ["TEST"]);
                     service.LoadInitial();
                     var migrated = JsonNode.Parse(File.ReadAllText(path))!;
-                    if (migrated["ConfigurationVersion"]!.GetValue<int>() != ConfigurationSchema.CurrentVersion || migrated["Custom"]!.GetValue<int>() != 42 || service.Current.MaxVideoPlaybackLength != 7)
+                    if (migrated["ConfigurationVersion"]!.GetValue<int>() != ConfigurationSchema.CurrentVersion || migrated["Custom"]!.GetValue<int>() != 42 || service.Current.TransitionInSeconds != 7)
                         throw new Exception("Persisted schema migration lost legacy values or unknown fields.");
                     service.StartWatching();
                     migrated["DeviceName"] = "  projection-pc  ";
@@ -43,26 +43,35 @@ internal static class ConfigurationServiceChecks
                         throw new Exception("Shortcut toggle did not merge the latest remote settings.");
                     if (await service.ToggleConfigurationModeAsync() || service.Current.ConfigurationMode)
                         throw new Exception("Shortcut toggle did not disable configuration mode.");
-                    migrated["MonitorBackgrounds"] = new JsonObject { [@"\\.\DISPLAY9"] = "#102030" };
+                    migrated["DisplayBackgrounds"] = new JsonObject { [@"\\.\DISPLAY9"] = "#102030" };
                     File.WriteAllText(path, migrated.ToJsonString());
-                    await Until(() => service.Current.MonitorBackgrounds.ContainsKey(@"\\.\DISPLAY9"));
-                    if (Math.Abs(MonitorBackground.For(@"\\.\DISPLAY9", service.Current).G - 32 / 255f) > 0.0001)
-                        throw new Exception("Monitor background did not reload from a remote edit.");
-                    if (!await service.ToggleBackgroundTransparencyAsync(@"\\.\DISPLAY9") || MonitorBackground.For(@"\\.\DISPLAY9", service.Current).A != 0)
+                    await Until(() => service.Current.DisplayBackgrounds.ContainsKey(@"\\.\DISPLAY9"));
+                    if (Math.Abs(DisplayBackground.For(@"\\.\DISPLAY9", service.Current).G - 32 / 255f) > 0.0001)
+                        throw new Exception("Display background did not reload from a remote edit.");
+                    if (!await service.SetBackgroundAsync(@"\\.\DISPLAY9", true) || DisplayBackground.For(@"\\.\DISPLAY9", service.Current).A != 0)
                         throw new Exception("Background shortcut did not apply transparency immediately.");
-                    if (await service.ToggleBackgroundTransparencyAsync(@"\\.\DISPLAY9") ||
-                        Math.Abs(MonitorBackground.For(@"\\.\DISPLAY9", service.Current).G - 32 / 255f) > 0.0001)
-                        throw new Exception("Background shortcut did not restore the saved color immediately.");
+                    if (await service.SetBackgroundAsync(@"\\.\DISPLAY9", false, "#000000") ||
+                        service.Current.DisplayBackgrounds[@"\\.\DISPLAY9"].BackgroundColor != "#000000" ||
+                        DisplayBackground.For(@"\\.\DISPLAY9", service.Current).A != 1)
+                        throw new Exception("Background shortcut did not switch transparency to black immediately.");
+                    if (await service.SetBackgroundAsync(@"\\.\DISPLAY9", false, "#FFFFFF") || DisplayBackground.For(@"\\.\DISPLAY9", service.Current).R != 1)
+                        throw new Exception("White background did not apply immediately.");
                     var validBackground = service.Current;
-                    migrated["MonitorBackgrounds"]![@"\\.\DISPLAY9"] = "invalid";
+                    migrated["DisplayBackgrounds"]![@"\\.\DISPLAY9"] = "invalid";
                     File.WriteAllText(path, migrated.ToJsonString());
                     await service.ReloadAsync();
                     if (service.Current != validBackground)
                         throw new Exception("Invalid live background replaced working configuration.");
-                    migrated["MonitorBackgrounds"]![@"\\.\DISPLAY9"] = "transparent";
+                    migrated["DisplayBackgrounds"]![@"\\.\DISPLAY9"] = "transparent";
                     migrated["configurationMode"] = true;
                     File.WriteAllText(path, migrated.ToJsonString());
                     await Until(() => service.Current.ConfigurationMode);
+                    if (await service.ToggleScreenTransparencyAsync("TEST", "screen1") || service.Current.ScreensFor("TEST")[0].BlackKey!.Enabled)
+                        throw new Exception("Screen chroma key did not apply immediately.");
+                    var remoteScreen = JsonNode.Parse(File.ReadAllText(path))!;
+                    remoteScreen["DisplayScreens"]!["TEST"]![0]!["BlackKey"]!["Enabled"] = true;
+                    File.WriteAllText(path, remoteScreen.ToJsonString());
+                    await Until(() => service.Current.ScreensFor("TEST")[0].BlackKey!.Enabled);
                     var accepted = service.Current;
                     File.WriteAllText(path, "{");
                     await service.ReloadAsync();
@@ -76,7 +85,7 @@ internal static class ConfigurationServiceChecks
                     catch (System.Text.Json.JsonException) { }
                     if (File.ReadAllText(path) != "{" || service.Current != accepted)
                         throw new Exception("Shortcut toggle overwrote an invalid remote edit.");
-                    migrated["UdpPort"] = 22222;
+                    migrated["UdpCommandsPort"] = 22222;
                     void RejectBinding(ExperienceOptions _) => throw new InvalidOperationException("Injected unavailable port");
                     service.Changing += RejectBinding;
                     File.WriteAllText(path, migrated.ToJsonString());
@@ -85,7 +94,7 @@ internal static class ConfigurationServiceChecks
                         throw new Exception("Rejected listener binding committed partial options.");
                     service.Changing -= RejectBinding;
                     await service.ReloadAsync();
-                    if (service.Current.UdpPort != 22222)
+                    if (service.Current.UdpCommandsPort != 22222)
                         throw new Exception("Corrected config was not accepted.");
                     await service.DisposeAsync();
                     var count = changes;
@@ -104,7 +113,7 @@ internal static class ConfigurationServiceChecks
                     File.WriteAllText(path, future);
                     try
                     {
-                        new KeystoneConfigurationStore(path).RecoverAtStartup();
+                        new PointConfigurationStore(path).RecoverAtStartup();
                         throw new Exception("Future configuration was silently downgraded.");
                     }
                     catch (NotSupportedException) { }

@@ -46,7 +46,7 @@ internal sealed class PlaybackMetrics
         _lastPresent = now;
         SubmittedPresents++;
     }
-    public void Report(GraphicsResources graphics, MediaEngineSession media, string monitor, string? requestId, double opacity, long transformComputations)
+    public void Report(GraphicsResources graphics, MediaEngineSession media, string display, string? requestId, double opacity, long transformComputations, string? screenName = null)
     {
         _sample.Restart();
         var result = graphics.SwapChain.GetFrameStatistics(out var stats);
@@ -63,7 +63,8 @@ internal sealed class PlaybackMetrics
         catch (Exception ex) { Telemetry.Warning("DecoderStatisticsUnavailable", new { Reason = ex.Message }, requestId); }
         Telemetry.Info("DirectXPlaybackPerformance", new
         {
-            MonitorName = monitor,
+            DisplayName = display,
+            ScreenName = screenName,
             TransferredVideoFrames = TransferredFrames,
             MediaEngineFramesRendered = decodedFramesRendered,
             MediaEngineFramesDropped = decoderFramesDropped,

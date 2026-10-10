@@ -53,7 +53,7 @@ internal static class ReliabilityChecks
         try
         {
             var path = Path.Combine(folder, "appsettings.json");
-            var store = new KeystoneConfigurationStore(path);
+            var store = new PointConfigurationStore(path);
             store.EnsureDisplays(["DISPLAY1"]);
             var before = File.ReadAllText(path);
             store.EnsureDisplays(["DISPLAY1", "DISPLAY2"]);
@@ -62,7 +62,7 @@ internal static class ReliabilityChecks
             File.WriteAllText(path, "{");
             if (!store.RecoverAtStartup())
                 throw new Exception("Startup did not recover a corrupted configuration.");
-            if (ExperienceOptions.Parse(File.ReadAllText(path)).DisplayKeystones.Count != 1 || Directory.GetFiles(folder, "*.rejected-*").Length != 1)
+            if (ExperienceOptions.Parse(File.ReadAllText(path)).DisplayScreens.Count != 1 || Directory.GetFiles(folder, "*.rejected-*").Length != 1)
                 throw new Exception("Backup recovery did not retain the rejected file.");
             File.WriteAllText(path, " ");
             try

@@ -4,7 +4,7 @@ namespace ExperienceX;
 internal static class VideoTransform
 {
     // Invert the projective mapping: the pixel shader maps output pixels back into video UVs.
-    public static (Vector4, Vector4, Vector4) Inverse(KeystoneOptions k)
+    public static (Vector4, Vector4, Vector4) Inverse(PointOptions k)
     {
         if (!k.Enabled)
             return (new(1, 0, 0, 0), new(0, 1, 0, 0), new(0, 0, 1, 0));
@@ -18,7 +18,7 @@ internal static class VideoTransform
         var m = new Matrix4x4((float)(b.X - a.X + g * b.X), (float)(d.X - a.X + h * d.X), (float)a.X, 0,
             (float)(b.Y - a.Y + g * b.Y), (float)(d.Y - a.Y + h * d.Y), (float)a.Y, 0, (float)g, (float)h, 1, 0, 0, 0, 0, 1);
         if (!Matrix4x4.Invert(m, out var inv))
-            throw new ArgumentException("Keystone transform is singular.");
+            throw new ArgumentException("Points transform is singular.");
         return (new(inv.M11, inv.M12, inv.M13, 0), new(inv.M21, inv.M22, inv.M23, 0), new(inv.M31, inv.M32, inv.M33, 0));
     }
 }

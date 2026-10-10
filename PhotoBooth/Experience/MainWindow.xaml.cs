@@ -66,7 +66,7 @@ public partial class MainWindow : System.Windows.Window
         SizeChanged += (_, _) => ApplyKeystone();
         Title = $"Experience — {MonitorName}";
         SourceInitialized += (_, _) => { PlaceOnMonitor(); ApplyKeystone(); };
-        _playbackTimer.Tick += (_, _) => CheckPlaybackLimit();
+        _playbackTimer.Tick += (_, _) => UpdatePlaybackFade();
 
     }
 
@@ -87,8 +87,7 @@ public partial class MainWindow : System.Windows.Window
     internal void UpdateOptions(ExperienceOptions next)
     {
         if (_closed) return;
-        if (_scheduledFadeOut && (next.MaxVideoPlaybackLength != _options.MaxVideoPlaybackLength ||
-            next.TransitionOutSeconds != _options.TransitionOutSeconds))
+        if (_scheduledFadeOut && next.TransitionOutSeconds != _options.TransitionOutSeconds)
         {
             ++_playbackVersion;
             var currentOpacity = _surfaceEffect.FadeOpacity;
@@ -100,7 +99,7 @@ public partial class MainWindow : System.Windows.Window
         _options = next;
         ApplyBlackKey();
         ApplyKeystone();
-        CheckPlaybackLimit();
+        UpdatePlaybackFade();
     }
 
     internal void PlayVideo(string path, ExperienceRequest request)
@@ -173,11 +172,10 @@ public partial class MainWindow : System.Windows.Window
         _playbackTimer.Start();
     }
 
-    private void CheckPlaybackLimit()
+    private void UpdatePlaybackFade()
     {
         if (!_playbackElapsed.IsRunning || _finishingPlayback) return;
-        var plan = PlaybackTiming.Evaluate(_options.MaxVideoPlaybackLength, _playbackElapsed.Elapsed.TotalSeconds,
-            VideoPlayer.NaturalDuration.HasTimeSpan ? VideoPlayer.NaturalDuration.TimeSpan.TotalSeconds : null,
+        var plan = PlaybackTiming.Evaluate(VideoPlayer.NaturalDuration.HasTimeSpan ? VideoPlayer.NaturalDuration.TimeSpan.TotalSeconds : null,
             VideoPlayer.Position.TotalSeconds, _options.TransitionOutSeconds);
         if (plan.RemainingSeconds <= 0)
         {

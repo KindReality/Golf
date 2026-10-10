@@ -70,7 +70,7 @@ internal sealed class AudioManager(Dispatcher dispatcher) : IDisposable
                     dispatcher.BeginInvoke(new Action(() => Completed(slot, playback, error)));
             });
             Telemetry.Info("AudioPlaybackStarted", new { Path = path, DeviceId = selected.Id, DeviceName = selected.Name,
-                request.Channel, request.Mute, options.MaxAudioPlaybackLength,
+                request.Channel, request.Mute,
                 options.AudioTransitionInSeconds, options.AudioTransitionOutSeconds }, request.RequestId);
         }
         catch (Exception ex)
@@ -91,7 +91,7 @@ internal sealed class AudioManager(Dispatcher dispatcher) : IDisposable
         _playing.Remove(slot);
         if (error is not null) Telemetry.Error("AudioPlaybackFailed", error, new { playback.DeviceName, playback.Request.Channel }, playback.Request.RequestId);
         else Telemetry.Info("AudioPlaybackCompleted", new { playback.DeviceName, playback.Request.Channel,
-            playback.PositionSeconds, Reason = playback.EndReason }, playback.Request.RequestId);
+            playback.PositionSeconds, Reason = "MediaEnded" }, playback.Request.RequestId);
         playback.Dispose();
     }
 

@@ -4,7 +4,7 @@ public sealed record AudioOutput(string Id, string Name, int Channels);
 
 public static class OutputSelection
 {
-    public static string? Monitor(string? requested, string? configured, IReadOnlyList<string> available, string? primary,
+    public static string? Display(string? requested, string? configured, IReadOnlyList<string> available, string? primary,
         IReadOnlyDictionary<string, string>? aliases = null)
     {
         var target = (string.IsNullOrWhiteSpace(requested) ? configured : requested)?.Trim();
@@ -15,7 +15,7 @@ public static class OutputSelection
                 target = alias.Value.Trim();
         }
         // Resolve only one alias level; missing targets never fall back to another display.
-        return MonitorSelection.Select(target, false, available, primary);
+        return DisplaySelection.Select(target, false, available, primary);
     }
 
     public static AudioOutput? Audio(string? requested, string? configured, IReadOnlyList<AudioOutput> available, string? defaultId)

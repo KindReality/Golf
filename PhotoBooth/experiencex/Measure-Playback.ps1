@@ -19,7 +19,7 @@ function Send-BenchmarkRequest($message) {
     $configuration=$savedConfig|ConvertFrom-Json
     if($Application -eq 'ExperienceX') {
         $bytes=ConvertTo-ExperienceBroadcastBytes -Request $message -Configuration $configuration
-        [void]$client.Send($bytes,$bytes.Length,'255.255.255.255',$configuration.UdpPort)
+        [void]$client.Send($bytes,$bytes.Length,'255.255.255.255',$configuration.UdpCommandsPort)
     } else {
         $bytes = [Text.Encoding]::UTF8.GetBytes(($message | ConvertTo-Json -Compress))
         [void]$client.Send($bytes,$bytes.Length,'127.0.0.1',$configuration.UdpPort)
@@ -30,21 +30,20 @@ try {
     if (-not $process) {
         $process = Start-Process -FilePath (Join-Path $runtimeDirectory ($Application + '.exe')) -WorkingDirectory $runtimeDirectory -WindowStyle Hidden -PassThru
     }
-    foreach ($case in @(@{Name='Plain';BlackKey=$false;Keystone=$false},@{Name='BlackKey';BlackKey=$true;Keystone=$false},@{Name='BlackKeyAndKeystone';BlackKey=$true;Keystone=$true})) {
+    foreach ($case in @(@{Name='Plain';BlackKey=$false;Points=$false},@{Name='BlackKey';BlackKey=$true;Points=$false},@{Name='BlackKeyAndKeystone';BlackKey=$true;Points=$true})) {
         $configuration = $savedConfig | ConvertFrom-Json
         $configuration.BlackKey.Enabled = $case.BlackKey
-        $configuration.Keystone.Enabled = $case.Keystone
-        if ($case.Keystone) {
-            $configuration.Keystone.TopLeft.X = 0.1
-            $configuration.Keystone.TopRight.X = 0.9
+        $configuration.Points.Enabled = $case.Points
+        if ($case.Points) {
+            $configuration.Points.Vertices[0].X = 0.1
+            $configuration.Points.Vertices[1].X = 0.9
         }
         if ($Application -eq 'ExperienceX') {
             $configuration.configurationMode=$false
-            foreach ($display in $configuration.DisplayKeystones.PSObject.Properties) {
-                $display.Value=$configuration.Keystone | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+            foreach ($display in $configuration.DisplayScreens.PSObject.Properties) {
+                foreach ($screen in $display.Value) { $screen.Points=$configuration.Points | ConvertTo-Json -Depth 8 | ConvertFrom-Json }
             }
         }
-        $configuration.MaxVideoPlaybackLength = $SampleSeconds + 10
         $configuration | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $configPath
         [Threading.Thread]::Sleep(2000)
         $requestId = 'benchmark-' + $case.Name + '-' + [Guid]::NewGuid().ToString('N')
@@ -80,8 +79,15 @@ try {
             })
             $engines[$engine] = if ($totals.Count -gt 0) { ($totals | Measure-Object -Average).Average } else { $null }
         }
-        # No stop command: allow the playback deadline to produce the summary.
-        [Threading.Thread]::Sleep(5000)
+        # Wait for the file to finish naturally; this timeout belongs only to the test.
+        $waitUntil = [DateTime]::UtcNow.AddMinutes(5)
+        do {
+            $log = Get-ChildItem (Join-Path $runtimeDirectory ('logs\' + $Application)) -Filter '*.jsonl' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+            $completed = Get-Content -LiteralPath $log.FullName | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.RequestId -eq $requestId -and $_.Event -eq 'PlaybackStopped' }
+            if (!$completed) { [Threading.Thread]::Sleep(200) }
+        } while (!$completed -and [DateTime]::UtcNow -lt $waitUntil)
+        if (!$completed) { throw 'Test timed out waiting for the video file to finish naturally.' }
+        [Threading.Thread]::Sleep(200)
         $log = Get-ChildItem (Join-Path $runtimeDirectory ('logs\' + $Application)) -Filter '*.jsonl' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
         $events = @(Get-Content -LiteralPath $log.FullName | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object RequestId -eq $requestId)
         $performance = $events | Where-Object Event -eq $(if ($Application -eq 'ExperienceX') {'DirectXPlaybackPerformance'} else {'PlaybackPerformance'}) | Select-Object -Last 1

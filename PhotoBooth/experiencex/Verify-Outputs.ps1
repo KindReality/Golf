@@ -12,7 +12,7 @@ $tone = Join-Path $runtime ('Media\' + $prefix + '.wav')
 function Send-Request($message) {
     $message.source='OutputVerification'
     $bytes=ConvertTo-ExperienceBroadcastBytes -Request $message -Configuration ($saved|ConvertFrom-Json)
-    [void]$client.Send($bytes,$bytes.Length,'255.255.255.255',($saved|ConvertFrom-Json).UdpPort)
+    [void]$client.Send($bytes,$bytes.Length,'255.255.255.255',($saved|ConvertFrom-Json).UdpCommandsPort)
 }
 function Read-Events {
     @(Get-ChildItem (Join-Path $runtime 'logs\ExperienceX') -Filter ("*-$($app.Id)-*.jsonl") | ForEach-Object {
@@ -23,7 +23,7 @@ function Assert-Event($events, $name, $id) {
     if (-not ($events | Where-Object { $_.Event -eq $name -and $_.RequestId -eq $id })) { throw "Missing $name for $id" }
 }
 function Wait-Event($name, $id) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $deadline = [DateTime]::UtcNow.AddMinutes(5)
     do {
         if (Read-Events | Where-Object { $_.Event -eq $name -and $_.RequestId -eq $id }) { return }
         [Threading.Thread]::Sleep(200)
@@ -44,11 +44,10 @@ try {
     } finally { $writer.Dispose() }
     $config = $saved | ConvertFrom-Json
     $config.BlackKey.Enabled = -not $DisableBlackKey
-    $config.Keystone.Enabled = [bool]$EnableKeystone
+    $config.Points.Enabled = [bool]$EnableKeystone
     $config.configurationMode=$false
-    foreach ($display in $config.DisplayKeystones.PSObject.Properties) { $display.Value.Enabled=[bool]$EnableKeystone }
-    $config.DefaultMonitorName = '\\.\DISPLAY-NOT-AVAILABLE-VERIFICATION'
-    $config.MaxVideoPlaybackLength = 4; $config.MaxAudioPlaybackLength = 4
+    foreach ($display in $config.DisplayScreens.PSObject.Properties) { foreach ($screen in $display.Value) { $screen.Points.Enabled=[bool]$EnableKeystone } }
+    $config.DefaultDisplayName = '\\.\DISPLAY-NOT-AVAILABLE-VERIFICATION'
     $config.TransitionInSeconds = $VideoFadeSeconds; $config.TransitionOutSeconds = $VideoFadeSeconds
     $config.AudioTransitionInSeconds = 0.5; $config.AudioTransitionOutSeconds = 0.5
     $config | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $configPath
@@ -56,33 +55,33 @@ try {
     [Threading.Thread]::Sleep(2500)
     $events = Read-Events
     if ($events | Where-Object Event -eq 'PlaybackRequested') { throw 'Unexpected playback at startup.' }
-    if (-not ($events | Where-Object Event -eq 'DefaultMonitorUnavailable')) { throw 'Missing default-monitor startup failure.' }
-    $monitors = @(($events | Where-Object Event -eq 'MonitorsAvailable' | Select-Object -Last 1).Data.Monitors)
-    if (@($events | Where-Object Event -eq 'MonitorWindowCreated').Count -ne $monitors.Count) { throw 'A window was not created for each monitor.' }
+    if (-not ($events | Where-Object Event -eq 'DefaultDisplayUnavailable')) { throw 'Missing default-display startup failure.' }
+    $displays = @(($events | Where-Object Event -eq 'DisplaysAvailable' | Select-Object -Last 1).Data.Displays)
+    if (@($events | Where-Object Event -eq 'DisplayWindowCreated').Count -ne $displays.Count) { throw 'A window was not created for each display.' }
     Send-Request @{experience='video';value='Video.mp4';requestId=($prefix + '-missing-default')}
-    $config.MonitorAliases = [ordered]@{}
-    for ($index = 0; $index -lt $monitors.Count; $index++) { $config.MonitorAliases["VerificationMonitor$index"] = $monitors[$index].Name }
-    $config.DefaultMonitorName = 'VerificationMonitor0'
+    $config.DisplayAliases = [ordered]@{}
+    for ($index = 0; $index -lt $displays.Count; $index++) { $config.DisplayAliases["VerificationDisplay$index"] = $displays[$index].Name }
+    $config.DefaultDisplayName = 'VerificationDisplay0'
     $config | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $configPath
     [Threading.Thread]::Sleep(1800)
-    for ($index = 0; $index -lt $monitors.Count; $index++) {
-        $monitor = $monitors[$index]
-        Send-Request @{experience='video';value='Video.mp4';monitorName="VerificationMonitor$index";mute=$true;requestId=($prefix + '-video-' + $monitor.Name)}
+    for ($index = 0; $index -lt $displays.Count; $index++) {
+        $display = $displays[$index]
+        Send-Request @{experience='video';value='Video.mp4';displayName="VerificationDisplay$index";mute=$true;requestId=($prefix + '-video-' + $display.Name)}
     }
     [Threading.Thread]::Sleep(1400)
-    $duplicateId=$prefix+'-video-'+$monitors[0].Name
+    $duplicateId=$prefix+'-video-'+$displays[0].Name
     Wait-Event 'VideoPlaybackConfirmed' $duplicateId
     $retry=[Net.Sockets.UdpClient]::new()
     try {
         $retry.EnableBroadcast=$true
-        $bytes=ConvertTo-ExperienceBroadcastBytes -Request @{experience='video';value='Video.mp4';monitorName='VerificationMonitor0';mute=$true;requestId=$duplicateId;source='OutputVerification'} -Configuration ($saved|ConvertFrom-Json)
-        [void]$retry.Send($bytes,$bytes.Length,'255.255.255.255',($saved|ConvertFrom-Json).UdpPort)
+        $bytes=ConvertTo-ExperienceBroadcastBytes -Request @{experience='video';value='Video.mp4';displayName='VerificationDisplay0';mute=$true;requestId=$duplicateId;source='OutputVerification'} -Configuration ($saved|ConvertFrom-Json)
+        [void]$retry.Send($bytes,$bytes.Length,'255.255.255.255',($saved|ConvertFrom-Json).UdpCommandsPort)
         $retry.Client.ReceiveTimeout=200
         $remote=[Net.IPEndPoint]::new([Net.IPAddress]::Any,0)
         try {[void]$retry.Receive([ref]$remote);throw 'ExperienceX unexpectedly sent a UDP reply.'}
         catch [Net.Sockets.SocketException] {if($_.Exception.SocketErrorCode -ne [Net.Sockets.SocketError]::TimedOut){throw}}
     } finally {$retry.Dispose()}
-    Send-Request @{experience='video';value='Video.mp4';monitorName=$null;mute=$true;requestId=($prefix + '-replacement')}
+    Send-Request @{experience='video';value='Video.mp4';displayName=$null;mute=$true;requestId=($prefix + '-replacement')}
     Send-Request @{experience='stop';requestId=($prefix + '-stop')}
     $devices = @((Read-Events | Where-Object Event -eq 'AudioOutputsAvailable' | Select-Object -Last 1).Data.Devices)
     if ($SkipAudio) { $devices = @() }
@@ -120,16 +119,16 @@ try {
         if ($stopped.Data.Reason -ne 'Replaced' -and $VideoFadeSeconds -gt 0 -and (-not $fade -or $stopped.Data.PositionSeconds -le $fade.Data.PositionSeconds)) { throw 'Video did not continue advancing during fade-out.' }
         Assert-Event $events 'VideoTransparentFramePresented' $stopped.RequestId
     }
-    Assert-Event $events 'ExperienceBlockedMonitorUnavailable' ($prefix + '-missing-default')
+    Assert-Event $events 'ExperienceBlockedDisplayUnavailable' ($prefix + '-missing-default')
     Assert-Event $events 'VideoPlaybackConfirmed' ($prefix + '-replacement')
     Assert-Event $events 'UdpDuplicateSuppressed' $duplicateId
     if(@($events|Where-Object { $_.Event -eq 'VideoOpening' -and $_.RequestId -eq $duplicateId }).Count -ne 1){throw 'A UDP retry restarted playback.'}
-    Assert-Event $events 'PlaybackStopped' ($prefix + '-video-' + $monitors[0].Name)
-    foreach ($monitor in $monitors) { Assert-Event $events 'VideoPlaybackConfirmed' ($prefix + '-video-' + $monitor.Name) }
+    Assert-Event $events 'PlaybackStopped' ($prefix + '-video-' + $displays[0].Name)
+    foreach ($display in $displays) { Assert-Event $events 'VideoPlaybackConfirmed' ($prefix + '-video-' + $display.Name) }
     foreach ($selected in @($events | Where-Object Event -eq 'VideoOutputSelected')) {
-        if ($selected.Data.RequestedMonitorName -like 'VerificationMonitor*') {
-            $expected = $config.MonitorAliases[$selected.Data.RequestedMonitorName]
-            if ($selected.Data.MonitorName -ne $expected) { throw 'An alias selected the wrong monitor.' }
+        if ($selected.Data.RequestedDisplayName -like 'VerificationDisplay*') {
+            $expected = $config.DisplayAliases[$selected.Data.RequestedDisplayName]
+            if ($selected.Data.DisplayName -ne $expected) { throw 'An alias selected the wrong display.' }
         }
     }
     foreach ($device in $devices) {
@@ -146,8 +145,8 @@ try {
     Assert-Event $events 'AudioDeviceUnavailable' ($prefix + '-missing-audio')
     if (-not ($events | Where-Object { $_.Event -eq 'UdpRequestInvalid' -and $_.Data.Reason -like '*Only video and audio*' })) { throw 'Removed stop command was not rejected.' }
     if ($events | Where-Object Level -eq 'Error') { throw 'Errors recorded during live verification.' }
-    if ($events | Where-Object { $_.Event -eq 'AudioPlaybackCompleted' -and $_.Data.PositionSeconds -gt 4.01 }) { throw 'Audio exceeded its configured maximum.' }
-    "Passed per-monitor windows ($($monitors.Count)), concurrent video, video replacement, independent audio devices ($($devices.Count))/channels, same-channel audio overlap, per-track volume, retry suppression, unavailable outputs and removed stop command."
+    if ($events | Where-Object { $_.Event -eq 'AudioPlaybackCompleted' -and $_.Data.PositionSeconds -gt 8.01 }) { throw 'Audio exceeded the test media duration.' }
+    "Passed per-display windows ($($displays.Count)), concurrent video, video replacement, independent audio devices ($($devices.Count))/channels, same-channel audio overlap, per-track volume, retry suppression, unavailable outputs and removed stop command."
 } finally {
     Set-Content -LiteralPath $configPath -Value $saved
     $client.Dispose()
