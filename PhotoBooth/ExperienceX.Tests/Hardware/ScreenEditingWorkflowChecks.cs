@@ -72,6 +72,11 @@ internal static class ScreenEditingWorkflowChecks
                     await Until(() => Read().ScreensFor(primary).Count == 1 && host.SelectedScreen?.DisplayName == primary);
                     var first = Read().ScreensFor(primary).Single();
                     Check(first.Name == "screen1" && first.Points == new PointOptions(), "A/V did not create a full-size first screen on the default display.");
+                    SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.SizingId, (nint)(0x53 << 16));
+                    await Until(() => Read().ScreensFor(primary).Single().SizingMode == "stretch" &&
+                        host.DisplayWindows.Single(w => w.DisplayName == primary).ScreenDefinition(first.Id)?.SizingMode == "stretch");
+                    SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.SizingId, (nint)(0x53 << 16));
+                    await Until(() => Read().ScreensFor(primary).Single().SizingMode == "fit");
                     var target = host.DisplayWindows.Single(w => w.DisplayName == other);
                     // Select a screen away from its editable center label.
                     Click(target, (int)(target.ClientSize.Width * .65), (int)(target.ClientSize.Height * .65));

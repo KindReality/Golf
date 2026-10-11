@@ -57,9 +57,7 @@ internal sealed class ControllerMediaDiscovery(Func<ExperienceOptions> options, 
         {
             var hostname = ControllerDiscovery.Hostname(message, _requests.Keys.ToHashSet());
             if (hostname is null) return;
-            var destinations = new[] { current.VideoDirectory, current.AudioDirectory }.Select(d => Path.GetFullPath(d, AppContext.BaseDirectory)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            if (destinations.Any(d => d.StartsWith(@"\\", StringComparison.Ordinal)))
-                throw new ArgumentException("Controller media downloads require local video/audio directories.");
+            var destinations = new[] { current.VideoDirectory, current.AudioDirectory }.Select(d => MediaPath.ResolveDirectory(d)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var hosts = _hosts;
             if (!hosts.TryAdd(hostname, 0)) return;
             var share = sharePath?.Invoke(hostname) ?? ControllerDiscovery.MediaShare(hostname);
@@ -67,7 +65,8 @@ internal sealed class ControllerMediaDiscovery(Func<ExperienceOptions> options, 
             var token = _round.Token;
             _tasks.Run(_ => Task.Run(() => CopyAsync(hostname, share, destinations, hosts, token), token), "Cache controller media");
         }
-        catch (ArgumentException ex) { Telemetry.Warning("ControllerDiscoveryResponseInvalid", new { message.Source, Reason = ex.Message }, message.RequestId); }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        { Telemetry.Warning("ControllerDiscoveryResponseInvalid", new { message.Source, Reason = ex.Message }, message.RequestId); }
     }
     private async Task CopyAsync(string hostname, string share, string[] destinations, ConcurrentDictionary<string, byte> hosts, CancellationToken token)
     {

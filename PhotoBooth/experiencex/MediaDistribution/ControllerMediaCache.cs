@@ -13,8 +13,10 @@ internal sealed class ControllerMediaCache
     public async Task<bool> SynchronizeAsync(string hostname, string share, string destination, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        MediaPath.EnsureLocalPath(destination);
         Directory.CreateDirectory(destination);
         var statePath = Path.Combine(destination, StateFile);
+        MediaPath.EnsureLocalPath(statePath);
         var origins = new Dictionary<string, Origin>(StringComparer.OrdinalIgnoreCase);
         if (File.Exists(statePath))
         {
@@ -48,6 +50,7 @@ internal sealed class ControllerMediaCache
             var temporary = Path.Combine(destination, "." + Guid.NewGuid().ToString("N") + ".download");
             try
             {
+                MediaPath.EnsureLocalPath(target);
                 var sourceLength = info.Length;
                 var sourceDate = info.LastWriteTimeUtc;
                 origins.TryGetValue(name, out var origin);

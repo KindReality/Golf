@@ -14,10 +14,28 @@ public sealed record TelemetryOptions
     public int HealthIntervalSeconds { get; init; } = 60;
 }
 
+public sealed record RequestLogContext
+{
+    public string? Source { get; init; }
+    public string? Device { get; init; }
+    public string? Experience { get; init; }
+    public string? Value { get; init; }
+    public string? Scene { get; init; }
+    public string? Playlist { get; init; }
+    public string? Item { get; init; }
+    public string? Path { get; init; }
+    public string? CorrelationId { get; init; }
+}
+
 public static class Telemetry
 {
     private sealed record Entry(DateTimeOffset Timestamp, string Level, string MachineName, string Application, string SessionId,
-        int ProcessId, string Event, string? RequestId, object? Data, string? Exception);
+        int ProcessId, string Event, string? RequestId,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] RequestLogContext? Context,
+        object? Data, string? Exception);
+    private static readonly object ContextGate = new();
+    private static readonly Dictionary<string, RequestLogContext> RequestContexts = new(StringComparer.Ordinal);
+    private static readonly Queue<string> ContextOrder = new();
     private static readonly Channel<Entry> Queue = Channel.CreateBounded<Entry>(new BoundedChannelOptions(4096)
         { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
     private static readonly string Session = Guid.NewGuid().ToString("N");
@@ -74,6 +92,17 @@ public static class Telemetry
     }
 
     public static void SetHealthProvider(Func<object> provider) => _state = provider;
+    public static void SetRequestContext(string requestId, RequestLogContext context)
+    {
+        if (string.IsNullOrWhiteSpace(requestId)) return;
+        lock (ContextGate)
+        {
+            if (!RequestContexts.ContainsKey(requestId)) ContextOrder.Enqueue(requestId);
+            RequestContexts[requestId] = context;
+            // Keep recent completed requests for late renderer/error callbacks, with bounded memory.
+            while (RequestContexts.Count > 4096) RequestContexts.Remove(ContextOrder.Dequeue());
+        }
+    }
     public static void Debug(string name, object? data = null, string? requestId = null) => Emit("Debug", name, data, null, requestId);
     public static void Info(string name, object? data = null, string? requestId = null) => Emit("Information", name, data, null, requestId);
     public static void Warning(string name, object? data = null, string? requestId = null) => Emit("Warning", name, data, null, requestId);
@@ -92,8 +121,10 @@ public static class Telemetry
     private static void Emit(string level, string name, object? data, Exception? exception, string? requestId)
     {
         if (_writer is null || Volatile.Read(ref _stopped) != 0 || Rank(level) < _minimum) return;
+        RequestLogContext? context = null;
+        if (requestId is not null) lock (ContextGate) RequestContexts.TryGetValue(requestId, out context);
         if (!Queue.Writer.TryWrite(new(DateTimeOffset.UtcNow, level, HostName, _app, Session, Environment.ProcessId,
-            name, requestId, data, exception?.ToString()))) Interlocked.Increment(ref _dropped);
+            name, requestId, context, data, exception?.ToString()))) Interlocked.Increment(ref _dropped);
     }
     private static async Task WriteLoopAsync()
     {
@@ -155,8 +186,9 @@ public static class Telemetry
         if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
         _health?.Dispose(); _state = null;
         Queue.Writer.TryWrite(new(DateTimeOffset.UtcNow, "Information", HostName, _app, Session, Environment.ProcessId,
-            "ApplicationStopped", null, new { DroppedEntries = Interlocked.Read(ref _dropped) }, null));
+            "ApplicationStopped", null, null, new { DroppedEntries = Interlocked.Read(ref _dropped) }, null));
         Queue.Writer.TryComplete();
         try { _writer?.Wait(TimeSpan.FromSeconds(3)); } catch { }
+        lock (ContextGate) { RequestContexts.Clear(); ContextOrder.Clear(); }
     }
 }

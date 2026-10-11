@@ -18,6 +18,8 @@ internal sealed record BuildEnvironment(string Environment, int DefaultTriggerCo
 internal sealed record ControllerOptions : BroadcastOptions
 {
     public ControllerOptions() => UdpSendAttempts = 1;
+    public string? DefaultDisplayName { get; init; }
+    public Dictionary<string, string> DisplayAliases { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public ArduinoOptions[] Arduinos { get; init; } = [];
     public TriggerOptions[] Triggers { get; init; } = [];
     public SceneOptions[] Scenes { get; init; } = [];
@@ -36,6 +38,7 @@ internal sealed record ControllerOptions : BroadcastOptions
     private void Validate()
     {
         ValidateNetwork();
+        ControllerDisplaySelection.Validate(DefaultDisplayName, DisplayAliases);
         if (UdpPort is not null) throw new ArgumentException("Use UdpEventsPort and UdpCommandsPort.");
         if (Arduinos is null || Triggers is null || Playlists is null || Scenes is null || Arduinos.Any(a => a is null) || Triggers.Any(t => t is null) || Playlists.Any(p => p is null) || Scenes.Any(s => s is null) || Arduinos.Length > 128 || Triggers.Length > 4096 || Playlists.Length > 4096 || Scenes.Length > 4096)
             throw new ArgumentException("Configuration lists require objects; maximum 128 Arduinos and 4096 triggers/playlists/scenes.");

@@ -23,11 +23,11 @@ internal sealed class ControllerHost : IAsyncDisposable
     public string ConfigurationPath => _configuration.Path;
     public ArduinoStatus[] ArduinoStatus => _arduinos.Snapshot();
 
-    public ControllerHost(string path)
+    public ControllerHost(string path, string? templateDirectory = null)
     {
         Telemetry.Start("Controller", path);
         var environment = BuildEnvironment.Load(Path.Combine(AppContext.BaseDirectory, "appsettings.environment.json"));
-        _configuration = new(path, environment, Log, ApplyAsync);
+        _configuration = new(path, environment, Log, ApplyAsync, templateDirectory);
         _options = _configuration.Initial;
         _arduinos = new(Log, ReceiveSerialAsync);
         Engine = new(_options, new CommandDispatcher(_arduinos, ReceiveUdpAsync, _shutdown.Token), Log);
@@ -66,6 +66,13 @@ internal sealed class ControllerHost : IAsyncDisposable
     {
         if (token.IsCancellationRequested || !message.Targets(Options.EffectiveDeviceName) || message.IsExpired(DateTimeOffset.UtcNow)) return;
         if (!_received.Accept(message.Source.ToUpperInvariant(), message.RequestId, Options.RequestDeduplicationSeconds)) return;
+        Telemetry.SetRequestContext(message.RequestId, new()
+        {
+            Source = message.Source, Device = message.Device, Scene = message.Context?.Scene,
+            Playlist = message.Context?.Playlist, Item = message.Context?.Item,
+            Experience = ControllerOptions.Text(message.Body, "experience"), Value = ControllerOptions.Text(message.Body, "value"),
+            CorrelationId = ControllerOptions.Text(message.Body, "correlationId")
+        });
         if (ControllerDiscovery.IsRequest(message))
         {
             await UdpBroadcastSender.SendAsync(ControllerDiscovery.Response(Options, message), Options, token).ConfigureAwait(false);

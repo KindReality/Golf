@@ -2,12 +2,14 @@ using System.Diagnostics;
 using System.IO.Ports;
 using Controller.Application;
 using Controller.Diagnostics;
+using Controller.Configuration;
 
 namespace Controller.Windows;
 
 internal sealed class ControlWindow : Form
 {
     private readonly string _path;
+    private readonly string? _templateDirectory;
     private readonly Label _identity = new() { AutoSize = true, Text = "Starting Controller…", Dock = DockStyle.Fill };
     private readonly ComboBox _playlists = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 250 };
     private readonly ComboBox _scenes = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 250 };
@@ -21,12 +23,17 @@ internal sealed class ControlWindow : Form
     private readonly ListView _activity = List("Time", "Level", "Activity");
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 250 };
     private ControllerHost? _host;
+    private PhotoBooth.Updates.BuildUpdateMonitor? _updates;
     private ActivityEntry? _latest;
     private bool _closing, _closed;
+    private long _nextDisplayCheck;
+    private string? _displayTarget, _unavailableDisplay;
+    private (string Name, Rectangle WorkingArea)? _displayPlacement;
 
-    public ControlWindow(string path)
+    public ControlWindow(string path, string? templateDirectory = null)
     {
         _path = path;
+        _templateDirectory = templateDirectory;
         Text = "Home Technologies • Controller";
         TopMost = true;
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -35,7 +42,10 @@ internal sealed class ControlWindow : Form
         ForeColor = DarkTheme.Text;
         ClientSize = new Size(1060, 760);
         MinimumSize = new Size(980, 660);
-        StartPosition = FormStartPosition.CenterScreen;
+        StartPosition = FormStartPosition.Manual;
+        WindowState = FormWindowState.Normal;
+        // Keep startup invisible until the configured display has been resolved.
+        Opacity = 0;
         _identity.ForeColor = DarkTheme.Muted;
         _identity.Font = new Font("Segoe UI", 9);
         _sceneStatus.ForeColor = DarkTheme.Accent;
@@ -136,14 +146,18 @@ internal sealed class ControlWindow : Form
     {
         try
         {
-            _host = await Task.Run(() => new ControllerHost(_path));
+            _host = await Task.Run(() => new ControllerHost(_path, _templateDirectory));
             if (_closing) { await _host.DisposeAsync(); _host = null; _closed = true; Close(); return; }
+            if (_templateDirectory is not null)
+                _updates = new PhotoBooth.Updates.BuildUpdateMonitor("Controller", _templateDirectory);
             _refresh.Start();
             RefreshState();
+            Opacity = 1;
         }
         catch (Exception ex)
         {
             TelemetryError(ex);
+            Opacity = 1;
             MessageBox.Show(this, $"Controller could not start:\n{ex.Message}\n\nConfiguration: {_path}", "Controller", MessageBoxButtons.OK, MessageBoxIcon.Error);
             _closed = true;
             Close();
@@ -154,6 +168,7 @@ internal sealed class ControlWindow : Form
     {
         if (_host is null || _closing) return;
         var options = _host.Options;
+        ApplyDisplayPlacement(options);
         _connectionStatus.Text = "●  NETWORK ACTIVE";
         _identity.Text = $"{options.EffectiveDeviceName} • {options.Build.Environment} • Events {options.UdpEventsPort} • Commands {options.UdpCommandsPort}";
         SetChoices(_playlists, options.Playlists.Where(p => p.Type == "storyboard").Select(p => p.Name).ToArray());
@@ -201,6 +216,30 @@ internal sealed class ControlWindow : Form
         }
     }
 
+    private void ApplyDisplayPlacement(ControllerOptions options)
+    {
+        var target = ControllerDisplaySelection.Target(options);
+        var now = Environment.TickCount64;
+        if (string.Equals(_displayTarget, target, StringComparison.OrdinalIgnoreCase) && now < _nextDisplayCheck) return;
+        _displayTarget = target;
+        _nextDisplayCheck = now + 1000;
+        var displays = Screen.AllScreens;
+        var selectedName = ControllerDisplaySelection.Select(options, displays.Select(display => display.DeviceName).ToArray(), Screen.PrimaryScreen?.DeviceName);
+        var selected = displays.FirstOrDefault(display => display.DeviceName == selectedName);
+        if (selected is null) return;
+        var missing = target is not null && !displays.Any(display => string.Equals(display.DeviceName, target, StringComparison.OrdinalIgnoreCase));
+        if (missing && !string.Equals(_unavailableDisplay, target, StringComparison.OrdinalIgnoreCase))
+            _host!.Log.Warning("ControllerDisplayUnavailable", $"Display {target} unavailable; using {selected.DeviceName}", new { RequestedDisplay = options.DefaultDisplayName, ResolvedDisplay = target, FallbackDisplay = selected.DeviceName });
+        _unavailableDisplay = missing ? target : null;
+        var placement = (selected.DeviceName, selected.WorkingArea);
+        if (_displayPlacement == placement) return;
+        _displayPlacement = placement;
+        WindowState = FormWindowState.Normal;
+        MinimumSize = new Size(Math.Min(980, selected.WorkingArea.Width), Math.Min(660, selected.WorkingArea.Height));
+        Bounds = selected.WorkingArea;
+        _host!.Log.Info("ControllerWindowPositioned", $"Controller window on {selected.DeviceName}", new { RequestedDisplay = options.DefaultDisplayName, Display = selected.DeviceName, Bounds = new { Left, Top, Width, Height }, WindowState = WindowState.ToString() });
+    }
+
     private async void StopAsync(object? sender, FormClosingEventArgs e)
     {
         if (_closed) return;
@@ -210,7 +249,11 @@ internal sealed class ControlWindow : Form
         _run.Enabled = _cancel.Enabled = _activate.Enabled = false;
         _refresh.Stop();
         if (_host is null) return; // Startup owns the eventual close if it is still in progress.
-        try { await _host.DisposeAsync(); }
+        try
+        {
+            if (_updates is not null) await _updates.DisposeAsync();
+            await _host.DisposeAsync();
+        }
         catch (Exception ex) { TelemetryError(ex); }
         _closed = true;
         Close();

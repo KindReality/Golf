@@ -6,6 +6,7 @@ public sealed record ScreenOptions
     public string Id { get; init; } = "screen1";
     public string Name { get; init; } = "screen1";
     public string Type { get; init; } = "video";
+    public string SizingMode { get; init; } = "fit";
     public PointOptions Points { get; init; } = new();
     // Null uses the application defaults; an explicit value belongs only to this video screen.
     public BlackKeyOptions? BlackKey { get; init; }

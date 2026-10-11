@@ -71,6 +71,8 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
                 ScreenOptions.ValidateName(screen.Name);
                 if (screen.Type is not ("video" or "mat"))
                     throw new ArgumentException("Screen type must be video or mat.");
+                if (screen.SizingMode is not ("fit" or "stretch"))
+                    throw new ArgumentException("Screen SizingMode must be fit or stretch.");
                 if (screen.Points is null)
                     throw new ArgumentException("Each screen requires points.");
                 screen.BlackKey?.Validate();
@@ -96,6 +98,8 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
             !double.IsFinite(AudioTransitionOutSeconds) || AudioTransitionOutSeconds is < 0 or > 3600 ||
             string.IsNullOrWhiteSpace(VideoDirectory) || string.IsNullOrWhiteSpace(AudioDirectory))
             throw new ArgumentException("Invalid Experience configuration.");
+        MediaPath.ResolveDirectory(VideoDirectory);
+        MediaPath.ResolveDirectory(AudioDirectory);
         if (Points is null)
             throw new ArgumentException("Points must be an object.");
         Points.Validate();

@@ -1,15 +1,47 @@
-param([Parameter(Mandatory = $true)][string]$SourceDirectory)
+param([Parameter(Mandatory = $true)][string]$SourceDirectory, [switch]$ValidateOnly, [switch]$AutomaticUpdate)
 
 # Runs with inbox Windows PowerShell 5.1; PowerShell 7 is not required on the target PC.
 $ErrorActionPreference = 'Stop'
+function Get-FileSha256([string]$LiteralPath) {
+    # Use .NET directly so verification does not depend on PowerShell module discovery.
+    $stream = $null
+    $algorithm = $null
+    try {
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        $stream = [IO.File]::OpenRead($LiteralPath)
+        return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        if ($null -ne $algorithm) { $algorithm.Dispose() }
+    }
+}
 $mutex = $null
 $ownsMutex = $false
+$stage = $null
+$updateLog = $null
 try {
+    if ($AutomaticUpdate) {
+        $logFolder = Join-Path $PSScriptRoot 'logs'
+        [void][IO.Directory]::CreateDirectory($logFolder)
+        $updateLog = Join-Path $logFolder 'UpdateRestart.log'
+        [IO.File]::AppendAllText($updateLog, ([DateTime]::UtcNow.ToString('o') + " Automatic update requested.`r`n"))
+    }
     $source = (Resolve-Path -LiteralPath $SourceDirectory).ProviderPath.TrimEnd('\')
     if (!(Test-Path -LiteralPath $source -PathType Container)) { throw 'The source must be a folder.' }
-    foreach ($required in @('ExperienceX.exe','ExperienceX.dll','ExperienceX.deps.json','ExperienceX.runtimeconfig.json')) {
+    foreach ($required in @('ExperienceX.exe','ExperienceX.dll','ExperienceX.deps.json','ExperienceX.runtimeconfig.json','appsettings.defaults.json')) {
         if (!(Test-Path -LiteralPath (Join-Path $source $required) -PathType Leaf)) {
             throw "Missing $required. Run Restart-Experience.cmd from the complete build output folder."
+        }
+    }
+
+    $runtime = Get-Content -LiteralPath (Join-Path $source 'ExperienceX.runtimeconfig.json') -Raw | ConvertFrom-Json
+    $framework = @($runtime.runtimeOptions.frameworks) + @($runtime.runtimeOptions.framework) |
+        Where-Object { $_ -and $_.name -eq 'Microsoft.WindowsDesktop.App' } | Select-Object -First 1
+    if ($framework) {
+        $dotnet = Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'
+        $major = ([version]$framework.version).Major
+        if (!(Test-Path -LiteralPath $dotnet) -or !(& $dotnet --list-runtimes | Where-Object { $_ -match ('^Microsoft.WindowsDesktop.App '+$major+'\.') })) {
+            throw "Install the x64 .NET $major Windows Desktop Runtime, then run this script again."
         }
     }
 
@@ -43,6 +75,8 @@ try {
         }
     }
 
+    if ($ValidateOnly) { Write-Host 'Experience build and runtime are ready.'; exit 0 }
+
     $session = (Get-Process -Id $PID).SessionId
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $mutex = New-Object Threading.Mutex($false, ('Local\HomeTechnologies.ExperienceX.Restart.'+$sid+'.'+$session))
@@ -53,33 +87,43 @@ try {
     }
     if (!$ownsMutex) { throw 'Another Experience restart is already in progress. Wait for it to finish.' }
 
+    if ($AutomaticUpdate) {
+        . (Join-Path $PSScriptRoot 'Stage-ApplicationUpdate.ps1')
+        $stage = New-VerifiedApplicationStage -Source $source -Application 'ExperienceX'
+        $source = $stage
+        [IO.File]::AppendAllText($updateLog, ([DateTime]::UtcNow.ToString('o') + " Update staged and verified; restarting.`r`n"))
+    }
+
     Write-Host 'Stopping the existing ExperienceX instance...'
     foreach ($process in @(Get-Process -Name ExperienceX -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session })) {
-        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        [void]$process.CloseMainWindow()
+        if (!$process.WaitForExit(3000)) { Stop-Process -Id $process.Id -Force -ErrorAction Stop }
         if (!$process.WaitForExit(5000)) { throw "ExperienceX process $($process.Id) did not exit. Copy cancelled." }
     }
 
     Write-Host "Refreshing $destination from $source..."
     [void][IO.Directory]::CreateDirectory($destination)
-    $retainConfiguration = (Test-Path -LiteralPath (Join-Path $destination 'appsettings.json')) -or
-        (Test-Path -LiteralPath (Join-Path $destination 'appsettings.json.bak'))
     foreach ($item in Get-ChildItem -LiteralPath $destination -Force) {
         # Retain local media and diagnostic history while removing obsolete binaries.
         if ($item.Name -ieq 'Media') { continue }
         if ($item.Name -ieq 'logs' -and $item.PSIsContainer) { continue }
-        if ($item.Name -in @('appsettings.json','appsettings.json.bak')) { continue }
+        if ($item.Name -ieq 'Configuration' -or $item.Name -ieq 'appsettings.json' -or
+            ($item.Name -ilike 'appsettings.*' -and $item.Name -ine 'appsettings.defaults.json')) { continue }
         $target = [IO.Path]::GetFullPath($item.FullName)
         if (!$target.StartsWith($destination+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Cleanup target escaped the runtime folder.' }
         Remove-Item -LiteralPath $target -Recurse -Force
     }
     foreach ($item in Get-ChildItem -LiteralPath $source -Force) {
-        # Media is managed separately on each computer, including the first launch.
-        if ($item.Name -ieq 'Media') { continue }
-        # A surviving backup also protects the local settings from a new template.
-        if ($retainConfiguration -and $item.Name -in @('appsettings.json','appsettings.json.bak')) { continue }
+        # Hostname configuration stays beside the OneDrive template; never deploy working files.
+        if ($item.Name -in @('Media','Configuration','logs') -or $item.Name -ieq 'appsettings.json' -or
+            ($item.Name -ilike 'appsettings.*' -and $item.Name -ine 'appsettings.defaults.json')) { continue }
         Copy-Item -LiteralPath $item.FullName -Destination $destination -Recurse -Force
     }
 
+    foreach ($name in @('ExperienceX.exe','ExperienceX.dll')) {
+        if ((Get-FileSha256 -LiteralPath (Join-Path $source $name)) -ne
+            (Get-FileSha256 -LiteralPath (Join-Path $destination $name))) { throw "Copy verification failed for $name. Wait for OneDrive sync and retry." }
+    }
     $executable = Join-Path $destination 'ExperienceX.exe'
     Write-Host "Starting $executable..."
     $application = Start-Process -FilePath $executable -WorkingDirectory $destination -WindowStyle Hidden -PassThru
@@ -87,13 +131,19 @@ try {
         throw "ExperienceX exited during startup (exit code $($application.ExitCode)). Check $destination\logs\ExperienceX and the installed .NET Desktop Runtime."
     }
     Write-Host "ExperienceX is running from TEMP\Experience (PID $($application.Id)). OneDrive files are free for updates."
+    if ($updateLog) { [IO.File]::AppendAllText($updateLog, ([DateTime]::UtcNow.ToString('o') + " Started ExperienceX PID $($application.Id).`r`n")) }
     exit 0
 }
 catch {
+    if ($updateLog) { [IO.File]::AppendAllText($updateLog, ([DateTime]::UtcNow.ToString('o') + ' ERROR: ' + $_.Exception.Message + "`r`n")) }
     Write-Host ('ERROR: '+$_.Exception.Message) -ForegroundColor Red
     exit 1
 }
 finally {
+    if ($null -ne $stage -and [IO.Path]::GetDirectoryName($stage) -ieq [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') -and
+        [IO.Path]::GetFileName($stage) -match '^HomeTechnologies-Update-[a-f0-9]{32}$') {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if ($ownsMutex) { $mutex.ReleaseMutex() }
     if ($null -ne $mutex) { $mutex.Dispose() }
 }

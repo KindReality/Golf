@@ -19,6 +19,7 @@ internal sealed class MediaEngineSession(Action wake) : IDisposable
     public double Duration => _engine?.Duration ?? double.NaN;
     public void Open(string path, ExperienceRequest request, IMFDXGIDeviceManager manager)
     {
+        MediaPath.EnsureLocalPath(path);
         _canPlay = 0;
         _ended = 0;
         _error = 0;

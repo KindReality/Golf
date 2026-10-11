@@ -10,6 +10,7 @@
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Shared.Tests\BuildUpdateChecks.cs" Link="BuildUpdateChecks.cs" />
     <ProjectReference Include="../experiencex/ExperienceX.csproj" AdditionalProperties="CopyBuildOutputToOneDrive=false" />
   </ItemGroup>
 </Project>

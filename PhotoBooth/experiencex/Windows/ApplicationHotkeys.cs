@@ -11,6 +11,8 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
     internal const int AddId = 0x5841, VideoId = 0x5856;
     internal const int NewId = 0x584E, MatId = 0x584D;
     internal const int TransparencyId = 0x5854;
+    internal const int SizingId = 0x5853;
+    public Action? ToggleScreenSizing { get; set; }
     internal const int WhiteBackgroundId = 0x5857;
     public Action? ToggleScreenTransparency { get; set; }
     public Action? ChooseWhiteBackground { get; set; }
@@ -24,7 +26,7 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
     }
     public Action? NewScreenPrefix { get; set; }
     public Action? AddMatScreen { get; set; }
-    private bool _addRegistered, _videoRegistered, _newRegistered, _matRegistered, _transparencyRegistered, _whiteRegistered, _editingText, _choosingBackground;
+    private bool _addRegistered, _videoRegistered, _newRegistered, _matRegistered, _transparencyRegistered, _whiteRegistered, _sizingRegistered, _editingText, _choosingBackground;
     internal const uint Modifiers = 0x4007; // MOD_NOREPEAT | MOD_CONTROL | MOD_ALT | MOD_SHIFT
     internal const uint LetterModifiers = 0x4000; // MOD_NOREPEAT
     private bool _configurationRegistered, _closeRegistered, _backgroundRegistered, _disposed;
@@ -55,6 +57,8 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 Register(WhiteBackgroundId, 0x57, modifiers, "W", "WhiteBackgroundHotkey", ref _whiteRegistered, unavailable);
             if (ToggleScreenTransparency is not null)
                 Register(TransparencyId, 0x54, modifiers, "T", "ScreenTransparencyHotkey", ref _transparencyRegistered, unavailable);
+            if (ToggleScreenSizing is not null)
+                Register(SizingId, 0x53, modifiers, "S", "ScreenSizingHotkey", ref _sizingRegistered, unavailable);
             if (AddScreenPrefix is not null)
                 Register(AddId, 0x41, modifiers, "A", "AddScreenHotkey", ref _addRegistered, unavailable);
             if (AddVideoScreen is not null)
@@ -123,6 +127,11 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 ToggleScreenTransparency?.Invoke();
                 return;
             }
+            if (message.WParam == SizingId && key == 0x53 && _sizingRegistered)
+            {
+                ToggleScreenSizing?.Invoke();
+                return;
+            }
             if (message.WParam == WhiteBackgroundId && key == 0x57 && _whiteRegistered)
             {
                 ChooseWhiteBackground?.Invoke();
@@ -169,9 +178,11 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
         if (_newRegistered) UnregisterHotKey(Handle, NewId);
         if (_matRegistered) UnregisterHotKey(Handle, MatId);
         if (_transparencyRegistered) UnregisterHotKey(Handle, TransparencyId);
+        if (_sizingRegistered) UnregisterHotKey(Handle, SizingId);
         if (_whiteRegistered) UnregisterHotKey(Handle, WhiteBackgroundId);
         _whiteRegistered = false;
         _transparencyRegistered = false;
+        _sizingRegistered = false;
         _configurationRegistered = _closeRegistered = _backgroundRegistered = _addRegistered = _videoRegistered = _newRegistered = _matRegistered = false;
     }
 

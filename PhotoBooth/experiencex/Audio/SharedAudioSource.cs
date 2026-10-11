@@ -21,6 +21,7 @@ internal sealed class SharedAudioSource : IDisposable
 
     public SharedAudioSource(string path, double historySeconds)
     {
+        MediaPath.EnsureLocalPath(path);
         _reader = new(path);
         try
         {

@@ -6,6 +6,32 @@ param(
     [string]$ResultFile
 )
 $ErrorActionPreference = 'Stop'
+function Initialize-MediaAccount([string]$ResolvedMedia) {
+    $mediaUserName = 'SaftThings'
+    $mediaPassword = ConvertTo-SecureString '10375Saft' -AsPlainText -Force
+    $mediaUser = Get-LocalUser -Name $mediaUserName -ErrorAction SilentlyContinue
+    $administrators = Get-LocalGroup -SID 'S-1-5-32-544'
+    if ($mediaUser -and (@(Get-LocalGroupMember -Group $administrators | ForEach-Object { $_.SID.Value }) -contains $mediaUser.SID.Value)) {
+        throw 'SaftThings is an administrator. Installation canceled; use a dedicated non-administrator media account.'
+    }
+    if ($mediaUser) {
+        Set-LocalUser -Name $mediaUserName -Password $mediaPassword -PasswordNeverExpires $true -AccountNeverExpires -UserMayChangePassword $false -Description 'Home Technologies media transfer'
+        Enable-LocalUser -Name $mediaUserName
+    } else {
+        $mediaUser = New-LocalUser -Name $mediaUserName -Password $mediaPassword -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword -Description 'Home Technologies media transfer'
+    }
+    $users = Get-LocalGroup -SID 'S-1-5-32-545'
+    if (@(Get-LocalGroupMember -Group $users | ForEach-Object { $_.SID.Value }) -notcontains $mediaUser.SID.Value) {
+        Add-LocalGroupMember -Group $users -Member $mediaUser
+    }
+    # Add only this account's media access; retain all other NTFS rules.
+    $permissions = Get-Acl -LiteralPath $resolvedMedia
+    $rule = New-Object Security.AccessControl.FileSystemAccessRule($mediaUser.SID, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $permissions.SetAccessRule($rule)
+    Set-Acl -LiteralPath $resolvedMedia -AclObject $permissions
+    return $mediaUserName
+}
+
 try {
     if ($ConfigureMachine) {
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -20,12 +46,12 @@ try {
         if ($share -and ![IO.Path]::GetFullPath($share.Path).Equals($resolvedMedia, [StringComparison]::OrdinalIgnoreCase)) {
             throw ('A media share already points to ' + $share.Path + '. It was retained; resolve this before installing Controller.')
         }
-        $permissions = Get-Acl -LiteralPath $resolvedMedia
-        $rule = New-Object Security.AccessControl.FileSystemAccessRule($everyone, 'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-        $permissions.SetAccessRule($rule)
-        Set-Acl -LiteralPath $resolvedMedia -AclObject $permissions
-        if (!$share) { New-SmbShare -Name media -Path $resolvedMedia -ReadAccess $everyone | Out-Null }
-        else { Grant-SmbShareAccess -Name media -AccountName $everyone -AccessRight Read -Force | Out-Null }
+        $mediaUserName = Initialize-MediaAccount -ResolvedMedia $resolvedMedia
+        # Share access permits writes; existing NTFS permissions remain the final limit.
+        if (!$share) { New-SmbShare -Name media -Path $resolvedMedia -ChangeAccess $everyone | Out-Null }
+        else { Grant-SmbShareAccess -Name media -AccountName $everyone -AccessRight Change -Force | Out-Null }
+        Grant-SmbShareAccess -Name media -AccountName ($env:COMPUTERNAME+'\'+$mediaUserName) -AccessRight Change -Force | Out-Null
+        Write-Host ('Media account ready: '+$env:COMPUTERNAME+'\'+$mediaUserName)
         foreach ($firewall in @(
             @{Name='HomeTechnologies.Controller.UDP';Display='Home Technologies UDP events and commands';Protocol='UDP';Ports=@('54242','54243')},
             @{Name='HomeTechnologies.Controller.Media';Display='Home Technologies media share';Protocol='TCP';Ports=@('445')}
@@ -41,46 +67,38 @@ try {
         exit 0
     }
     $sourcePath = [IO.Path]::GetFullPath($Source)
-    $controllerRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Home Technologies\Controller'
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA is unavailable.' }
+    $controllerRoot = Join-Path $env:LOCALAPPDATA 'Home Technologies\Controller'
     $applicationPath = Join-Path $controllerRoot 'Application'
     $localMedia = Join-Path $controllerRoot 'Media'
-    $executable = Join-Path $applicationPath 'Controller.exe'
+    $restart = Join-Path $sourcePath 'Restart-Controller.ps1'
     if ($Plan) {
-        [pscustomobject]@{Source=$sourcePath;Application=$applicationPath;Media=$localMedia;Share=('\\'+$env:COMPUTERNAME+'\media');ShareAccess='Read';FirewallProfile='Private';FirewallScope='LocalSubnet';Preserve=@('Configuration','Media','logs');Launch=$executable} | ConvertTo-Json
+        [pscustomobject]@{Source=$sourcePath;Application=$applicationPath;Media=$localMedia;Share=('\\'+$env:COMPUTERNAME+'\media');MediaUser='SaftThings';ShareAccess='Change';FirewallProfile='Private';FirewallScope='LocalSubnet';Restart=$restart} | ConvertTo-Json
         exit 0
     }
-    if (!(Test-Path -LiteralPath (Join-Path $sourcePath 'Controller.exe') -PathType Leaf)) { throw 'Run Install-Controller.cmd from a completed Controller build folder.' }
-    $runtime = Get-Content -LiteralPath (Join-Path $sourcePath 'Controller.runtimeconfig.json') -Raw | ConvertFrom-Json
-    $desktopFramework = @($runtime.runtimeOptions.frameworks) + @($runtime.runtimeOptions.framework) | Where-Object { $_ -and $_.name -eq 'Microsoft.WindowsDesktop.App' } | Select-Object -First 1
-    if ($desktopFramework) {
-        $dotnet = Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'
-        if (!(Test-Path -LiteralPath $dotnet)) { throw 'Install the x64 .NET 9 Windows Desktop Runtime before running this installer.' }
-        $requiredMajor = ([version]$desktopFramework.version).Major
-        if (!(& $dotnet --list-runtimes | Where-Object { $_ -match ('^Microsoft.WindowsDesktop.App '+$requiredMajor+'\.') })) { throw ('Install the x64 .NET '+$requiredMajor+' Windows Desktop Runtime before running this installer.') }
-    }
-    if ($sourcePath.TrimEnd('\').Equals($applicationPath.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { throw 'Run the installer from the build output, not the installed Application folder.' }
-    [void][IO.Directory]::CreateDirectory($applicationPath)
+    if (!(Test-Path -LiteralPath $restart -PathType Leaf)) { throw 'Missing Restart-Controller.ps1. Wait for the complete build to sync.' }
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $restart -SourceDirectory $sourcePath -ValidateOnly
+    if ($LASTEXITCODE -ne 0) { throw 'Controller startup checks failed; installation canceled.' }
     [void][IO.Directory]::CreateDirectory($localMedia)
-    $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
-    Get-CimInstance Win32_Process -Filter "Name='Controller.exe'" | Where-Object SessionId -eq $session | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-    & robocopy.exe $sourcePath $applicationPath /E /R:2 /W:1 /XD Media logs Configuration /XF appsettings.json appsettings.json.bak '*.tmp' /NFL /NDL /NJH /NJS
-    if ($LASTEXITCODE -ge 8) { throw ('Copying the Controller build failed with robocopy exit code '+$LASTEXITCODE+'.') }
     $result = Join-Path ([IO.Path]::GetTempPath()) ('Controller-install-'+[Guid]::NewGuid().ToString('N')+'.txt')
-    $setupScript = Join-Path $applicationPath 'Install-Controller.ps1'
-    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$setupScript+'" -ConfigureMachine -MediaPath "'+$localMedia+'" -ResultFile "'+$result+'"'
+    $setup = Join-Path $sourcePath 'Install-Controller.ps1'
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$setup+'" -ConfigureMachine -MediaPath "'+$localMedia+'" -ResultFile "'+$result+'"'
     try {
-        $admin = Start-Process -FilePath powershell.exe -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+        Write-Host 'Setting up Controller media sharing and network access. Accept the administrator prompt.'
+        $admin = Start-Process -FilePath $powershell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
         if ($admin.ExitCode -ne 0 -or !(Test-Path -LiteralPath $result) -or (Get-Content -LiteralPath $result -Raw).Trim() -ne 'OK') {
             $detail = if (Test-Path -LiteralPath $result) { Get-Content -LiteralPath $result -Raw } else { 'Administrator setup was canceled or could not complete.' }
             throw $detail
         }
     } finally { if (Test-Path -LiteralPath $result) { Remove-Item -LiteralPath $result -Force } }
-    Write-Host ('Media folder: '+$localMedia)
-    Write-Host ('Read-only share: \\'+$env:COMPUTERNAME+'\media')
-    Write-Host 'Use a Private network profile. Clients access the share with normal Windows file-sharing credentials.'
-    Start-Process -FilePath $executable -WorkingDirectory $applicationPath -WindowStyle Normal
+    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $restart -SourceDirectory $sourcePath
+    if ($LASTEXITCODE -ne 0) { throw 'Controller restart failed. Review the error above.' }
+    Write-Host ('Media share: \\'+$env:COMPUTERNAME+'\media (read/write, subject to NTFS permissions).')
+    Write-Host 'Controller installation complete. Use Restart-Controller.cmd for future updates.'
+    exit 0
 } catch {
     if ($ResultFile) { Set-Content -LiteralPath $ResultFile -Value $_.Exception.Message }
-    Write-Error $_.Exception.Message
+    Write-Host ('ERROR: '+$_.Exception.Message) -ForegroundColor Red
     exit 1
 }

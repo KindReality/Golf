@@ -31,6 +31,7 @@ internal sealed class AudioPlayback : IDisposable
         Request = request;
         try
         {
+            MediaPath.EnsureLocalPath(path);
             using var enumerator = new MMDeviceEnumerator();
             _device = enumerator.GetDevice(device.Id);
             if (_device.State != DeviceState.Active)

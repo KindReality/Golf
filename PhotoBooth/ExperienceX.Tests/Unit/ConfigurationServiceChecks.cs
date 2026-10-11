@@ -16,7 +16,7 @@ internal static class ConfigurationServiceChecks
                 Directory.CreateDirectory(folder);
                 try
                 {
-                    var path = Path.Combine(folder, "appsettings.json");
+                    var path = Path.Combine(folder, "appsettings.ALPHA.json");
                     File.WriteAllText(path, "{\"DisplayName\":\"TEST\",\"TransitionInSeconds\":7,\"Custom\":42}");
                     await using var service = new ConfigurationService(dispatcher, path, () => ["TEST"]);
                     service.LoadInitial();

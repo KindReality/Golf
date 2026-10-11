@@ -177,8 +177,9 @@ internal sealed class DisplayScreenTrack : IDisposable
     public void DrawVideo()
     {
         if (Screen.IsMat) return;
-        var inverse = _alpha > 0 ? _transforms.Get(_overlay.Preview ?? Screen.Points) : default;
-        _graphics.DrawLayer(_view, _alpha, _options, inverse, _videoWidth, _videoHeight, Screen.EffectiveBlackKey(_options));
+        var points = _overlay.Preview ?? Screen.Points;
+        var inverse = _alpha > 0 ? _transforms.Get(points) : default;
+        _graphics.DrawLayer(_view, _alpha, _options, inverse, _videoWidth, _videoHeight, Screen.EffectiveBlackKey(_options), Screen.SizingMode, points);
     }
     public void DrawMat()
     {

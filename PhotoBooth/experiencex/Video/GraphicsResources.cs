@@ -174,7 +174,7 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         _context.OMSetRenderTargets(_rtv!);
         _context.ClearRenderTargetView(_rtv!, background);
     }
-    public void DrawLayer(ID3D11ShaderResourceView? view, double opacity, ExperienceOptions options, (Vector4, Vector4, Vector4) transform, int _videoWidth, int _videoHeight, BlackKeyOptions? blackKey = null)
+    public void DrawLayer(ID3D11ShaderResourceView? view, double opacity, ExperienceOptions options, (Vector4, Vector4, Vector4) transform, int _videoWidth, int _videoHeight, BlackKeyOptions? blackKey = null, string sizingMode = "fit", PointOptions? sizingPoints = null)
     {
         AssertOwnerThread();
 
@@ -183,15 +183,13 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         {
             var key = blackKey ?? options.BlackKey;
             var (r0, r1, r2) = transform;
-            var videoAspect = (float)_videoWidth / _videoHeight;
-            var targetAspect = (float)_width / _height;
             var data = new Constants
             {
                 Row0 = r0,
                 Row1 = r1,
                 Row2 = r2,
                 Effects = new((float)opacity, (float)key.Threshold, (float)key.Softness, key.Enabled ? 1 : 0),
-                Aspect = new(Math.Min(1, videoAspect / targetAspect), Math.Min(1, targetAspect / videoAspect), 0, 0)
+                Aspect = VideoSizing.ContentScale(sizingMode, _videoWidth, _videoHeight, _width, _height, sizingPoints)
             };
             _context.UpdateSubresource(in data, _constants);
             _context.RSSetViewport(0, 0, _width, _height);

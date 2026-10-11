@@ -11,6 +11,7 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
 {
     public const int MaximumDatagramBytes = 1200;
     public const int MaximumHops = 8;
+    public CommandContext? Context { get; init; }
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private sealed record Fields
     {
@@ -22,6 +23,7 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         public DateTimeOffset? ExpiresAt { get; init; }
         public int HopCount { get; init; }
         public double ProcessingTimeoutSeconds { get; init; } = 10;
+        public CommandContext? Context { get; init; }
     }
 
     public static BroadcastEnvelope Parse(ReadOnlySpan<byte> bytes)
@@ -35,6 +37,7 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         if (body.EnumerateObject().Any(property => !keys.Add(property.Name)))
             throw new ArgumentException("Duplicate message fields are not allowed.");
         var fields = body.Deserialize<Fields>(Json)!;
+        fields.Context?.Validate();
         var type = fields.Type?.Trim().ToLowerInvariant();
         if (type is not ("command" or "event"))
             throw new ArgumentException("Message type must be command or event.");
@@ -49,7 +52,7 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         if (!double.IsFinite(fields.ProcessingTimeoutSeconds) || fields.ProcessingTimeoutSeconds is <= 0 or > 300)
             throw new ArgumentException("processingTimeoutSeconds must be greater than zero and at most 300.");
         return new(body, type, fields.Device!.Trim(), fields.Source!.Trim(), fields.RequestId!.Trim(),
-            fields.Event?.Trim(), fields.ExpiresAt, fields.HopCount, fields.ProcessingTimeoutSeconds, Stopwatch.GetTimestamp());
+            fields.Event?.Trim(), fields.ExpiresAt, fields.HopCount, fields.ProcessingTimeoutSeconds, Stopwatch.GetTimestamp()) { Context = fields.Context };
     }
 
     public bool Targets(string name) => Device == "*" || string.Equals(Device, name, StringComparison.OrdinalIgnoreCase);
@@ -58,7 +61,7 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         Stopwatch.GetElapsedTime(ReceivedTimestamp, timestamp ?? Stopwatch.GetTimestamp()).TotalSeconds >= ProcessingTimeoutSeconds;
 
     public static byte[] Create(BroadcastOptions options, string type, string device, object payload, string? requestId = null,
-        BroadcastChain? chain = null)
+        BroadcastChain? chain = null, CommandContext? context = null)
     {
         options.ValidateNetwork();
         var body = JsonSerializer.SerializeToNode(payload, Json) as JsonObject ?? throw new ArgumentException("Payload must be an object.");
@@ -73,6 +76,13 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         // Local monotonic time avoids requiring clock synchronization on an offline LAN.
         body["processingTimeoutSeconds"] = options.RequestLifetimeSeconds;
         body["hopCount"] = chain?.HopCount ?? 0;
+        if (context is not null)
+        {
+            context.Validate();
+            foreach (var key in body.Select(p => p.Key).Where(key => key.Equals("context", StringComparison.OrdinalIgnoreCase)).ToArray())
+                body.Remove(key);
+            body["context"] = JsonSerializer.SerializeToNode(context, Json);
+        }
         if (chain is not null)
         {
             body["correlationId"] = chain.CorrelationId;

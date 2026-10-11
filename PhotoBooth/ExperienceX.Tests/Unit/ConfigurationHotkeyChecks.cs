@@ -10,12 +10,14 @@ internal static class ConfigurationHotkeyChecks
         {
             try
             {
-                int presses = 0, closes = 0, backgrounds = 0, transparencies = 0, whites = 0;
+                int presses = 0, closes = 0, backgrounds = 0, transparencies = 0, whites = 0, sizing = 0;
                 using var first = new ApplicationHotkeys(() => presses++, () => closes++, () => backgrounds++);
                 using var second = new ApplicationHotkeys(() => presses += 10, () => closes += 10, () => backgrounds += 10);
                 first.ToggleScreenTransparency = () => transparencies++;
                 second.ToggleScreenTransparency = () => transparencies += 10;
                 first.ChooseWhiteBackground = () => whites++;
+                first.ToggleScreenSizing = () => sizing++;
+                second.ToggleScreenSizing = () => sizing += 10;
                 void Check(bool condition, string message)
                 {
                     if (!condition)
@@ -32,13 +34,15 @@ internal static class ConfigurationHotkeyChecks
                 Send(first, ApplicationHotkeys.BackgroundId, 0x42);
                 Send(first, ApplicationHotkeys.TransparencyId, 0x54);
                 Check(transparencies == 0, "Screen transparency was active outside configuration mode.");
+                Send(first, ApplicationHotkeys.SizingId, 0x53);
+                Check(sizing == 0, "S was active outside configuration mode.");
                 Check(presses == 0 && closes == 0 && backgrounds == 0, "Letters or incomplete entry chord were active outside configuration mode.");
                 Send(first, ApplicationHotkeys.ConfigurationId, 0x43, 7);
                 Check(presses == 1, "Ctrl+Shift+Alt+C did not enable configuration.");
 
                 var lettersMissing = first.Register(true);
                 Check(lettersMissing.Length == 0, "Configuration letter registration failed: " + string.Join(", ", lettersMissing));
-                Check(second.Register(true).Length == 4, "Configuration letter conflicts were not detected.");
+                Check(second.Register(true).Length == 5, "Configuration letter conflicts were not detected.");
                 Send(first, ApplicationHotkeys.ConfigurationId, 0x43, 7);
                 Send(first, ApplicationHotkeys.ConfigurationId, 0x4B);
                 Check(presses == 1, "Stale entry message or incorrect key dispatched after changing mode.");
@@ -50,9 +54,13 @@ internal static class ConfigurationHotkeyChecks
                 Check(presses == 2 && closes == 1 && backgrounds == 1, "Single-letter callbacks were not independent.");
                 Send(first, ApplicationHotkeys.TransparencyId, 0x54);
                 Check(transparencies == 1 && backgrounds == 1, "T did not toggle screen transparency independently of B.");
+                Send(first, ApplicationHotkeys.SizingId, 0x53);
+                Check(sizing == 1, "S did not dispatch Fit/Stretch.");
                 Check(first.Register(true, true).Length == 0, "Name editing failed to release letter shortcuts.");
                 Send(first, ApplicationHotkeys.TransparencyId, 0x54);
                 Check(transparencies == 1, "T intercepted screen-name text editing.");
+                Send(first, ApplicationHotkeys.SizingId, 0x53);
+                Check(sizing == 1, "S intercepted screen-name text editing.");
                 Check(first.Register(true).Length == 0, "Name editing did not restore shortcuts.");
                 Send(first, ApplicationHotkeys.WhiteBackgroundId, 0x57);
                 Check(whites == 0, "W dispatched without a pending background choice.");
@@ -73,6 +81,8 @@ internal static class ConfigurationHotkeyChecks
                 Check(presses == 2 && closes == 1 && backgrounds == 1, "Queued configuration letters dispatched after disabling mode.");
                 Send(first, ApplicationHotkeys.TransparencyId, 0x54);
                 Check(transparencies == 1, "Queued T dispatched after disabling configuration mode.");
+                Send(first, ApplicationHotkeys.SizingId, 0x53);
+                Check(sizing == 1, "Queued S dispatched after disabling configuration mode.");
                 Check(second.Register(true).Length == 0, "Letters remained claimed after disabling configuration.");
                 second.Dispose();
                 second.Dispose();

@@ -8,6 +8,26 @@
     <CopyBuildOutputToOneDrive Condition="'$(CopyBuildOutputToOneDrive)' == ''">true</CopyBuildOutputToOneDrive>
   </PropertyGroup>
 
+  <Target Name="GeneratePhotoBoothUpdateManifest" AfterTargets="Build" BeforeTargets="CopyPhotoBoothBuildOutput"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and ('$(MSBuildProjectName)' == 'ExperienceX' or '$(MSBuildProjectName)' == 'Controller')">
+    <ItemGroup>
+      <_PhotoBoothUpdateFiles Include="$(TargetDir)**\*"
+          Exclude="$(TargetDir)Media\**\*;$(TargetDir)logs\**\*;$(TargetDir)Output\**\*;$(TargetDir)Configuration\**\*;$(TargetDir)appsettings.*;$(TargetDir)experience.log;$(TargetDir)build-manifest.sha256" />
+      <_PhotoBoothUpdateFiles Include="$(TargetDir)appsettings.defaults.json" />
+      <_PhotoBoothUpdateFiles Include="$(TargetDir)appsettings.environment.json" Condition="'$(MSBuildProjectName)' == 'Controller'" />
+    </ItemGroup>
+    <GetFileHash Files="@(_PhotoBoothUpdateFiles)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_PhotoBoothUpdateHashes" />
+    </GetFileHash>
+    <ItemGroup>
+      <_PhotoBoothUpdateHashes Update="@(_PhotoBoothUpdateHashes)">
+        <PackagePath>$([MSBuild]::MakeRelative('$(TargetDir)', '%(_PhotoBoothUpdateHashes.FullPath)'))</PackagePath>
+      </_PhotoBoothUpdateHashes>
+    </ItemGroup>
+    <WriteLinesToFile File="$(TargetDir)build-manifest.sha256" Lines="@(_PhotoBoothUpdateHashes->'%(FileHash)|%(PackagePath)')"
+        Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
+  </Target>
+
   <Target Name="CopyPhotoBoothBuildOutput" AfterTargets="Build"
           Condition="'$(CopyBuildOutputToOneDrive)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and ('$(MSBuildProjectName)' == 'Camera' or '$(MSBuildProjectName)' == 'Experience' or '$(MSBuildProjectName)' == 'ExperienceX' or '$(MSBuildProjectName)' == 'Controller')">
     <Warning Condition="'$(PhotoBoothBinRoot)' == ''" Text="OneDrive is not configured. Skipping the PhotoBooth output copy. Set PhotoBoothOneDriveRoot or PhotoBoothBinRoot to choose a destination." />
@@ -17,8 +37,13 @@
     <ItemGroup Condition="'$(PhotoBoothBinRoot)' != ''">
       <_PhotoBoothBuildFiles Include="$(TargetDir)**\*"
           Exclude="$(TargetDir)logs\**\*;$(TargetDir)Output\**\*;$(TargetDir)experience.log" />
-      <_PhotoBoothBuildFiles Remove="$(TargetDir)appsettings.json" Condition="'$(MSBuildProjectName)' == 'ExperienceX' and (Exists('$(_PhotoBoothDestination)appsettings.json') or Exists('$(_PhotoBoothDestination)appsettings.json.bak'))" />
-      <_PhotoBoothBuildFiles Remove="$(TargetDir)appsettings.json.bak;$(TargetDir)appsettings.json.lock;$(TargetDir)appsettings.json.*.tmp;$(TargetDir)appsettings.json.rejected-*" Condition="'$(MSBuildProjectName)' == 'ExperienceX'" />
+      <!-- Build deployment must never overwrite a hostname's working configuration or recovery files. -->
+      <_PhotoBoothBuildFiles Remove="$(TargetDir)appsettings.*;$(TargetDir)Configuration\**\*"
+          Condition="'$(MSBuildProjectName)' == 'ExperienceX' or '$(MSBuildProjectName)' == 'Controller'" />
+      <_PhotoBoothBuildFiles Include="$(TargetDir)appsettings.defaults.json"
+          Condition="('$(MSBuildProjectName)' == 'ExperienceX' or '$(MSBuildProjectName)' == 'Controller') and Exists('$(TargetDir)appsettings.defaults.json')" />
+      <_PhotoBoothBuildFiles Include="$(TargetDir)appsettings.environment.json"
+          Condition="'$(MSBuildProjectName)' == 'Controller' and Exists('$(TargetDir)appsettings.environment.json')" />
     </ItemGroup>
     <Copy Condition="'$(PhotoBoothBinRoot)' != ''" SourceFiles="@(_PhotoBoothBuildFiles)"
           DestinationFiles="@(_PhotoBoothBuildFiles->'$(_PhotoBoothDestination)%(RecursiveDir)%(Filename)%(Extension)')"

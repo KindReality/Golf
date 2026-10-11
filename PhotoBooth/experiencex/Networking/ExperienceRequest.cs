@@ -4,6 +4,14 @@ namespace ExperienceX;
 
 public sealed record ExperienceRequest
 {
+    public PhotoBooth.Networking.CommandContext? Context { get; init; }
+    public string? CorrelationId { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] public string? TargetDevice { get; init; }
+    internal PhotoBooth.Diagnostics.RequestLogContext LogContext(string? path = null) => new()
+    {
+        Source = Source, Device = TargetDevice, Experience = Experience, Value = Value,
+        Scene = Context?.Scene, Playlist = Context?.Playlist, Item = Context?.Item, Path = path, CorrelationId = CorrelationId
+    };
     public string Experience { get; init; } = "";
     public string Value { get; init; } = "";
     public bool Loop { get; init; }
@@ -67,6 +75,7 @@ public sealed record ExperienceRequest
 
     private static ExperienceRequest Validate(ExperienceRequest request)
     {
+        request.Context?.Validate();
         if (!string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(request.Experience, "audio", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Only video and audio experiences are supported.");

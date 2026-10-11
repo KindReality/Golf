@@ -49,12 +49,12 @@ internal static class GpuShaderChecks
             context.PSSetShaderResource(0, srv);
             context.PSSetSampler(0, sampler);
             context.PSSetConstantBuffer(0, buffer);
-            byte[] Render(float opacity, bool key, PointOptions? keystone = null, Color4? background = null)
+            byte[] Render(float opacity, bool key, PointOptions? keystone = null, Color4? background = null, Vector4? contentScale = null)
             {
                 context.ClearRenderTargetView(rtv, background ?? new Color4(0, 0, 0, 0));
                 context.OMSetBlendState(videoBlend);
                 var (r0, r1, r2) = VideoTransform.Inverse(keystone ?? new());
-                var data = new Constants { Row0 = r0, Row1 = r1, Row2 = r2, Effects = new(opacity, 0.015f, 0.03f, key ? 1 : 0), Aspect = new(1, 1, 0, 0) };
+                var data = new Constants { Row0 = r0, Row1 = r1, Row2 = r2, Effects = new(opacity, 0.015f, 0.03f, key ? 1 : 0), Aspect = contentScale ?? new(1, 1, 0, 0) };
                 context.UpdateSubresource(in data, buffer);
                 context.Draw(3, 0);
                 context.CopyResource(staging, target);
@@ -69,6 +69,17 @@ internal static class GpuShaderChecks
                 finally { context.Unmap(staging, 0); }
             }
             int Alpha(byte[] b, int x, int y) => b[(y * 16 + x) * 4 + 3];
+            var fitWide = Render(1, false, contentScale: VideoSizing.ContentScale("fit", 1920, 1080, 16, 16));
+            var fitTall = Render(1, false, contentScale: VideoSizing.ContentScale("fit", 1080, 1920, 16, 16));
+            var stretch = Render(1, false, contentScale: VideoSizing.ContentScale("stretch", 1920, 1080, 16, 16));
+            if (Alpha(fitWide, 8, 1) != 0 || Alpha(fitWide, 8, 8) != 255 || Alpha(fitTall, 1, 8) != 0 || Alpha(fitTall, 8, 8) != 255 || Alpha(stretch, 8, 1) != 255)
+                throw new Exception("GPU Fit did not letterbox/pillarbox, or Stretch did not fill the screen.");
+            var narrowScreen = new PointOptions { Enabled = true, TopLeft = new(.25, 0), TopRight = new(.75, 0), BottomLeft = new(.25, 1), BottomRight = new(.75, 1) };
+            var narrowFit = Render(1, false, narrowScreen, contentScale: VideoSizing.ContentScale("fit", 1920, 1080, 16, 16, narrowScreen));
+            var narrowStretch = Render(1, false, narrowScreen, contentScale: VideoSizing.ContentScale("stretch", 1920, 1080, 16, 16, narrowScreen));
+            if (Alpha(narrowFit, 8, 4) != 0 || Alpha(narrowFit, 8, 8) != 255 || Alpha(narrowStretch, 8, 4) != 255)
+                throw new Exception("Fit used display proportions instead of the selected screen's proportions.");
+            Console.WriteLine("GPU readback passed Fit aspect-ratio bars and Stretch coverage.");
             var faded = Render(0.25f, true);
             if (Alpha(faded, 3, 3) != 0 || Math.Abs(Alpha(faded, 12, 3) - 64) > 1 || Math.Abs(faded[(3 * 16 + 12) * 4 + 2] - 64) > 1)
                 throw new Exception("GPU black key or premultiplied fade produced incorrect pixels.");

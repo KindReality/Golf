@@ -23,6 +23,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
     private bool _polling, _disposed, _togglingMode, _togglingBackground, _togglingTransparency, _closeRequested;
     private string? _deviceFailure;
     private bool _addScreenArmed, _editingText, _addingScreen;
+    private bool _togglingSizing;
     private async Task CreateScreenAsync(CancellationToken token, string type)
     {
         if (_disposed || !_options.ConfigurationMode || _addingScreen)
@@ -107,6 +108,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
         _hotkeys.AddScreenPrefix = () => { CancelBackgroundChoice(); _addScreenArmed = true; _modeNotice.Display("Add screen   •   V: video   M: mat"); };
         _hotkeys.NewScreenPrefix = _hotkeys.AddScreenPrefix;
         _hotkeys.ToggleScreenTransparency = () => { CancelBackgroundChoice(); _tasks.Run(ToggleScreenTransparencyAsync, "Toggle screen chroma key"); };
+        _hotkeys.ToggleScreenSizing = () => { CancelBackgroundChoice(); _addScreenArmed = false; _tasks.Run(ToggleScreenSizingAsync, "Toggle screen Fit/Stretch"); };
         _hotkeys.ChooseWhiteBackground = () => ApplyBackgroundChoice(_backgroundSelection.PressW());
         _hotkeys.AddVideoScreen = () => { if (_addScreenArmed) { _addScreenArmed = false; _tasks.Run(token => CreateScreenAsync(token, "video"), "Create video screen"); } };
         _hotkeys.AddMatScreen = () => { if (_addScreenArmed) { _addScreenArmed = false; _tasks.Run(token => CreateScreenAsync(token, "mat"), "Create mat screen"); } };
@@ -151,7 +153,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
                 Shortcut = shortcut,
                 ConfigurationMode = enabled
             });
-            _modeNotice.Display(enabled ? "Configuration mode ON   •   A: add screen   V: video   M: mat   C: exit   X: close   T: screen chroma key   B: display background" : "Configuration mode OFF   •   Ctrl+Shift+Alt+C: configure");
+            _modeNotice.Display(enabled ? "Configuration mode ON   •   A: add screen   V: video   M: mat   C: exit   X: close   S: Fit/Stretch   T: screen chroma key   B: display background" : "Configuration mode OFF   •   Ctrl+Shift+Alt+C: configure");
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception) when (_disposed) { }
@@ -246,6 +248,33 @@ internal sealed class ExperienceHost : IAsyncDisposable
         }
         finally { _togglingTransparency = false; }
     }
+    private async Task ToggleScreenSizingAsync(CancellationToken token)
+    {
+        if (_disposed || !_options.ConfigurationMode || _togglingSizing) return;
+        if (_calibration.SelectedScreen is not ScreenSurface selected)
+        {
+            _modeNotice.Display("Select a video screen first   •   S: Fit/Stretch");
+            return;
+        }
+        _togglingSizing = true;
+        try
+        {
+            var mode = await _configuration.ToggleScreenSizingAsync(selected.DisplayName, selected.ScreenId, token);
+            if (_disposed) return;
+            var name = _options.ScreensFor(selected.DisplayName).FirstOrDefault(s => s.Id == selected.ScreenId)?.Name;
+            Telemetry.Info("ScreenSizingToggled", new { Shortcut = "S", selected.DisplayName, selected.ScreenId, ScreenName = name, SizingMode = mode });
+            _modeNotice.Display($"{name}: {(mode == "stretch" ? "Stretch" : "Fit (preserve aspect ratio)")}   •   S");
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception) when (_disposed) { }
+        catch (Exception ex)
+        {
+            Telemetry.Error("ScreenSizingToggleFailed", ex, new { selected.DisplayName, selected.ScreenId });
+            _modeNotice.Display(ex.Message, true);
+        }
+        finally { _togglingSizing = false; }
+    }
+
     private void ApplyConfiguration(ExperienceOptions previous, ExperienceOptions next)
     {
         if (_backgroundSelection.PendingDisplay is { } pending &&
@@ -311,7 +340,9 @@ internal sealed class ExperienceHost : IAsyncDisposable
         var video = string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase);
         try
         {
-            var path = MediaPath.Resolve(video ? _options.VideoDirectory : _options.AudioDirectory, request.Value, AppContext.BaseDirectory);
+            var path = MediaPath.Resolve(video ? _options.VideoDirectory : _options.AudioDirectory, request.Value);
+            Telemetry.SetRequestContext(request.RequestId, request.LogContext(path));
+            Telemetry.Info("MediaResolved", new { request.Value, Path = path, Local = true }, request.RequestId);
             if (video)
             {
                 _displays.Refresh();

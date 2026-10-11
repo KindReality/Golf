@@ -10,7 +10,7 @@ internal sealed class CommandDispatcher(ArduinoConnections arduinos,
 {
     public async Task<DispatchReceipt> SendAsync(PlaylistCommand step, ControllerOptions options, BroadcastChain chain, string requestId, CancellationToken token)
     {
-        var bytes = BroadcastEnvelope.Create(options, step.Type, step.Device!, step.Payload, requestId, chain);
+        var bytes = BroadcastEnvelope.Create(options, step.Type, step.Device!, step.Payload, requestId, chain, step.Context);
         if (step.Transport == "udp")
         {
             long firstSent = 0;

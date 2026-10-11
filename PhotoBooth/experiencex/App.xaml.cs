@@ -5,6 +5,7 @@ public partial class App : System.Windows.Application
     private SingleInstanceLease? _instance;
     private ExperienceHost? _host;
     private Task? _shutdown;
+    private PhotoBooth.Updates.BuildUpdateMonitor? _updates;
     protected override void OnStartup(System.Windows.StartupEventArgs e)
     {
         _instance = SingleInstanceLease.TryAcquire("PhotoBooth.ExperienceX.SingleInstance");
@@ -20,25 +21,26 @@ public partial class App : System.Windows.Application
         string configurationPath;
         try
         {
-            configurationPath = LocalConfiguration.Resolve();
-            var source = LocalConfiguration.Initialize(configurationPath, AppContext.BaseDirectory, LocalConfiguration.PreviousConfigurationPath());
+            configurationPath = MachineConfiguration.Resolve();
+            var source = MachineConfiguration.Initialize(configurationPath, System.IO.Path.GetDirectoryName(configurationPath)!);
             PhotoBooth.Diagnostics.Telemetry.Start("ExperienceX", configurationPath);
             PhotoBooth.Diagnostics.Telemetry.Info("SingleInstanceAcquired", new
             {
                 _instance.RecoveredAbandonedOwner
             });
             if (source is not null)
-                PhotoBooth.Diagnostics.Telemetry.Info("LocalConfigurationCreated", new
+                PhotoBooth.Diagnostics.Telemetry.Info("MachineConfigurationCreated", new
                 {
                     Path = configurationPath,
-                    Source = source
+                    Source = source,
+                    Hostname = Environment.MachineName
                 });
         }
         catch (Exception ex)
         {
             PhotoBooth.Diagnostics.Telemetry.Start("ExperienceX");
-            PhotoBooth.Diagnostics.Telemetry.Error("LocalConfigurationUnavailable", ex);
-            System.Windows.MessageBox.Show("ExperienceX could not open its local configuration.\n\n" + ex.Message, "ExperienceX configuration", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+            PhotoBooth.Diagnostics.Telemetry.Error("MachineConfigurationUnavailable", ex);
+            System.Windows.MessageBox.Show("ExperienceX could not open its computer configuration in OneDrive.\n\n" + ex.Message, "ExperienceX configuration", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
             Shutdown();
             return;
         }
@@ -53,6 +55,7 @@ public partial class App : System.Windows.Application
         try
         {
             _host.Start();
+            _updates = new PhotoBooth.Updates.BuildUpdateMonitor("ExperienceX", System.IO.Path.GetDirectoryName(configurationPath)!);
         }
         catch (Exception ex)
         {
@@ -65,6 +68,7 @@ public partial class App : System.Windows.Application
     {
         try
         {
+            if (_updates is not null) await _updates.DisposeAsync();
             if (_host is not null)
                 await _host.DisposeAsync();
         }

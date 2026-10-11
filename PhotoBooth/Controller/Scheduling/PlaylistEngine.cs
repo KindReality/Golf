@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Controller.Configuration;
 using Controller.Diagnostics;
 using PhotoBooth.Networking;
+using PhotoBooth.Diagnostics;
 
 namespace Controller.Scheduling;
 
@@ -122,14 +123,23 @@ internal sealed class PlaylistEngine : IAsyncDisposable
                         await Run(nested, options, chain, run.Owner, token, run.Loops).Completion.ConfigureAwait(false);
                     else
                     {
+                        var outgoing = command with { Context = new() { Scene = run.Loops?.SceneName, Playlist = playlist.Name, Item = item.Name } };
+                        Telemetry.SetRequestContext(id, new()
+                        {
+                            Source = options.EffectiveDeviceName, Device = command.Device,
+                            Scene = outgoing.Context.Scene, Playlist = playlist.Name, Item = item.Name,
+                            Experience = ControllerOptions.Text(command.Payload, "experience"), Value = ControllerOptions.Text(command.Payload, "value"),
+                            CorrelationId = chain.CorrelationId
+                        });
                         var due = Stopwatch.GetTimestamp();
                         TaskCompletionSource? sending = null;
                         if (SceneVideoLoops.IsLoop(command))
-                            sending = (run.Loops ?? throw new InvalidOperationException("A looping video requires an active scene.")).Register(command, options, id);
+                            sending = (run.Loops ?? throw new InvalidOperationException("A looping video requires an active scene.")).Register(outgoing, options, id);
                         DispatchReceipt receipt;
-                        try { receipt = await _dispatcher.SendAsync(command, options, chain, id, token).ConfigureAwait(false); }
+                        try { receipt = await _dispatcher.SendAsync(outgoing, options, chain, id, token).ConfigureAwait(false); }
                         finally { sending?.TrySetResult(); }
-                        _log.Info("CommandSent", $"{playlist.Name}/{item.Name} → {command.Device}", new { Playlist = playlist.Name, Item = item.Name, command.Transport, command.Type, command.Device, chain.CorrelationId, SendLatencyMilliseconds = receipt.SentAt > 0 ? Stopwatch.GetElapsedTime(due, receipt.SentAt).TotalMilliseconds : (double?)null }, id);
+                        var value = ControllerOptions.Text(command.Payload, "value");
+                        _log.Info("CommandSent", $"{playlist.Name}/{item.Name} → {command.Device}" + (value is null ? "" : $" ({value})"), new { Playlist = playlist.Name, Item = item.Name, command.Transport, command.Type, command.Device, Value = value, chain.CorrelationId, SendLatencyMilliseconds = receipt.SentAt > 0 ? Stopwatch.GetElapsedTime(due, receipt.SentAt).TotalMilliseconds : (double?)null }, id);
                     }
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }

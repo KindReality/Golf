@@ -25,11 +25,36 @@ class Fixture {
     foreach ($name in @('ExperienceX.dll','ExperienceX.deps.json','ExperienceX.runtimeconfig.json','appsettings.defaults.json')) {
         [IO.File]::WriteAllText((Join-Path $source $name),'version-one')
     }
-    foreach ($name in @('Restart-Experience.cmd','Restart-Experience.ps1')) {
+    [IO.File]::WriteAllText((Join-Path $source 'ExperienceX.runtimeconfig.json'),'{"runtimeOptions":{"tfm":"net9.0"}}')
+    foreach ($name in @('Restart-Experience.cmd','Restart-Experience.ps1','Install-Experience.cmd','Install-Experience.ps1')) {
         Copy-Item -LiteralPath (Join-Path $workspace ('experiencex\'+$name)) -Destination $source
     }
+    # Verify hashing without PowerShell's Get-FileHash, including literal paths and file closure.
+    $launcherPath = Join-Path $source 'Restart-Experience.ps1'
+    $tokens = $null; $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($launcherPath, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count) { throw 'Restart script does not parse.' }
+    $hashHelper = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FileSha256' }, $true)
+    if (!$hashHelper) { throw 'Module-independent hash helper is missing.' }
+    Invoke-Expression $hashHelper.Extent.Text
+    $hashSample = Join-Path $fixture "hash & user's [sample].txt"
+    [IO.File]::WriteAllText($hashSample, 'abc', [Text.Encoding]::ASCII)
+    if ((Get-FileSha256 -LiteralPath $hashSample) -ne 'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD') { throw 'SHA256 checksum is incorrect.' }
+    $unlockedSample = [IO.File]::Open($hashSample, 'Open', 'ReadWrite', 'None'); $unlockedSample.Dispose()
+    [IO.File]::WriteAllText($hashSample, 'abd', [Text.Encoding]::ASCII)
+    if ((Get-FileSha256 -LiteralPath $hashSample) -eq 'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD') { throw 'Changed file retained the same checksum.' }
+    $missingRejected = $false
+    try { Get-FileSha256 -LiteralPath (Join-Path $fixture 'missing-file') | Out-Null } catch { $missingRejected = $true }
+    if (!$missingRejected) { throw 'Missing hash input was accepted.' }
+    # All CMD and installer lifecycle runs must succeed when Get-FileHash is unavailable.
+    $disabledCmdlet = "function Get-FileHash { throw 'Get-FileHash is unavailable on this test PC.' }`r`n"
+    $launcherText = [IO.File]::ReadAllText($launcherPath)
+    $launcherText = $launcherText.Replace("`$ErrorActionPreference = 'Stop'", $disabledCmdlet+"`$ErrorActionPreference = 'Stop'")
+    [IO.File]::WriteAllText($launcherPath, $launcherText)
     [IO.File]::WriteAllText((Join-Path $source 'appsettings.json'),'source settings')
     [IO.File]::WriteAllText((Join-Path $source 'appsettings.json.bak'),'source backup')
+    [IO.File]::WriteAllText((Join-Path $source 'appsettings.ALPHA.json'),'hostname settings')
+    [IO.File]::WriteAllText((Join-Path $source 'appsettings.ALPHA.json.bak'),'hostname backup')
     [IO.File]::WriteAllText((Join-Path $cache 'appsettings.json'),'keep local settings')
     [IO.File]::WriteAllText((Join-Path $cache 'appsettings.json.bak'),'keep local backup')
     [IO.File]::WriteAllText((Join-Path $cache 'obsolete.dll'),'remove')
@@ -41,6 +66,9 @@ class Fixture {
     [IO.File]::WriteAllText((Join-Path $source 'Media\source-only.mp4'),'do not copy')
     [IO.File]::WriteAllText((Join-Path $cache 'media\nested\clip.mp4'),'keep local media')
     [IO.File]::WriteAllText((Join-Path $cache 'media\cache-only.mp4'),'retain')
+    [void][IO.Directory]::CreateDirectory((Join-Path $source 'logs'))
+    [IO.File]::WriteAllText((Join-Path $source 'logs\history.txt'),'source log must not overwrite history')
+    [IO.File]::WriteAllText((Join-Path $source 'logs\source-only.txt'),'do not copy')
     $original = Start-Process -FilePath $executable -WindowStyle Hidden -PassThru
     Start-Sleep -Milliseconds 250
     function Run-Launcher {
@@ -65,7 +93,65 @@ class Fixture {
         return [int]$report[0]
     }
     $firstId=Run-Launcher
+    if ((Test-Path -LiteralPath (Join-Path $cache 'appsettings.ALPHA.json')) -or
+        (Test-Path -LiteralPath (Join-Path $cache 'appsettings.ALPHA.json.bak')) -or
+        [IO.File]::ReadAllText((Join-Path $source 'appsettings.ALPHA.json')) -ne 'hostname settings') {
+        throw 'Launcher copied or changed hostname configuration.'
+    }
     if (!$original.HasExited -or (Test-Path -LiteralPath (Join-Path $cache 'obsolete.dll'))) { throw 'Old instance or obsolete binary survived refresh.' }
+    # Exercise installer orchestration without touching real firewall/share permissions.
+    $driver = Join-Path $fixture 'Install-Driver.ps1'
+    @'
+param([string]$SourceDirectory)
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+namespace HomeTechnologies {
+    public static class MediaCredentialStore {
+        public static void Save(string hostname, string username, string password) {
+            if (hostname != "fixture-controller" || username != @"fixture-controller\SaftThings" || String.IsNullOrEmpty(password))
+                throw new Exception("Unexpected media credential target or empty password.");
+            File.WriteAllText(Environment.GetEnvironmentVariable("MEDIA_CREDENTIAL_MARKER"), hostname + "|" + username);
+        }
+    }
+}
+"@
+function global:Start-Process {
+    param($FilePath, $ArgumentList, $Verb, $WindowStyle, [switch]$Wait, [switch]$PassThru)
+    if ($Verb -ne 'RunAs' -or $ArgumentList -notmatch '-ConfigureMachine') { throw 'Unexpected installer elevation.' }
+    $result = [regex]::Match($ArgumentList, '-ResultFile "([^"]+)"').Groups[1].Value
+    if (!$result) { throw 'Installer did not provide a setup result file.' }
+    [IO.File]::WriteAllText($result, 'OK')
+    [IO.File]::WriteAllText((Join-Path $SourceDirectory 'admin-setup-requested.txt'), 'one setup request')
+    return [pscustomobject]@{ExitCode=0}
+}
+& (Join-Path $SourceDirectory 'Install-Experience.ps1') -Source $SourceDirectory -ControllerHostnames 'fixture-controller'
+exit $LASTEXITCODE
+'@ | Set-Content -LiteralPath $driver -Encoding ascii
+    $installStart = New-Object Diagnostics.ProcessStartInfo
+    $installStart.FileName = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $installStart.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$driver+'" -SourceDirectory "'+$source+'"'
+    $installStart.UseShellExecute=$false; $installStart.CreateNoWindow=$true
+    $installStart.RedirectStandardOutput=$true; $installStart.RedirectStandardError=$true
+    $installStart.EnvironmentVariables['TEMP']=$tempRoot; $installStart.EnvironmentVariables['TMP']=$tempRoot
+    $credentialMarker = Join-Path $fixture 'media-credentials.txt'
+    $installStart.EnvironmentVariables['MEDIA_CREDENTIAL_MARKER']=$credentialMarker
+
+    $installer = [Diagnostics.Process]::Start($installStart)
+    if (!$installer.WaitForExit(20000)) { $installer.Kill(); throw 'Installer fixture timed out.' }
+    $installOutput = $installer.StandardOutput.ReadToEnd()+$installer.StandardError.ReadToEnd()
+    if ($installer.ExitCode -ne 0) { throw $installOutput }
+    if (!(Test-Path -LiteralPath $credentialMarker) -or
+        [IO.File]::ReadAllText($credentialMarker) -ne 'fixture-controller|fixture-controller\SaftThings') {
+        throw 'Installer did not save the per-controller credentials before restarting.'
+    }
+    $installedId = [int]([IO.File]::ReadAllText((Join-Path $cache 'started.txt'))).Split('|')[0]
+    if ($installedId -eq $firstId -or (Get-Process -Id $firstId -ErrorAction SilentlyContinue) -or
+        !(Test-Path -LiteralPath (Join-Path $source 'admin-setup-requested.txt'))) { throw 'Installer did not call the shared restart script after setup.' }
+    $firstId = $installedId
+    if ((Test-Path -LiteralPath (Join-Path $cache 'logs\source-only.txt')) -or
+        [IO.File]::ReadAllText((Join-Path $cache 'logs\history.txt')) -ne 'retain') { throw 'Source logs were copied over local history.' }
     $unlocked=[IO.File]::Open($executable,'Open','ReadWrite','None'); $unlocked.Dispose()
     [IO.File]::WriteAllText((Join-Path $source 'ExperienceX.dll'),'version-two')
     [IO.File]::WriteAllText((Join-Path $source 'appsettings.defaults.json'),'version-two defaults')
@@ -87,7 +173,7 @@ class Fixture {
         [IO.File]::ReadAllText((Join-Path $cache 'appsettings.json.bak')) -ne 'keep local backup') { throw 'A surviving configuration backup was replaced by shipped settings.' }
     Remove-Item -LiteralPath (Join-Path $cache 'appsettings.json.bak')
     $secondId=Run-Launcher
-    if ([IO.File]::ReadAllText((Join-Path $cache 'appsettings.json')) -ne 'new source settings') { throw 'A fresh cache did not receive its initial configuration.' }
+    if ((Test-Path -LiteralPath (Join-Path $cache 'appsettings.json')) -or (Test-Path -LiteralPath (Join-Path $cache 'appsettings.json.bak'))) { throw 'A fresh runtime cache received a live configuration file instead of defaults only.' }
     $mediaTarget=[IO.Path]::GetFullPath((Join-Path $cache 'media'))
     if ([IO.Path]::GetDirectoryName($mediaTarget) -ine $cache -or [IO.Path]::GetFileName($mediaTarget) -ine 'media') { throw 'Media fixture cleanup escaped the cache.' }
     Remove-Item -LiteralPath $mediaTarget -Recurse -Force
@@ -107,6 +193,12 @@ class Fixture {
         return $output
     }
     if ((Reject-UnsafeSource $cache) -notmatch 'overlap') { throw 'Overlapping cache/source was not detected.' }
+    $runtimeFile = Join-Path $source 'ExperienceX.runtimeconfig.json'
+    $originalRuntime = [IO.File]::ReadAllText($runtimeFile)
+    [IO.File]::WriteAllText($runtimeFile, '{"runtimeOptions":{"framework":{"name":"Microsoft.WindowsDesktop.App","version":"99.0.0"}}}')
+    try {
+        if ((Reject-UnsafeSource $source) -notmatch 'Windows Desktop Runtime') { throw 'Missing runtime was not detected before stopping the app.' }
+    } finally { [IO.File]::WriteAllText($runtimeFile, $originalRuntime) }
     $protected=Join-Path $fixture 'protected outside cache'
     [void][IO.Directory]::CreateDirectory($protected)
     [IO.File]::WriteAllText((Join-Path $protected 'sentinel.txt'),'retain')
@@ -117,7 +209,9 @@ class Fixture {
         if ([IO.File]::ReadAllText((Join-Path $protected 'sentinel.txt')) -ne 'retain') { throw 'Junction target was modified.' }
     }
     finally { [IO.Directory]::Delete($junction) }
+    'Passed SHA256 known value, changed/missing inputs, literal path and file closure; CMD and installer restarts with Get-FileHash unavailable.'
     'Passed CMD execution, process restart, temp launch, unlocked source EXE, latest-file refresh, configuration/log/media retention and exclusion of source media even on initial setup.'
+    'Passed installer-to-restart delegation with mocked administrative setup, log preservation and missing-runtime preflight.'
     'Passed overlap and junction rejection before process termination or cleanup.'
 }
 finally {

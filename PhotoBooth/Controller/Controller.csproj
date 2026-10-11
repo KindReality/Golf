@@ -12,11 +12,14 @@
   <ItemGroup>
     <PackageReference Include="System.IO.Ports" Version="9.0.0" />
     <Compile Include="..\Shared\Telemetry.cs" Link="Diagnostics\Telemetry.cs" />
+    <Compile Include="..\Shared\Updates\*.cs" Link="Updates\%(Filename)%(Extension)" />
+    <None Include="..\Shared\Updates\Stage-ApplicationUpdate.ps1" Link="Stage-ApplicationUpdate.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Compile Include="..\Shared\Configuration\*.cs" Link="Configuration\Shared\%(Filename)%(Extension)" />
     <Compile Include="..\Shared\Appearance\DarkWindowChrome.cs" Link="Appearance\DarkWindowChrome.cs" />
     <Compile Include="..\Shared\Networking\*.cs" Link="Networking\%(Filename)%(Extension)" />
     <InternalsVisibleTo Include="Controller.Tests" />
     <None Update="appsettings.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
-    <None Update="Install-Controller.cmd;Install-Controller.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="Install-Controller.cmd;Install-Controller.ps1;Restart-Controller.cmd;Restart-Controller.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="appsettings.Development.json;appsettings.Production.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
   </ItemGroup>
   <Target Name="ControllerConfigurationTransform" AfterTargets="CopyFilesToOutputDirectory">

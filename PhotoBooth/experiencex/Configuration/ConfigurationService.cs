@@ -120,6 +120,21 @@ internal sealed class ConfigurationService : IAsyncDisposable
             throw new InvalidOperationException("Screen chroma key could not be applied or was changed again remotely.");
         return expected.Enabled;
     }
+    public async Task<string> ToggleScreenSizingAsync(string display, string screenId, CancellationToken cancellation = default)
+    {
+        _dispatcher.VerifyAccess();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var json = await _store.ToggleScreenSizingAsync(display, screenId, cancellation);
+        cancellation.ThrowIfCancellationRequested();
+        await ReloadAsync();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var expected = ExperienceOptions.Parse(json).ScreensFor(display).Single(s => s.Id == screenId).SizingMode;
+        var applied = _options.ScreensFor(display).FirstOrDefault(s => s.Id == screenId)?.SizingMode;
+        if (applied != expected)
+            throw new InvalidOperationException("Screen sizing could not be applied or was changed again remotely.");
+        return expected;
+    }
+
     private async Task ReloadLoopAsync()
     {
         while (_reloadAgain && !_disposed)
@@ -182,6 +197,8 @@ internal sealed class ConfigurationService : IAsyncDisposable
         _options.AudioTransitionOutSeconds,
         _options.VideoDirectory,
         _options.AudioDirectory,
+        ResolvedVideoDirectory = MediaPath.ResolveDirectory(_options.VideoDirectory),
+        ResolvedAudioDirectory = MediaPath.ResolveDirectory(_options.AudioDirectory),
         _options.ConfigurationMode,
         _options.PointHitDiameterPercent,
         _options.DisplayScreens,

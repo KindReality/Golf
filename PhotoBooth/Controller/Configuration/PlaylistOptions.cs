@@ -27,6 +27,7 @@ internal sealed record PlaylistItem
 }
 internal sealed record PlaylistCommand
 {
+    [JsonIgnore] public PhotoBooth.Networking.CommandContext? Context { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Playlist { get; init; }
     public string Transport { get; init; } = "udp";
     public string Type { get; init; } = "command";

@@ -100,7 +100,7 @@ internal sealed class PointConfigurationStore(string path)
         var changed = ConfigurationSchema.Upgrade(root);
         var defaults = JsonSerializer.SerializeToNode(new ExperienceOptions())!.AsObject();
         foreach (var name in new[] { "configurationMode", "PointHitDiameterPercent", "CalibrationGridEnabled", "RequestDeduplicationSeconds", "DisplayBackgrounds",
-            "DeviceName", "UdpEventsPort", "UdpCommandsPort", "UdpBroadcastAddress", "UdpInterfaceAddress", "UdpSendAttempts", "UdpRetryDelayMilliseconds", "RequestLifetimeSeconds", "MediaDiscovery" })
+            "DeviceName", "UdpEventsPort", "UdpCommandsPort", "UdpBroadcastAddress", "UdpInterfaceAddress", "UdpSendAttempts", "UdpRetryDelayMilliseconds", "RequestLifetimeSeconds", "MediaDiscovery", "VideoDirectory", "AudioDirectory" })
             if (!root.ContainsKey(name))
             {
                 root[name] = defaults[name]?.DeepClone();
@@ -205,6 +205,17 @@ internal sealed class PointConfigurationStore(string path)
             entry["BlackKey"] = key;
         }
         key["Enabled"] = !effective.Enabled;
+        return true;
+    }), cancellation);
+
+    public Task<string> ToggleScreenSizingAsync(string display, string screenId, CancellationToken cancellation = default) => Task.Run(() => Update(root =>
+    {
+        cancellation.ThrowIfCancellationRequested();
+        var current = ExperienceOptions.Parse(root.ToJsonString());
+        var screen = current.ScreensFor(display).FirstOrDefault(s => s.Id.Equals(screenId, StringComparison.OrdinalIgnoreCase));
+        if (!current.ConfigurationMode || screen is null || screen.IsMat)
+            throw new InvalidOperationException("Select a video screen in configuration mode before toggling Fit/Stretch.");
+        ScreenEntry(root, display, screenId)["SizingMode"] = screen.SizingMode == "fit" ? "stretch" : "fit";
         return true;
     }), cancellation);
 

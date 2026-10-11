@@ -1,15 +1,15 @@
 # ExperienceX maintenance guide
 
-ExperienceX uses C# and Direct3D 11. The application namespace is `ExperienceX`. Camera and the original Experience remain separate applications. Camera and ExperienceX now share the [UDP broadcast protocol](../NETWORKING.md); older clients must add device/source/requestId to their playback bodies. Shader behavior, per-display playback, independent audio, and per-user configuration location are unchanged.
+ExperienceX uses C# and Direct3D 11. The application namespace is `ExperienceX`. Camera and the original Experience remain separate applications. Camera and ExperienceX share the [UDP broadcast protocol](../NETWORKING.md); playback bodies include device/source/requestId. ExperienceX uses per-display playback, independent audio and a hostname configuration file in OneDrive.
 
 ## Source layout and ownership
 
 | Folder | Responsibility |
 |---|---|
 | Application | Startup composition, request routing, and owned asynchronous work |
-| Configuration | Paths, first-run migration, defaults, validation, schema upgrades, atomic saves, and live reloads |
+| Configuration | Local profile paths, first-run template seeding, defaults, validation, schema upgrades, atomic saves, and live reloads |
 | Networking | UDP reception, request parsing, and retry deduplication |
-| MediaDistribution | Root-only Controller media caching, conflict tracking, and atomic file replacement |
+| MediaDistribution | Root-only Controller downloads into the local profile, conflict tracking, and atomic file replacement |
 | ../Shared/Networking | Shared broadcast envelope, device identity, sender/retries, listening sockets and bounded deduplication for Camera and ExperienceX |
 | Windows | Display discovery, window lifetime, availability, and topmost behavior |
 | Video | Rendering worker, GPU resources, Media Foundation session, playback timeline, counters, and recovery policy |
@@ -57,7 +57,7 @@ Looping video enables the Media Engine's loop property and keeps the same timeli
 
 ## Configuration evolution
 
-The live file is `%LOCALAPPDATA%\Home Technologies\ExperienceX\Configuration\appsettings.json`. `LocalConfiguration` resolves the current user's known folder and performs first-run migration. It does not display OneDrive. Builds ship templates and never replace the live local file.
+The live file is `%OneDrive%\Home Technologies\Bin\ExperienceX\appsettings.<computer-name>.json`, beside the defaults template. Shared `MachineConfigurationFiles` resolves the OneDrive root and Windows hostname and seeds a missing file atomically from validated defaults. Existing hostname files and backups take precedence. Builds and launchers exclude working files; hardware inventory and edits persist only in the hostname file. Old user-profile settings are ignored. `MediaPath` resolves relative audio/video directories independently under `%LOCALAPPDATA%\Home Technologies\ExperienceX`. Discovery downloads there; cache and decoder entry points reject network storage, with no remote playback fallback.
 
 `ExperienceOptions` is the source of defaults and validation. `ConfigurationSchema` owns JSON parsing policy and ordered schema migrations. Unversioned configuration is version 0; version 1 preserves legacy names, adds their current equivalents when absent, and retains unknown fields. Version 3 renames monitor fields to display fields, separates UDP events/commands ports, and migrates per-display keystones to named screen arrays. Version 2 converts legacy display background strings to separate `BackgroundColor` and `IsTransparent` fields. Detected displays lacking settings receive persisted black/opaque defaults. Version 4 replaces screen keystones with a shared clockwise point list, preserving existing video geometry and enabling arbitrary concave mat polygons. `PointConfigurationStore` persists migration/default additions and targeted transparency toggles atomically, preserving unrelated fields and retaining the preceding file as `.bak`. Unsupported future versions are rejected without downgrade or overwrite.
 
@@ -68,6 +68,8 @@ For a new setting, add its default and validation to the options model, determin
 Closing a production window first requests application shutdown without immediately destroying its HWND. The app awaits the host while the dispatcher continues pumping. The host stops UDP/configuration producers, drains calibration and preparation work, closes audio, then asks all windows to stop recovery and render workers. Worker disposal is bounded and never moves GPU cleanup onto the UI thread. The single-instance mutex and telemetry remain alive until this sequence completes.
 
 ## Verification and formatting
+
+Shared telemetry attaches an immutable `RequestLogContext` snapshot at enqueue time. Producers register context before dispatch; ExperienceX registers received context and updates it after resolving local media. The logger keeps the most recent 4096 request contexts, including recently completed playback for late callbacks. Command context is optional protocol metadata and never controls routing or scheduling. Use `ExperienceX.Tests -- --context` to verify serialization, lifecycle/failure log enrichment and bounded retention.
 
 Tests use a `ProjectReference` to the actual application and `InternalsVisibleTo`; do not link copies of production `.cs` files into the test assembly. Fast checks live in `ExperienceX.Tests/Unit`; GPU and native-window checks live in `ExperienceX.Tests/Hardware`. The runner returns a nonzero exit code on failure and uses no extra test framework dependency.
 

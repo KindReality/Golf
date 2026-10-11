@@ -12,6 +12,7 @@ using Controller.Scheduling;
 using Controller.Windows;
 using PhotoBooth.Diagnostics;
 using PhotoBooth.Networking;
+using PhotoBooth.Configuration;
 
 internal static class Program
 {
@@ -23,7 +24,8 @@ internal static class Program
     {
         try
         {
-            if (args.Contains("--window")) Window();
+            if (args.SequenceEqual(["--updates"])) BuildUpdateChecks.Run("Controller").GetAwaiter().GetResult();
+            else if (args.Contains("--window")) Window();
             else if (args.Contains("--host")) HostAsync().GetAwaiter().GetResult();
             else UnitAsync().GetAwaiter().GetResult();
             Console.WriteLine($"PASS: {_checks} Controller checks."); return 0;
@@ -60,6 +62,20 @@ internal static class Program
     {
         var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "appsettings.defaults.json"));
         var defaults = ControllerOptions.Parse(source, Development);
+        var displays = new[] { @"\\.\DISPLAY1", @"\\.\DISPLAY2" };
+        var displayOptions = defaults with { DefaultDisplayName = " presentation ", DisplayAliases = new() { ["Presentation"] = displays[1] } };
+        Check(ControllerDisplaySelection.Select(displayOptions, displays, displays[0]) == displays[1], "Controller selects display aliases with case/whitespace normalization");
+        Check(ControllerDisplaySelection.Select(displayOptions with { DefaultDisplayName = displays[1].ToLowerInvariant() }, displays, displays[0]) == displays[1], "Controller accepts raw Windows display notation");
+        Check(ControllerDisplaySelection.Select(displayOptions with { DefaultDisplayName = " " }, displays, displays[0]) == displays[0] &&
+            ControllerDisplaySelection.Select(displayOptions, [displays[0]], displays[0]) == displays[0], "Empty or disconnected Controller display uses the primary display");
+        foreach (var invalidDisplay in new[] {
+            defaults with { DefaultDisplayName = "*" }, defaults with { DisplayAliases = null! },
+            defaults with { DisplayAliases = new() { ["Left"] = "" } }, defaults with { DisplayAliases = new() { ["Left"] = displays[0], [" left "] = displays[1] } } })
+        {
+            var rejected = false;
+            try { Valid(invalidDisplay); } catch (ArgumentException) { rejected = true; }
+            Check(rejected, "Invalid Controller display configuration is rejected");
+        }
         Check(defaults.Playlists[0].Name == "default-ambient" && defaults.Scenes[0].AmbientPlaylist == "default-ambient" &&
             defaults.Playlist("default-video").Items[0].Commands[0].Device == "*" &&
             ControllerOptions.Text(defaults.Playlist("default-video").Items[0].Commands[0].Payload, "screen") == "*", "Default ambient/video names target every device and video screen");
@@ -74,12 +90,47 @@ internal static class Program
         var seed = ControllerOptions.Parse(populated, Development);
         Check(seed.Scenes.Length == 1 && seed.Scenes[0].AmbientPlaylist == "default-ambient" && seed.Scenes[0].ActivatingPlaylist is null && seed.Scenes[0].DeactivatingPlaylist is null && seed.Playlist(seed.Scenes[0].AmbientPlaylist, "ambient").Items.Length == 0, "Missing scenes create one scene with an empty default ambient playlist");
         Check(ConfigurationDefaults.Populate(populated, Development) == populated && ConfigurationDefaults.Populate(source, Development) == source, "Default population is idempotent and preserves configured scenes");
+        var missingDisplayFields = System.Text.Json.Nodes.JsonNode.Parse(source)!.AsObject();
+        missingDisplayFields.Remove("DefaultDisplayName"); missingDisplayFields.Remove("DisplayAliases");
+        var displayFieldsFilled = ConfigurationDefaults.Populate(missingDisplayFields.ToJsonString(), Development);
+        var displayFields = System.Text.Json.Nodes.JsonNode.Parse(displayFieldsFilled)!.AsObject();
+        Check(displayFields.ContainsKey("DefaultDisplayName") && displayFields.ContainsKey("DisplayAliases") &&
+            ControllerOptions.Parse(displayFieldsFilled, Development).Scenes[0] == defaults.Scenes[0] &&
+            ConfigurationDefaults.Populate(displayFieldsFilled, Development) == displayFieldsFilled, "Startup adds missing display settings without changing configured scenes");
         var directory = Path.Combine(Path.GetTempPath(), "Controller.Seed-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
         try
         {
             var path = Path.Combine(directory, "appsettings.json"); File.WriteAllText(path, "{}");
             await using (var service = new ConfigurationService(path, Development, new(), _ => Task.CompletedTask))
                 Check(service.Initial.Scenes.Length == 1 && ControllerOptions.Parse(File.ReadAllText(path), Development).Scenes.Length == 1, "Startup saves synthesized configuration");
+
+            var application = Path.GetDirectoryName(MachineConfigurationFiles.Resolve("Controller", directory, "ALPHA"))!;
+            Directory.CreateDirectory(application);
+            var template = Path.Combine(application, "appsettings.defaults.json"); File.WriteAllText(template, source);
+            File.WriteAllText(Path.Combine(application, "appsettings.json"), "{\"DeviceName\":\"wrong-shared-profile\"}");
+            var local = MachineConfigurationFiles.Resolve("Controller", directory, "ALPHA");
+            Check(local == Path.Combine(application, "appsettings.ALPHA.json"), "Hostname configuration is beside OneDrive defaults");
+            Check(MachineConfigurationFiles.Resolve("Controller", directory).EndsWith($"appsettings.{Environment.MachineName}.json"), "Controller uses Windows hostname instead of device alias");
+            var log = new ActivityLog();
+            await using (var service = new ConfigurationService(local, Development, log, _ => Task.CompletedTask, application))
+                Check(File.ReadAllText(local) == source && service.Initial.DeviceName != "wrong-shared-profile", "First launch copies shipped defaults into the OneDrive hostname file");
+            Check(log.Snapshot().Any(entry => entry.Message.Contains("shipped defaults")), "First-run template source is logged");
+            File.WriteAllText(template, "{\"DeviceName\":\"new-default\"}");
+            await using (var service = new ConfigurationService(local, Development, new(), _ => Task.CompletedTask, application))
+                Check(File.ReadAllText(local) == source, "Template updates preserve existing hostname Controller settings");
+            var other = MachineConfigurationFiles.Resolve("Controller", directory, "LAPTOPMSPIN");
+            await using (var service = new ConfigurationService(other, Production, new(), _ => Task.CompletedTask, application))
+                Check(service.Initial.DeviceName == "new-default" && service.Initial.Scenes.Length == 1, "Another hostname independently receives the current defaults and startup population");
+            Check(File.ReadAllText(template) == "{\"DeviceName\":\"new-default\"}" && File.ReadAllText(local) == source, "Startup population changes neither the template nor another hostname file");
+            File.Delete(template);
+            await using (var service = new ConfigurationService(local, Development, new(), _ => Task.CompletedTask, application))
+                Check(service.Initial.Playlists.Length == defaults.Playlists.Length, "Existing hostname Controller settings do not require a template");
+            var invalidPath = Path.Combine(directory, "invalid", "appsettings.json");
+            File.WriteAllText(template, "{incomplete");
+            bool rejectedTemplate = false;
+            try { await using var service = new ConfigurationService(invalidPath, Development, new(), _ => Task.CompletedTask, application); }
+            catch (JsonException) { rejectedTemplate = true; }
+            Check(rejectedTemplate && !File.Exists(invalidPath), "Invalid template never creates a partial hostname Controller configuration");
         }
         finally { Directory.Delete(directory, true); }
         var invalid = new List<string> { "{\"Storyboards\":[]}", "{\"DeviceName\":\"a\",\"deviceName\":\"b\"}" };
@@ -118,6 +169,7 @@ internal static class Program
             Check(sends.Select(s => s.Command.Device).SequenceEqual(["slow", "fail", "same-item", "last"]), "Item commands remain ordered; failure continues");
             Check(Stopwatch.GetElapsedTime(sends[2].At, sends[3].At).TotalMilliseconds >= 37, "Item delay begins after previous item finishes sending");
             Check(sends.Select(s => s.RequestId).Distinct().Count() == 4 && sends.Select(s => s.Chain.CorrelationId).Distinct().Count() == 1, "Sends have unique IDs and share one chain");
+            Check(sends.All(send => send.Command.Context is { Playlist: "demo" } && send.Command.Context.Item is "first" or "last"), "Every dispatched command includes its actual playlist and item context");
         }
         recorder = new();
         options = Valid(Options(Board("child", Item("child1"), Item("child2", 55)), Board("parent", Item("nested") with { Commands = [new() { Playlist = "child" }, Command("after-child")] }, Item("parent2", 25))));
@@ -126,6 +178,7 @@ internal static class Program
             await engine.Run("parent").Completion;
             Check(recorder.Sends.Select(s => s.Command.Device).SequenceEqual(["child1", "child2", "after-child", "parent2"]), "Nested storyboards complete before the parent continues");
             Check(recorder.Sends.First().Chain.ActionHistory.Length == 2, "Nested playlist ancestry is retained");
+            Check(recorder.Sends.Select(send => send.Command.Context!.Playlist).SequenceEqual(["child", "child", "parent", "parent"]), "Nested commands report the playlist that actually sent them");
         }
         recorder = new();
         options = Valid(Options(Board("demo", Item("first", device: "old"), Item("later", 130, "old-later"))));
@@ -231,6 +284,10 @@ internal static class Program
             var manual = engine.Run("manual"); scenes.Request("b"); await UntilAsync(() => recorder.Sends.Any(s => s.Command.Device == "b-tick")); await manual.Completion;
             var devices = recorder.Sends.Select(s => s.Command.Device).ToArray();
             Check(Array.IndexOf(devices, "a-exit") < Array.IndexOf(devices, "b-entry") && Array.IndexOf(devices, "b-entry") < Array.IndexOf(devices, "b-tick"), "Scene transition sends deactivation, activation, then ambient");
+            Check(recorder.Sends.Single(s => s.Command.Device == "a-exit").Command.Context?.Scene == "a" &&
+                recorder.Sends.Single(s => s.Command.Device == "b-entry").Command.Context?.Scene == "b" &&
+                recorder.Sends.First(s => s.Command.Device == "b-tick").Command.Context?.Scene == "b" &&
+                recorder.Sends.Single(s => s.Command.Device == "manual-last").Command.Context?.Scene == "a", "Scene context follows activation, deactivation, ambient and the manual run's original scene");
             Check(devices.Contains("manual-last"), "Scene changes leave unrelated playlists running");
             var lastExit = Array.IndexOf(devices, "a-exit"); Check(!devices.Skip(lastExit + 1).Contains("a-tick"), "Scene exit cancels the previous ambient schedule");
         }
@@ -365,6 +422,16 @@ internal static class Program
             {
                 var controls = Descendants(window).ToArray(); var run = controls.OfType<Button>().Single(b => b.Text == "Run playlist"); var cancel = controls.OfType<Button>().Single(b => b.Text == "Cancel selected"); var activate = controls.OfType<Button>().Single(b => b.Text == "Activate scene");
                 await UntilAsync(() => run.Enabled && activate.Enabled); Check(window.Visible && controls.OfType<Label>().Any(l => l.Text.Contains("Development")), "Monitoring window shows identity and environment");
+                Check(window.WindowState == FormWindowState.Normal && window.Opacity == 1 && window.Bounds == Screen.PrimaryScreen!.WorkingArea, "Controller starts at the primary display's full working area without maximizing");
+                if (Screen.AllScreens.FirstOrDefault(display => !display.Primary) is { } secondary)
+                {
+                    ConfigurationDefaults.Write(path, JsonSerializer.Serialize(settings with { DefaultDisplayName = "Presentation", DisplayAliases = new() { ["Presentation"] = secondary.DeviceName } }, ControllerOptions.Json));
+                    await UntilAsync(() => window.Bounds == secondary.WorkingArea);
+                    Check(window.WindowState == FormWindowState.Normal, "Live Controller display alias edits reposition the normal window");
+                    ConfigurationDefaults.Write(path, JsonSerializer.Serialize(settings, ControllerOptions.Json));
+                    await UntilAsync(() => window.Bounds == Screen.PrimaryScreen!.WorkingArea);
+                    Check(true, "Clearing Controller display selection returns the window to the primary display");
+                }
                 var scenes = controls.OfType<ComboBox>().Single(c => c.Items.Contains("second")); scenes.SelectedItem = "second"; activate.PerformClick(); await UntilAsync(() => controls.OfType<Label>().Any(l => l.Text == "Scene: second • Active")); Check(true, "Native scene selector activates a scene");
                 run.PerformClick(); var running = controls.OfType<ListView>().Single(l => l.Columns[0].Text == "Playlist"); await UntilAsync(() => running.Items.Count == 1); running.Items[0].Selected = true; await UntilAsync(() => cancel.Enabled); cancel.PerformClick(); await UntilAsync(() => running.Items.Count == 0); Check(true, "Native Run and Cancel controls work");
                 if (Environment.GetEnvironmentVariable("CONTROLLER_WINDOW_SNAPSHOT") is { Length: > 0 } snapshot) { using var bitmap = new Bitmap(window.Width, window.Height); window.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(snapshot); }

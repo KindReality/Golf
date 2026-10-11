@@ -6,10 +6,18 @@ internal static class ConfigurationDefaults
     public static string Populate(string text, BuildEnvironment build)
     {
         var options = ControllerOptions.Parse(text, build);
-        if (options.Scenes.Length != 0) return text;
+        var root = JsonNode.Parse(text)!.AsObject();
+        var changed = false;
+        foreach (var key in new[] { "DefaultDisplayName", "DisplayAliases" })
+        {
+            if (root.Any(entry => ControllerOptions.Same(entry.Key, key))) continue;
+            root[key] = key == "DisplayAliases" ? new JsonObject() : JsonValue.Create("");
+            changed = true;
+        }
+        if (options.Scenes.Length != 0)
+            return changed ? root.ToJsonString(ControllerOptions.Json) : text;
         var name = "default-ambient";
         for (var index = 2; options.Playlists.Any(p => ControllerOptions.Same(p.Name, name)); ++index) name = "default-ambient" + index;
-        var root = JsonNode.Parse(text)!.AsObject();
         var playlistKey = root.Select(p => p.Key).FirstOrDefault(k => ControllerOptions.Same(k, "Playlists")) ?? "Playlists";
         var sceneKey = root.Select(p => p.Key).FirstOrDefault(k => ControllerOptions.Same(k, "Scenes")) ?? "Scenes";
         var playlists = root[playlistKey] as JsonArray ?? new();

@@ -20,6 +20,16 @@ Every message requires `device`, `source`, and `requestId` (nonempty strings, ma
 
 An event is observed/logged, never interpreted as a playback command just because media fields are present. Coordinator event-to-action rules are a separate application concern. Camera's trigger 3/4/5 continue to request ping.mp4 on Display One/Projector/Display Two respectively.
 
+Controller adds optional execution metadata to its playlist commands and events:
+
+```json
+"context": { "scene": "idle", "playlist": "media-loop", "item": "Eye" }
+```
+
+The playlist/item identify the step that actually sent the command, including nested playlists. Scene activation, deactivation, ambient and manual runs retain their owning scene. Other producers may omit `context`; names, when provided, must contain 1–128 characters without control characters. Context describes execution and does not change routing or playback. Retries retain the same body and request ID.
+
+Controller and ExperienceX JSON logs include a root `Context` object on entries with a known request ID: source/target, experience, media filename (`Value`), scene, playlist, item and correlation ID. ExperienceX adds the resolved local `Path` once media is found, so playback confirmation, fade, completion and failure entries remain traceable without looking up a separate receive entry. Telemetry retains context for the most recent 4096 requests with bounded memory. The root `RequestId` identifies the same command in both applications.
+
 ## Reliability and boundaries
 
 Camera and ExperienceX senders repeat a packet three times, 75 ms apart by default; Controller defaults to one best-effort attempt. Receivers suppress matching logical source + request ID for `RequestDeduplicationSeconds` (60 by default), regardless of sender IP or ephemeral port. Source names are compared without case. The bounded cache holds 4096 entries and resets on restart, so suppression is not an exactly-once guarantee. Unavailable media/outputs are not queued; a deliberate new attempt needs a new ID. Ignored targets log at Debug; duplicate suppression logs at Information; accepted messages, invalid input, expired requests and send failures have separate telemetry.

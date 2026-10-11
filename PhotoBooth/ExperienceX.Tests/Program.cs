@@ -4,6 +4,32 @@ internal static class TestSuites
 {
     public static async Task RunAsync(string[] arguments)
     {
+        if (arguments.SequenceEqual(["--sizing"]))
+        {
+            await ScreenSizingChecks.Run();
+            await ConfigurationHotkeyChecks.Run();
+            GpuShaderChecks.Run();
+            await ScreenEditingWorkflowChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--updates"]))
+        {
+            await BuildUpdateChecks.Run("ExperienceX");
+            return;
+        }
+        if (arguments.SequenceEqual(["--context"]))
+        {
+            await CommandContextChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--configuration"]))
+        {
+            await MachineConfigurationChecks.Run();
+            await ConfigurationServiceChecks.Run();
+            await BackgroundPersistenceChecks.Run();
+            await ScreenChecks.Run();
+            return;
+        }
         if (arguments.SequenceEqual(["--all-screen-playback"]))
         {
             await AllScreenPlaybackChecks.Run();
@@ -17,6 +43,7 @@ internal static class TestSuites
         }
         if (arguments.SequenceEqual(["--media-discovery"]))
         {
+            await MediaPathChecks.Run();
             await MediaDiscoveryChecks.Run();
             return;
         }
@@ -34,6 +61,7 @@ internal static class TestSuites
         if (arguments.SequenceEqual(["--screen-transparency"]))
         {
             await ScreenTransparencyChecks.Run();
+            await ScreenSizingChecks.Run();
             await MediaDiscoveryChecks.Run();
             await ScreenChromaKeyHardwareChecks.Run();
             return;
@@ -88,6 +116,7 @@ internal static class TestSuites
         bool unit = !arguments.Contains("--hardware") || arguments.Contains("--all");
         if (unit)
         {
+            await MediaPathChecks.Run();
             CoreChecks.Run();
             VideoLoopChecks.Run();
             await ScreenChecks.Run();
@@ -97,9 +126,10 @@ internal static class TestSuites
             await BackgroundPersistenceChecks.Run();
             BackgroundSelectionChecks.Run();
             await ScreenTransparencyChecks.Run();
+            await ScreenSizingChecks.Run();
             AudioVolumeChecks.Run();
             CoordinatedAudioChecks.Run();
-            await LocalConfigurationChecks.Run();
+            await MachineConfigurationChecks.Run();
             await ConfigurationServiceChecks.Run();
             await ConfigurationHotkeyChecks.Run();
             await ApplicationLifetimeChecks.Run();

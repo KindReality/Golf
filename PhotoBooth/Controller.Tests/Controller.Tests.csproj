@@ -8,6 +8,7 @@
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Shared.Tests\BuildUpdateChecks.cs" Link="BuildUpdateChecks.cs" />
     <ProjectReference Include="..\Controller\Controller.csproj" AdditionalProperties="CopyBuildOutputToOneDrive=false" />
     <None Include="..\Controller\appsettings.json" Link="appsettings.defaults.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\Controller\appsettings.Development.json" Link="appsettings.environment.json" CopyToOutputDirectory="PreserveNewest" />

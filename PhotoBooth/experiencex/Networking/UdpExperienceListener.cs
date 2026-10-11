@@ -40,7 +40,9 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
                 request = ExperienceRequest.Parse(message.Body) with
                 {
                     RequestId = message.RequestId,
-                    Source = message.Source
+                    Source = message.Source,
+                    TargetDevice = message.Device,
+                    Context = message.Context
                 };
             }
             catch (Exception ex) when (ex is JsonException or ArgumentException)
@@ -57,6 +59,7 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
                 // Recheck after dispatch: configuration or the deadline may have changed while queued.
                 if (token.IsCancellationRequested || !message.Targets(options().EffectiveDeviceName) || message.IsExpired(DateTimeOffset.UtcNow))
                     return;
+                Telemetry.SetRequestContext(request.RequestId, request.LogContext());
                 Telemetry.Info("UdpRequestReceived", new
                 {
                     message.Device,

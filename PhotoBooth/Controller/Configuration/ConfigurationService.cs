@@ -16,7 +16,8 @@ internal sealed class ConfigurationService : IAsyncDisposable
     public string Path { get; }
     public ControllerOptions Initial { get; }
 
-    public ConfigurationService(string path, BuildEnvironment environment, ActivityLog log, Func<ControllerOptions, Task> apply)
+    public ConfigurationService(string path, BuildEnvironment environment, ActivityLog log, Func<ControllerOptions, Task> apply,
+        string? applicationDirectory = null)
     {
         Path = path;
         _environment = environment;
@@ -25,8 +26,17 @@ internal sealed class ConfigurationService : IAsyncDisposable
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
         if (!File.Exists(path))
         {
-            var defaults = File.ReadAllText(System.IO.Path.Combine(AppContext.BaseDirectory, "appsettings.defaults.json"));
-            ConfigurationDefaults.Write(path, ConfigurationDefaults.Populate(defaults, environment));
+            var source = PhotoBooth.Configuration.MachineConfigurationFiles.Initialize(path,
+                applicationDirectory ?? AppContext.BaseDirectory, json => ControllerOptions.Parse(json, environment));
+            if (source is not null)
+                _log.Info("MachineConfigurationCreated", "Created computer configuration from shipped defaults", new { Path, Source = source, Hostname = Environment.MachineName });
+            else if (!File.Exists(path) && File.Exists(path + ".bak"))
+            {
+                var backup = File.ReadAllText(path + ".bak");
+                ControllerOptions.Parse(backup, environment);
+                ConfigurationDefaults.Write(path, backup);
+                _log.Info("ConfigurationRecoveredFromBackup", "Recovered computer configuration from backup", new { Path });
+            }
         }
         _accepted = File.ReadAllText(path);
         var populated = ConfigurationDefaults.Populate(_accepted, environment);
