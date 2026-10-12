@@ -138,6 +138,17 @@ internal sealed class PointConfigurationStore(string path)
             foreach (var screen in configured[display]!.AsArray().OfType<JsonObject>())
             {
                 var parsed = JsonSerializer.Deserialize<ScreenOptions>(screen.ToJsonString(), Json)!;
+                if (parsed.DefaultName is null)
+                {
+                    var definitions = configured[display]!.AsArray().OfType<JsonObject>()
+                        .Select(entry => JsonSerializer.Deserialize<ScreenOptions>(entry.ToJsonString(), Json)!).ToArray();
+                    parsed = parsed with
+                    {
+                        DefaultName = ScreenOptions.DefaultFor(parsed, definitions)
+                    };
+                    screen["DefaultName"] = parsed.DefaultName;
+                    changed = true;
+                }
                 foreach (var field in JsonSerializer.SerializeToNode(parsed)!.AsObject())
                     if (!screen.ContainsKey(field.Key))
                     {
@@ -157,6 +168,14 @@ internal sealed class PointConfigurationStore(string path)
         }
         return changed;
     });
+    public Task<string> SetConfigurationModeAsync(bool value, CancellationToken cancellation = default) => Task.Run(() => Update(root =>
+    {
+        cancellation.ThrowIfCancellationRequested();
+        if (ExperienceOptions.Parse(root.ToJsonString()).ConfigurationMode == value)
+            return false;
+        root["configurationMode"] = value;
+        return true;
+    }), cancellation);
     public Task<string> ToggleConfigurationModeAsync(CancellationToken cancellation = default) => Task.Run(() => Update(root =>
     {
         cancellation.ThrowIfCancellationRequested();
@@ -182,7 +201,8 @@ internal sealed class PointConfigurationStore(string path)
             backgrounds[key] = background;
         }
         var settings = current.DisplayBackgrounds.GetValueOrDefault(key) ?? new DisplayBackgroundOptions();
-        if (color is not null) DisplayBackground.Parse(color);
+        if (color is not null)
+            DisplayBackground.Parse(color);
         background["BackgroundColor"] = color ?? settings.BackgroundColor;
         background["IsTransparent"] = transparent;
         return true;
@@ -195,8 +215,8 @@ internal sealed class PointConfigurationStore(string path)
         var screen = current.ScreensFor(display).FirstOrDefault(s => s.Id.Equals(screenId, StringComparison.OrdinalIgnoreCase));
         if (!current.ConfigurationMode || screen is null)
             throw new InvalidOperationException("Select a video screen in configuration mode before toggling chroma key.");
-        if (screen.IsMat)
-            throw new InvalidOperationException("Mat screens remain opaque black.");
+        if (!screen.IsVideo)
+            throw new InvalidOperationException("Only video screens support chroma key.");
         var entry = ScreenEntry(root, display, screenId);
         var effective = screen.EffectiveBlackKey(current);
         if (entry["BlackKey"] is not JsonObject key)
@@ -213,26 +233,59 @@ internal sealed class PointConfigurationStore(string path)
         cancellation.ThrowIfCancellationRequested();
         var current = ExperienceOptions.Parse(root.ToJsonString());
         var screen = current.ScreensFor(display).FirstOrDefault(s => s.Id.Equals(screenId, StringComparison.OrdinalIgnoreCase));
-        if (!current.ConfigurationMode || screen is null || screen.IsMat)
+        if (!current.ConfigurationMode || screen is null || !screen.IsVideo)
             throw new InvalidOperationException("Select a video screen in configuration mode before toggling Fit/Stretch.");
         ScreenEntry(root, display, screenId)["SizingMode"] = screen.SizingMode == "fit" ? "stretch" : "fit";
         return true;
     }), cancellation);
 
-    public Task SaveAsync(string display, PointOptions expected, PointOptions edited, string? screenId = null) => Task.Run(() => Update(root =>
+    public Task<string> AdjustScreenBrightnessAsync(string display, string screenId, double delta, CancellationToken cancellation = default) => Task.Run(() => Update(root =>
+    {
+        cancellation.ThrowIfCancellationRequested();
+        if (!double.IsFinite(delta))
+            throw new ArgumentException("Brightness adjustment must be finite.");
+        var current = ExperienceOptions.Parse(root.ToJsonString());
+        var screen = current.ScreensFor(display).FirstOrDefault(s => s.Id.Equals(screenId, StringComparison.OrdinalIgnoreCase));
+        if (!current.ConfigurationMode || screen is null || !screen.IsVideo)
+            throw new InvalidOperationException("Select a video or image screen in configuration mode before changing brightness.");
+        var brightness = Math.Clamp(screen.Brightness + delta, 0, 100);
+        if (brightness == screen.Brightness)
+            return false;
+        ScreenEntry(root, display, screenId)["Brightness"] = brightness;
+        return true;
+    }), cancellation);
+
+    public Task SaveAsync(string display, PointOptions expected, PointOptions edited, string? screenId = null) =>
+        SaveManyAsync(display, [new(screenId, expected, edited)]);
+
+    public Task SaveManyAsync(string display, IReadOnlyList<ScreenPointChange> changes) => Task.Run(() => Update(root =>
     {
         ConfigurationSchema.Upgrade(root);
         var current = ExperienceOptions.Parse(root.ToJsonString());
-        if (current.ScreensFor(display).FirstOrDefault(s => s.Id == screenId)?.IsMat == true) edited.ValidatePolygon();
-        else edited.Validate();
-        if (!current.ConfigurationMode || current.PointsFor(display, screenId) != expected)
+        if (!current.ConfigurationMode)
             throw new PointEditConflictException();
-        var entry = ScreenEntry(root, display, screenId);
-        var existing = entry["Points"] as JsonObject ?? new JsonObject();
-        entry["Points"] = existing;
-        foreach (var field in JsonSerializer.SerializeToNode(edited)!.AsObject())
-            existing[field.Key] = field.Value?.DeepClone();
-        return true;
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var change in changes)
+        {
+            var screen = current.ScreensFor(display).FirstOrDefault(s => change.ScreenId is null || s.Id == change.ScreenId);
+            if (screen is null || !ids.Add(screen.Id) || screen.Points != change.Before)
+                throw new PointEditConflictException();
+            if (screen.IsVisualization)
+                throw new InvalidOperationException("Visualization screens always fill their display.");
+            if (screen.IsMat)
+                change.After.ValidatePolygon();
+            else
+                change.After.Validate();
+        }
+        foreach (var change in changes)
+        {
+            var entry = ScreenEntry(root, display, change.ScreenId);
+            var existing = entry["Points"] as JsonObject ?? new JsonObject();
+            entry["Points"] = existing;
+            foreach (var field in JsonSerializer.SerializeToNode(change.After)!.AsObject())
+                existing[field.Key] = field.Value?.DeepClone();
+        }
+        return changes.Count != 0;
     }));
 
     private static JsonObject ScreenEntry(JsonObject root, string display, string? id)
@@ -242,7 +295,7 @@ internal sealed class PointConfigurationStore(string path)
         return screens.OfType<JsonObject>().FirstOrDefault(s => id is null ||
             string.Equals(s["Id"]?.GetValue<string>(), id, StringComparison.OrdinalIgnoreCase)) ?? throw new PointEditConflictException();
     }
-    public Task<ScreenOptions> AddScreenAsync(string display, CancellationToken cancellation = default, string type = "video") => Task.Run(() =>
+    public Task<ScreenOptions> AddScreenAsync(string display, CancellationToken cancellation = default, string type = "video", PhotoBooth.Networking.PerspectiveSelection? perspective = null) => Task.Run(() =>
     {
         ScreenOptions? added = null;
         Update(root =>
@@ -252,12 +305,59 @@ internal sealed class PointConfigurationStore(string path)
             var current = ExperienceOptions.Parse(root.ToJsonString());
             if (!current.ConfigurationMode || root["DisplayScreens"] is not JsonObject displays || displays[display] is not JsonArray screens)
                 throw new PointEditConflictException();
-            added = ScreenOptions.New(current.ScreensFor(display), type);
+            if (type == "visualization" && current.DisplayScreens.Values.SelectMany(s => s).Any(s => s.IsVisualization))
+                throw new InvalidOperationException("Delete the existing visualization before creating one on another display.");
+            added = ScreenOptions.New(current.ScreensFor(display), type) with
+            {
+                Perspective = type == "video" ? perspective : null
+            };
             screens.Add(JsonSerializer.SerializeToNode(added));
             return true;
         });
         return added!;
     }, cancellation);
+    public Task ApplyPerspectivesAsync(PhotoBooth.Networking.ControllerSharedDefinitions definitions) => Task.Run(() => Update(root =>
+    {
+        var current = ExperienceOptions.Parse(root.ToJsonString());
+        var changed = false;
+        if (root["ControllerDefinitions"] is not JsonObject cache)
+        {
+            cache = new JsonObject();
+            root["ControllerDefinitions"] = cache;
+        }
+        var cached = JsonSerializer.SerializeToNode(definitions);
+        if (!JsonNode.DeepEquals(cache[definitions.ControllerId], cached))
+        {
+            cache[definitions.ControllerId] = cached;
+            changed = true;
+        }
+        foreach (var display in current.DisplayScreens)
+            foreach (var screen in display.Value)
+            {
+                if (screen.Perspective is not { } selection || selection.ControllerId != definitions.ControllerId)
+                    continue;
+                var perspective = definitions.Perspectives.FirstOrDefault(p => p.Id == selection.PerspectiveId);
+                var next = perspective is null ? selection with
+                {
+                    Available = false
+                } : definitions.Select(perspective);
+                if (next == selection)
+                    continue;
+                ScreenEntry(root, display.Key, screen.Id)["Perspective"] = JsonSerializer.SerializeToNode(next);
+                changed = true;
+            }
+        return changed;
+    }));
+    public Task SetPerspectiveAsync(string display, string id, PhotoBooth.Networking.PerspectiveSelection? perspective) => Task.Run(() => Update(root =>
+    {
+        var current = ExperienceOptions.Parse(root.ToJsonString());
+        var screen = current.ScreensFor(display).Single(s => s.Id == id);
+        if (!current.ConfigurationMode || !screen.IsVideo)
+            throw new InvalidOperationException("Select a video screen in configuration mode.");
+        perspective?.Validate();
+        ScreenEntry(root, display, id)["Perspective"] = JsonSerializer.SerializeToNode(perspective);
+        return screen.Perspective != perspective;
+    }));
     public Task RenameScreenAsync(string display, string id, string expected, string name) => Task.Run(() => Update(root =>
     {
         ConfigurationSchema.Upgrade(root);
@@ -266,8 +366,9 @@ internal sealed class PointConfigurationStore(string path)
         var entry = ScreenEntry(root, display, id);
         if (!current.ConfigurationMode || entry["Name"]?.GetValue<string>() != expected)
             throw new PointEditConflictException();
-        if (current.ScreensFor(display).Any(s => s.Id != id && s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
-            throw new ArgumentException("Another screen on this display already has that name.");
+        if (current.ScreensFor(display).Any(s => s.Id != id && (s.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s.DefaultName, name, StringComparison.OrdinalIgnoreCase))))
+            throw new ArgumentException("Another screen on this display owns that name.");
         if (name == expected)
             return false;
         entry["Name"] = name;
@@ -284,3 +385,5 @@ internal sealed class PointConfigurationStore(string path)
         return true;
     }));
 }
+
+internal sealed record ScreenPointChange(string? ScreenId, PointOptions Before, PointOptions After);

@@ -10,13 +10,17 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
 {
     private readonly Dictionary<string, MainWindow> _windows = new(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly VisualizationManager _visualizations = new();
+    internal int[] VisualizationProcessIds => _visualizations.ProcessIds;
     private ExperienceOptions _options = new();
+    private ScreenMediaCatalog _mediaCatalog = ScreenMediaCatalog.Empty;
     private bool _disposed;
     private string? _displayInventory, _aliasInventory, _defaultDisplayFailure;
     public IEnumerable<MainWindow> Windows => _windows.Values;
     public event Action? CloseRequested;
     public event Action<bool>? TextEditingChanged;
     public event Action<ScreenSurface, string, string>? RenameRequested;
+    public Func<ScreenSurface, string, string, Task<bool>>? BrowseRenameRequested { get; set; }
 
     public void Start(ExperienceOptions options)
     {
@@ -32,6 +36,11 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
         foreach (var window in _windows.Values)
             window.UpdateOptions(options);
         Refresh();
+    }
+    public void UpdateMediaCatalog(ScreenMediaCatalog catalog)
+    {
+        _mediaCatalog = catalog;
+        foreach (var window in _windows.Values) window.UpdateMediaCatalog(catalog);
     }
     public MainWindow? Select(string? requested)
     {
@@ -68,9 +77,11 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
             if (_windows.ContainsKey(screen.DeviceName))
                 continue;
             var window = new MainWindow(screen.DeviceName, _options);
+            window.UpdateMediaCatalog(_mediaCatalog);
             window.AttachCalibration(_calibration);
             window.TextEditingChanged += editing => TextEditingChanged?.Invoke(editing);
             window.RenameRequested += (surface, oldName, name) => RenameRequested?.Invoke(surface, oldName, name);
+            window.BrowseRenameRequested = (surface, oldName, name) => BrowseRenameRequested?.Invoke(surface, oldName, name) ?? Task.FromResult(false);
             _windows.Add(screen.DeviceName, window);
             window.FormClosing += (_, args) =>
             {
@@ -88,6 +99,7 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
         // Retain disconnected windows invisibly, ready for the same display to return.
         foreach (var window in _windows.Values)
             window.RefreshDisplay();
+        _visualizations.Refresh(_options, _windows.Values);
         var aliases = _options.DisplayAliases.Select(a => new
         {
             Alias = a.Key.Trim(),
@@ -140,6 +152,7 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
         _disposed = true;
         _timer.Stop();
         SystemEvents.DisplaySettingsChanged -= DisplaySettingsChanged;
+        await _visualizations.DisposeAsync();
         await Task.WhenAll(_windows.Values.Select(window => window.ShutdownWindowAsync()));
         _windows.Clear();
     }

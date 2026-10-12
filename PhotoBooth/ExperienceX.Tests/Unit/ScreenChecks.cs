@@ -184,7 +184,7 @@ internal static class ScreenChecks
                     committed = null;
                 }
                 int adds = 0, videos = 0, closes = 0;
-                using var hotkeys = new ApplicationHotkeys(() => { }, () => closes++, () => { });
+                using var hotkeys = new ApplicationHotkeys(() => { }, () => closes++, () => { }, () => true);
                 hotkeys.AddScreenPrefix = () => adds++;
                 hotkeys.AddVideoScreen = () => videos++;
                 Check(hotkeys.Register(true).Length == 0, "A/V shortcut registration failed.");

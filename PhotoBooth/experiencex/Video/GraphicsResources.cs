@@ -53,7 +53,7 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     [StructLayout(LayoutKind.Sequential)]
     private struct Constants
     {
-        public Vector4 Row0, Row1, Row2, Effects, Aspect;
+        public Vector4 Row0, Row1, Row2, Effects, Aspect, Crop;
     }
     public void Initialize()
     {
@@ -174,7 +174,7 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         _context.OMSetRenderTargets(_rtv!);
         _context.ClearRenderTargetView(_rtv!, background);
     }
-    public void DrawLayer(ID3D11ShaderResourceView? view, double opacity, ExperienceOptions options, (Vector4, Vector4, Vector4) transform, int _videoWidth, int _videoHeight, BlackKeyOptions? blackKey = null, string sizingMode = "fit", PointOptions? sizingPoints = null)
+    public void DrawLayer(ID3D11ShaderResourceView? view, double opacity, ExperienceOptions options, (Vector4, Vector4, Vector4) transform, int _videoWidth, int _videoHeight, BlackKeyOptions? blackKey = null, string sizingMode = "fit", PointOptions? sizingPoints = null, bool sourceAlpha = false, double brightness = 100, PhotoBooth.Networking.PerspectiveRectangle? perspective = null)
     {
         AssertOwnerThread();
 
@@ -183,14 +183,18 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         {
             var key = blackKey ?? options.BlackKey;
             var (r0, r1, r2) = transform;
+            var crop = perspective ?? new();
             var data = new Constants
             {
                 Row0 = r0,
                 Row1 = r1,
                 Row2 = r2,
                 Effects = new((float)opacity, (float)key.Threshold, (float)key.Softness, key.Enabled ? 1 : 0),
-                Aspect = VideoSizing.ContentScale(sizingMode, _videoWidth, _videoHeight, _width, _height, sizingPoints)
+                Aspect = VideoSizing.ContentScale(sizingMode, Math.Max(1, (int)Math.Round(_videoWidth * crop.Width / 100)), Math.Max(1, (int)Math.Round(_videoHeight * crop.Height / 100)), _width, _height, sizingPoints),
+                Crop = new((float)(crop.X / 100), (float)(crop.Y / 100), (float)(crop.Width / 100), (float)(crop.Height / 100))
             };
+            data.Aspect.Z = sourceAlpha ? 1 : 0;
+            data.Aspect.W = (float)(brightness / 100);
             _context.UpdateSubresource(in data, _constants);
             _context.RSSetViewport(0, 0, _width, _height);
             _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);

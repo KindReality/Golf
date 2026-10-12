@@ -36,6 +36,7 @@ internal sealed class CalibrationOverlay : IDisposable
     {
         public Vector4 Screen, Selection, Grid, Row0, Row1, Row2, Label;
     }
+    internal bool SelectedScreen => _selectedScreen;
     public bool Animating(ExperienceOptions options) => options.ConfigurationMode || (_flashAt >= 0 && Now - _flashAt < 0.28);
     public bool Visible(ExperienceOptions options) => Animating(options);
     public void Configure(ExperienceOptions options)
@@ -91,13 +92,14 @@ internal sealed class CalibrationOverlay : IDisposable
     public void Draw(GraphicsResources graphics, ExperienceOptions _options, string _display, PointTransformCache transforms, string? screenId = null)
     {
         var k = Preview ?? _options.PointsFor(_display, screenId);
+        var isVisualization = _options.ScreensFor(_display).FirstOrDefault(s => s.Id == screenId)?.IsVisualization == true;
         var isMat = _options.ScreensFor(_display).FirstOrDefault(s => s.Id == screenId)?.IsMat == true;
         UpdatePoints(graphics, k);
         var now = Now;
         var opacity = _options.ConfigurationMode ? 1 : 0;
         var flash = _flashAt >= 0 && now >= _flashAt && now - _flashAt <= 0.28 ? (now - _flashAt) / 0.28 : -1;
         var selectedScreen = _selectedScreen && _options.ConfigurationMode;
-        var showTools = selectedScreen && _options.CalibrationGridEnabled && !isMat;
+        var showTools = selectedScreen && _options.CalibrationGridEnabled && !isMat && !isVisualization;
         if (selectedScreen)
             UpdateLabel(graphics, _options, _display, screenId, now);
         var inverse = isMat ? default : transforms.Get(k with
@@ -108,7 +110,7 @@ internal sealed class CalibrationOverlay : IDisposable
         var data = new OverlayConstants
         {
             Screen = new(graphics.Width, graphics.Height, (float)(now % 1000), (float)opacity),
-            Selection = new(_selectedPoint, _flashPointMask, (float)flash, _flashSuccess ? 1 : 0),
+            Selection = new(isVisualization ? -2 : _selectedPoint, _flashPointMask, (float)flash, _flashSuccess ? 1 : 0),
             Grid = new(showTools ? 1 : 0, _labelWidth, _labelHeight, selectedScreen ? 1 : 0),
             Label = new(center.X, center.Y, selectedScreen ? .16f : _options.ConfigurationMode && !isMat ? .04f : 0, k.Vertices.Count),
             Row0 = inverse.Item1,

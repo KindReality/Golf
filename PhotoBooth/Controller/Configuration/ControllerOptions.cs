@@ -18,6 +18,11 @@ internal sealed record BuildEnvironment(string Environment, int DefaultTriggerCo
 internal sealed record ControllerOptions : BroadcastOptions
 {
     public ControllerOptions() => UdpSendAttempts = 1;
+    public string ControllerId { get; init; } = "";
+    public int DefinitionsPort { get; init; } = 54244;
+    public bool ConfigurationMode { get; init; }
+    public double PointHitDiameterPercent { get; init; } = 5;
+    public PerspectiveDefinition[] Perspectives { get; init; } = [];
     public string? DefaultDisplayName { get; init; }
     public Dictionary<string, string> DisplayAliases { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public ArduinoOptions[] Arduinos { get; init; } = [];
@@ -38,6 +43,9 @@ internal sealed record ControllerOptions : BroadcastOptions
     private void Validate()
     {
         ValidateNetwork();
+        if (!double.IsFinite(PointHitDiameterPercent) || PointHitDiameterPercent is <= 0 or > 100) throw new ArgumentException("PointHitDiameterPercent must be greater than zero and at most 100.");
+        if (DefinitionsPort is < 1 or > 65535) throw new ArgumentException("DefinitionsPort must be 1–65535.");
+        new ControllerSharedDefinitions { ControllerId = string.IsNullOrWhiteSpace(ControllerId) ? "00000000000000000000000000000000" : ControllerId, ControllerName = EffectiveDeviceName, Hostname = Environment.MachineName, Perspectives = Perspectives }.Validate();
         ControllerDisplaySelection.Validate(DefaultDisplayName, DisplayAliases);
         if (UdpPort is not null) throw new ArgumentException("Use UdpEventsPort and UdpCommandsPort.");
         if (Arduinos is null || Triggers is null || Playlists is null || Scenes is null || Arduinos.Any(a => a is null) || Triggers.Any(t => t is null) || Playlists.Any(p => p is null) || Scenes.Any(s => s is null) || Arduinos.Length > 128 || Triggers.Length > 4096 || Playlists.Length > 4096 || Scenes.Length > 4096)

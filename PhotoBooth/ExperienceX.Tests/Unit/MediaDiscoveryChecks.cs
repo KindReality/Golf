@@ -57,7 +57,8 @@ internal static class MediaDiscoveryChecks
             BroadcastEnvelope Reply(string hostname, string id) => BroadcastEnvelope.Parse(BroadcastEnvelope.Create(new() { DeviceName = hostname }, "event", clientOptions.EffectiveDeviceName,
                 new { @event = ControllerDiscovery.ResponseEvent, input = "controller", hostname, discoveryRequestId = id }));
             service.Receive(Reply("host-one", "not-our-probe"));
-            Check(!Directory.Exists(clientOptions.VideoDirectory), "Unrelated discovery replies cannot start media transfers");
+            await Until(() => File.Exists(Path.Combine(clientOptions.VideoDirectory, "sound.wav")));
+            Check(Directory.Exists(clientOptions.VideoDirectory), "Unsolicited controller announcements start local media synchronization");
             service.Receive(Reply("host-one", probe.RequestId));
             service.Receive(Reply("host-one", probe.RequestId));
             await Until(() => File.Exists(Path.Combine(clientOptions.VideoDirectory, "sound.wav")) && File.Exists(Path.Combine(clientOptions.AudioDirectory, "sound.wav")));
@@ -73,7 +74,7 @@ internal static class MediaDiscoveryChecks
             Check(sent.Count == 1, "Disabling media discovery cancels discovery without sending more requests");
         }
         finally { Directory.Delete(root, true); }
-        Console.WriteLine("Passed Controller discovery correlation, multiple hosts, root-only local caching, atomic replacement, conflicts, locked files, UNC validation and disable/shutdown.");
+        Console.WriteLine("Passed Controller unsolicited announcements, multiple hosts, root-only local caching, atomic replacement, conflicts, locked files, UNC validation and disable/shutdown.");
     }
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
     private static async Task Until(Func<bool> ready)

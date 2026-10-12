@@ -28,6 +28,7 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
     public bool CalibrationGridEnabled { get; init; } = true;
     public double PointHitDiameterPercent { get; init; } = 5;
     public Dictionary<string, List<ScreenOptions>> DisplayScreens { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, PhotoBooth.Networking.ControllerSharedDefinitions> ControllerDefinitions { get; init; } = new();
     public IReadOnlyList<ScreenOptions> ScreensFor(string display) => DisplayScreens.FirstOrDefault(p =>
         string.Equals(p.Key, display, StringComparison.OrdinalIgnoreCase)).Value ??
         [new ScreenOptions { Points = Points }];
@@ -41,11 +42,13 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
     public string AudioDirectory { get; init; } = "Media";
     public MediaDiscoveryOptions MediaDiscovery { get; init; } = new();
     public PointOptions Points { get; init; } = new();
+    public VisualizationOptions Visualization { get; init; } = new();
     public BlackKeyOptions BlackKey { get; init; } = new();
 
     public void Validate()
     {
         ValidateNetwork();
+        if (Visualization is null) throw new ArgumentException("Visualization must be an object.");
         if (MediaDiscovery is null) throw new ArgumentException("MediaDiscovery must be an object.");
         MediaDiscovery.Validate();
         AudioDeviceSelection.ValidateConfiguration(VirtualAudioDevices, AudioDeviceLatencyMilliseconds);
@@ -57,6 +60,14 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
             throw new ArgumentException("PointHitDiameterPercent must be greater than zero and at most 100.");
         if (DisplayScreens is null)
             throw new ArgumentException("DisplayScreens must be an object.");
+        if (ControllerDefinitions is null || ControllerDefinitions.Count > 128) throw new ArgumentException("Invalid controller definitions cache.");
+        foreach (var entry in ControllerDefinitions)
+        {
+            if (entry.Value is null || entry.Key != entry.Value.ControllerId) throw new ArgumentException("Controller cache identity mismatch.");
+            entry.Value.Validate();
+        }
+        if (DisplayScreens.Values.Where(screens => screens is not null).Sum(screens => screens.Count(s => s?.IsVisualization == true)) > 1)
+            throw new ArgumentException("Only one fullscreen visualization screen is supported per Experience instance.");
         var configuredDisplays = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var display in DisplayScreens)
         {
@@ -69,13 +80,19 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
                 if (screen is null || string.IsNullOrWhiteSpace(screen.Id) || screen.Id.Length > 128 || !ids.Add(screen.Id) || !names.Add(screen.Name))
                     throw new ArgumentException("Screens require unique IDs and names within their display.");
                 ScreenOptions.ValidateName(screen.Name);
-                if (screen.Type is not ("video" or "mat"))
-                    throw new ArgumentException("Screen type must be video or mat.");
+                if (screen.DefaultName is not null) ScreenOptions.ValidateName(screen.DefaultName);
+                if (screen.Type is not ("video" or "mat" or "visualization"))
+                    throw new ArgumentException("Screen type must be video, mat or visualization.");
                 if (screen.SizingMode is not ("fit" or "stretch"))
                     throw new ArgumentException("Screen SizingMode must be fit or stretch.");
+                if (!double.IsFinite(screen.Brightness) || screen.Brightness is < 0 or > 100)
+                    throw new ArgumentException("Screen Brightness must be a percentage from 0 to 100.");
                 if (screen.Points is null)
                     throw new ArgumentException("Each screen requires points.");
+                if (screen.IsVisualization && (!screen.Points.Vertices.SequenceEqual(new PointOptions().Vertices) || screen.Perspective is not null))
+                    throw new ArgumentException("Visualization screens fill their display and cannot have a perspective.");
                 screen.BlackKey?.Validate();
+                screen.Perspective?.Validate();
                 if (screen.IsMat) screen.Points.ValidatePolygon();
                 else screen.Points.Validate();
             }

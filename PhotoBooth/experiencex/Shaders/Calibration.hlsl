@@ -84,7 +84,7 @@ float4 PSMain(Vertex input) : SV_Target {
         float light=0.35+0.65*saturate(dot(normalize(float3(local,sqrt(saturate(1-dot(local,local))))),normalize(float3(-0.4,-0.5,0.8))));
         float highlight=exp(-dot(local-float2(-0.27,-0.32),local-float2(-0.27,-0.32))*40)*0.7;
         float3 hue=index==(int)selection.x?azure:float3(1,0.08,0.14);
-        color=Over(color,float4(saturate(hue*light+highlight)*alpha,alpha));
+        if(selection.x != -2) color=Over(color,float4(saturate(hue*light+highlight)*alpha,alpha));
         if (index==(int)selection.x) {
             float2 label=clamp(corner+float2(24,-22),float2(12,12),dimensions-12);
             float digit=Number(p-label,index+1)*screen.w*0.85;

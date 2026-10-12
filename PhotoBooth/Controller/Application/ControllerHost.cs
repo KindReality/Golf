@@ -16,11 +16,23 @@ internal sealed class ControllerHost : IAsyncDisposable
     private readonly RequestDeduplicator _received = new();
     private readonly CancellationTokenSource _shutdown = new();
     private ControllerOptions _options;
+    private readonly ControllerAnnouncements _announcements;
     public ActivityLog Log { get; } = new();
     public PlaylistEngine Engine { get; }
     public SceneManager Scenes { get; }
     public ControllerOptions Options => Volatile.Read(ref _options);
     public string ConfigurationPath => _configuration.Path;
+    public Task SetConfigurationModeAsync(bool value) => _configuration.SetConfigurationModeAsync(value);
+    public async Task SavePerspectivesAsync(PerspectiveDefinition[] expected, PerspectiveDefinition[] next)
+    {
+        await _configuration.SavePerspectivesAsync(expected, next);
+        Log.Info("PerspectivesSaved", "Saved shared perspective definitions", new
+        {
+            Count = next.Length,
+            Changed = next.Where(p => !expected.Contains(p)).ToArray(),
+            Removed = expected.Where(p => !next.Any(n => n.Id == p.Id)).Select(p => new { p.Id, p.Name }).ToArray()
+        });
+    }
     public ArduinoStatus[] ArduinoStatus => _arduinos.Snapshot();
 
     public ControllerHost(string path, string? templateDirectory = null)
@@ -29,6 +41,7 @@ internal sealed class ControllerHost : IAsyncDisposable
         var environment = BuildEnvironment.Load(Path.Combine(AppContext.BaseDirectory, "appsettings.environment.json"));
         _configuration = new(path, environment, Log, ApplyAsync, templateDirectory);
         _options = _configuration.Initial;
+        _announcements = new(() => Options, Log);
         _arduinos = new(Log, ReceiveSerialAsync);
         Engine = new(_options, new CommandDispatcher(_arduinos, ReceiveUdpAsync, _shutdown.Token), Log);
         Scenes = new(_options, Engine, Log);
@@ -37,6 +50,7 @@ internal sealed class ControllerHost : IAsyncDisposable
         {
             _listener.Bind(_options.UdpCommandsPort, _options.UdpEventsPort);
             _arduinos.Apply(_options.Arduinos);
+            _announcements.Start();
             Engine.Start();
             Scenes.Start();
             _configuration.Start();
@@ -59,6 +73,7 @@ internal sealed class ControllerHost : IAsyncDisposable
         Volatile.Write(ref _options, options);
         Engine.Apply(options);
         Scenes.Apply(options);
+        _announcements.Publish();
         return Task.CompletedTask;
     }
 
@@ -68,14 +83,18 @@ internal sealed class ControllerHost : IAsyncDisposable
         if (!_received.Accept(message.Source.ToUpperInvariant(), message.RequestId, Options.RequestDeduplicationSeconds)) return;
         Telemetry.SetRequestContext(message.RequestId, new()
         {
-            Source = message.Source, Device = message.Device, Scene = message.Context?.Scene,
-            Playlist = message.Context?.Playlist, Item = message.Context?.Item,
-            Experience = ControllerOptions.Text(message.Body, "experience"), Value = ControllerOptions.Text(message.Body, "value"),
+            Source = message.Source,
+            Device = message.Device,
+            Scene = message.Context?.Scene,
+            Playlist = message.Context?.Playlist,
+            Item = message.Context?.Item,
+            Experience = ControllerOptions.Text(message.Body, "experience"),
+            Value = ControllerOptions.Text(message.Body, "value"),
             CorrelationId = ControllerOptions.Text(message.Body, "correlationId")
         });
         if (ControllerDiscovery.IsRequest(message))
         {
-            await UdpBroadcastSender.SendAsync(ControllerDiscovery.Response(Options, message), Options, token).ConfigureAwait(false);
+            await _announcements.SendAsync(token).ConfigureAwait(false);
             Log.Info("DiscoveryResponseSent", $"Media discovery response to {message.Source}", new { Hostname = Environment.MachineName, MediaShare = ControllerDiscovery.MediaShare(Environment.MachineName) }, message.RequestId);
             return;
         }
@@ -116,6 +135,7 @@ internal sealed class ControllerHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _configuration.DisposeAsync().ConfigureAwait(false);
+        await _announcements.DisposeAsync().ConfigureAwait(false);
         await _listener.DisposeAsync().ConfigureAwait(false);
         _shutdown.Cancel();
         await Scenes.DisposeAsync().ConfigureAwait(false);

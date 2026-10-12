@@ -8,6 +8,8 @@ internal static class ConfigurationDefaults
         var options = ControllerOptions.Parse(text, build);
         var root = JsonNode.Parse(text)!.AsObject();
         var changed = false;
+        if (string.IsNullOrWhiteSpace(options.ControllerId)) { root["ControllerId"] = Guid.NewGuid().ToString("N"); changed = true; }
+        if (!root.Any(p => ControllerOptions.Same(p.Key, "Perspectives"))) { root["Perspectives"] = new JsonArray(); changed = true; }
         foreach (var key in new[] { "DefaultDisplayName", "DisplayAliases" })
         {
             if (root.Any(entry => ControllerOptions.Same(entry.Key, key))) continue;

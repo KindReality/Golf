@@ -12,7 +12,7 @@ internal static class GpuShaderChecks
     [StructLayout(LayoutKind.Sequential)]
     private struct Constants
     {
-        public Vector4 Row0, Row1, Row2, Effects, Aspect;
+        public Vector4 Row0, Row1, Row2, Effects, Aspect, Crop;
     }
     public static void Run()
     {
@@ -30,7 +30,7 @@ internal static class GpuShaderChecks
                 return output.ToArray();
             }
             // BGRA: black/red on top, blue/white below.
-            byte[] pixels = [0, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 255, 255, 255, 255];
+            byte[] pixels = [0, 0, 0, 255, 0, 0, 255, 128, 255, 0, 0, 255, 255, 255, 255, 255];
             using var source = device.CreateTexture2D<byte>(pixels, Format.B8G8R8A8_UNorm, 2, 2, 1, 1, BindFlags.ShaderResource);
             using var srv = device.CreateShaderResourceView(source);
             using var target = device.CreateTexture2D(new Texture2DDescription(Format.B8G8R8A8_UNorm, 16, 16, 1, 1, BindFlags.RenderTarget));
@@ -49,12 +49,13 @@ internal static class GpuShaderChecks
             context.PSSetShaderResource(0, srv);
             context.PSSetSampler(0, sampler);
             context.PSSetConstantBuffer(0, buffer);
-            byte[] Render(float opacity, bool key, PointOptions? keystone = null, Color4? background = null, Vector4? contentScale = null)
+            byte[] Render(float opacity, bool key, PointOptions? keystone = null, Color4? background = null, Vector4? contentScale = null, float brightness = 1, Vector4? crop = null)
             {
                 context.ClearRenderTargetView(rtv, background ?? new Color4(0, 0, 0, 0));
                 context.OMSetBlendState(videoBlend);
                 var (r0, r1, r2) = VideoTransform.Inverse(keystone ?? new());
-                var data = new Constants { Row0 = r0, Row1 = r1, Row2 = r2, Effects = new(opacity, 0.015f, 0.03f, key ? 1 : 0), Aspect = contentScale ?? new(1, 1, 0, 0) };
+                var data = new Constants { Crop = crop ?? new(0,0,1,1), Row0 = r0, Row1 = r1, Row2 = r2, Effects = new(opacity, 0.015f, 0.03f, key ? 1 : 0), Aspect = contentScale ?? new(1, 1, 0, 0) };
+                data.Aspect.W = brightness;
                 context.UpdateSubresource(in data, buffer);
                 context.Draw(3, 0);
                 context.CopyResource(staging, target);
@@ -68,7 +69,40 @@ internal static class GpuShaderChecks
                 }
                 finally { context.Unmap(staging, 0); }
             }
+            var cropped = Render(1, false, crop: new(0,.5f,.5f,.5f));
+            for(int p=0;p<cropped.Length;p+=4)
+                if(cropped[p]<250 || cropped[p+1]>2 || cropped[p+2]>2 || cropped[p+3]<250)
+                    throw new Exception("Perspective crop sampled outside the selected bottom-left source quadrant.");
+            Console.WriteLine("PASS GPU perspective crop fills output with only the selected source quadrant.");
             int Alpha(byte[] b, int x, int y) => b[(y * 16 + x) * 4 + 3];
+            byte[] imagePixels = [0, 0, 128, 128, 0, 0, 0, 0, 0, 0, 128, 128, 0, 0, 0, 0];
+            using var imageSource = device.CreateTexture2D<byte>(imagePixels, Format.B8G8R8A8_UNorm, 2, 2, 1, 1, BindFlags.ShaderResource);
+            using var imageView = device.CreateShaderResourceView(imageSource);
+            context.PSSetShaderResource(0, imageView);
+            var imageAlpha = Render(1, false, contentScale: new(1, 1, 1, 0));
+            if (Math.Abs(Alpha(imageAlpha, 3, 3) - 128) > 1 || Math.Abs(imageAlpha[(3 * 16 + 3) * 4 + 2] - 128) > 1 ||
+                Math.Abs(Alpha(imageAlpha, 8, 3) - imageAlpha[(3 * 16 + 8) * 4 + 2]) > 1)
+                throw new Exception("Image source alpha was lost or the image texture was not premultiplied correctly.");
+            context.PSSetShaderResource(0, srv);
+            if (Alpha(Render(1, false), 12, 3) != 255)
+                throw new Exception("Image alpha support changed opaque video rendering.");
+            Console.WriteLine("GPU readback passed image alpha and premultiplied color while preserving video alpha behavior.");
+            var dimVideo = Render(1, true, brightness: .5f);
+            var zeroVideo = Render(1, true, brightness: 0);
+            if (Math.Abs(dimVideo[(3 * 16 + 12) * 4 + 2] - 128) > 1 || Alpha(dimVideo, 12, 3) != 255 ||
+                Alpha(dimVideo, 3, 3) != 0 || zeroVideo[(3 * 16 + 12) * 4 + 2] != 0 || Alpha(zeroVideo, 12, 3) != 255)
+                throw new Exception("Brightness did not dim RGB while preserving video alpha and the original chroma key.");
+            context.PSSetShaderResource(0, imageView);
+            var dimImage = Render(.5f, false, contentScale: new(1, 1, 1, 0), brightness: .5f);
+            if (Math.Abs(dimImage[(3 * 16 + 3) * 4 + 2] - 32) > 1 || Math.Abs(Alpha(dimImage, 3, 3) - 64) > 1 || Alpha(dimImage, 12, 3) != 0)
+                throw new Exception("Image brightness changed source alpha or broke premultiplied fading.");
+            context.PSSetShaderResource(0, srv);
+            var dimBackdrop = DisplayBackground.Parse("#204060");
+            var dimOverBackground = Render(.25f, true, background: dimBackdrop, brightness: .5f);
+            int dimRed = (3 * 16 + 12) * 4;
+            if (Math.Abs(dimOverBackground[dimRed + 2] - 56) > 1 || dimOverBackground[dimRed + 3] != 255 || dimOverBackground[0] != 96)
+                throw new Exception("Screen brightness dimmed the display background or changed fade compositing.");
+            Console.WriteLine("GPU readback passed video/image brightness, zero brightness, unchanged chroma key/alpha/fades and independent display background.");
             var fitWide = Render(1, false, contentScale: VideoSizing.ContentScale("fit", 1920, 1080, 16, 16));
             var fitTall = Render(1, false, contentScale: VideoSizing.ContentScale("fit", 1080, 1920, 16, 16));
             var stretch = Render(1, false, contentScale: VideoSizing.ContentScale("stretch", 1920, 1080, 16, 16));

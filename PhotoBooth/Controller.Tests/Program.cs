@@ -24,7 +24,9 @@ internal static class Program
     {
         try
         {
-            if (args.SequenceEqual(["--updates"])) BuildUpdateChecks.Run("Controller").GetAwaiter().GetResult();
+            if (args.SequenceEqual(["--preview-playback"])) PerspectivePreviewPlaybackChecks.Run().GetAwaiter().GetResult();
+            else if (args.SequenceEqual(["--perspectives"])) PerspectiveEditorChecks.Run().GetAwaiter().GetResult();
+            else if (args.SequenceEqual(["--updates"])) BuildUpdateChecks.Run("Controller").GetAwaiter().GetResult();
             else if (args.Contains("--window")) Window();
             else if (args.Contains("--host")) HostAsync().GetAwaiter().GetResult();
             else UnitAsync().GetAwaiter().GetResult();
@@ -81,15 +83,17 @@ internal static class Program
             ControllerOptions.Text(defaults.Playlist("default-video").Items[0].Commands[0].Payload, "screen") == "*", "Default ambient/video names target every device and video screen");
         var probe = BroadcastEnvelope.Parse(ControllerDiscovery.Request(new() { DeviceName = "experience-alias" }, "probe-id"));
         var reply = BroadcastEnvelope.Parse(ControllerDiscovery.Response(new() { DeviceName = "controller-alias" }, probe));
-        Check(ControllerDiscovery.IsRequest(probe) && reply.Device == "experience-alias" &&
+        Check(ControllerDiscovery.IsRequest(probe) && reply.Device == "*" &&
             ControllerDiscovery.Hostname(reply, new HashSet<string> { "probe-id" }) == Environment.MachineName &&
-            ControllerDiscovery.MediaShare(Environment.MachineName) == @"\\" + Environment.MachineName + @"\media", "Controller discovery responds to the client alias with the real SMB hostname");
+            ControllerDiscovery.MediaShare(Environment.MachineName) == @"\\" + Environment.MachineName + @"\media", "Controller discovery broadcasts the real SMB hostname");
         Check(ControllerOptions.Parse(source, Development).Build.DefaultTriggerCooldownMilliseconds == 1000 && ControllerOptions.Parse(source, Production).Build.DefaultTriggerCooldownMilliseconds == 10000, "Development and Production transforms");
         Check(ControllerOptions.Parse("{}", Development).UdpSendAttempts == 1, "One best-effort send is the Controller default");
         var populated = ConfigurationDefaults.Populate("{}", Development);
         var seed = ControllerOptions.Parse(populated, Development);
         Check(seed.Scenes.Length == 1 && seed.Scenes[0].AmbientPlaylist == "default-ambient" && seed.Scenes[0].ActivatingPlaylist is null && seed.Scenes[0].DeactivatingPlaylist is null && seed.Playlist(seed.Scenes[0].AmbientPlaylist, "ambient").Items.Length == 0, "Missing scenes create one scene with an empty default ambient playlist");
-        Check(ConfigurationDefaults.Populate(populated, Development) == populated && ConfigurationDefaults.Populate(source, Development) == source, "Default population is idempotent and preserves configured scenes");
+        var seededSource = ConfigurationDefaults.Populate(source, Development);
+        Check(ConfigurationDefaults.Populate(populated, Development) == populated && ConfigurationDefaults.Populate(seededSource, Development) == seededSource &&
+            ControllerOptions.Parse(seededSource, Development).Scenes.SequenceEqual(defaults.Scenes) && Guid.TryParse(seed.ControllerId,out _), "Default population creates a permanent controller ID, is idempotent and preserves configured scenes");
         var missingDisplayFields = System.Text.Json.Nodes.JsonNode.Parse(source)!.AsObject();
         missingDisplayFields.Remove("DefaultDisplayName"); missingDisplayFields.Remove("DisplayAliases");
         var displayFieldsFilled = ConfigurationDefaults.Populate(missingDisplayFields.ToJsonString(), Development);
@@ -113,15 +117,16 @@ internal static class Program
             Check(MachineConfigurationFiles.Resolve("Controller", directory).EndsWith($"appsettings.{Environment.MachineName}.json"), "Controller uses Windows hostname instead of device alias");
             var log = new ActivityLog();
             await using (var service = new ConfigurationService(local, Development, log, _ => Task.CompletedTask, application))
-                Check(File.ReadAllText(local) == source && service.Initial.DeviceName != "wrong-shared-profile", "First launch copies shipped defaults into the OneDrive hostname file");
+                Check(service.Initial.Scenes.SequenceEqual(defaults.Scenes) && Guid.TryParse(service.Initial.ControllerId,out _) && service.Initial.DeviceName != "wrong-shared-profile", "First launch seeds shipped defaults and machine identity into the OneDrive hostname file");
+            var preservedMachineConfiguration = File.ReadAllText(local);
             Check(log.Snapshot().Any(entry => entry.Message.Contains("shipped defaults")), "First-run template source is logged");
             File.WriteAllText(template, "{\"DeviceName\":\"new-default\"}");
             await using (var service = new ConfigurationService(local, Development, new(), _ => Task.CompletedTask, application))
-                Check(File.ReadAllText(local) == source, "Template updates preserve existing hostname Controller settings");
+                Check(File.ReadAllText(local) == preservedMachineConfiguration, "Template updates preserve existing hostname Controller settings");
             var other = MachineConfigurationFiles.Resolve("Controller", directory, "LAPTOPMSPIN");
             await using (var service = new ConfigurationService(other, Production, new(), _ => Task.CompletedTask, application))
                 Check(service.Initial.DeviceName == "new-default" && service.Initial.Scenes.Length == 1, "Another hostname independently receives the current defaults and startup population");
-            Check(File.ReadAllText(template) == "{\"DeviceName\":\"new-default\"}" && File.ReadAllText(local) == source, "Startup population changes neither the template nor another hostname file");
+            Check(File.ReadAllText(template) == "{\"DeviceName\":\"new-default\"}" && File.ReadAllText(local) == preservedMachineConfiguration, "Startup population changes neither the template nor another hostname file");
             File.Delete(template);
             await using (var service = new ConfigurationService(local, Development, new(), _ => Task.CompletedTask, application))
                 Check(service.Initial.Playlists.Length == defaults.Playlists.Length, "Existing hostname Controller settings do not require a template");

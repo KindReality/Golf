@@ -13,6 +13,7 @@ internal sealed class ConfigurationService : IAsyncDisposable
     private Task _loop = Task.CompletedTask;
     private string _accepted;
     private string? _failure;
+    private readonly SemaphoreSlim _edits = new(1, 1);
     public string Path { get; }
     public ControllerOptions Initial { get; }
 
@@ -63,6 +64,35 @@ internal sealed class ConfigurationService : IAsyncDisposable
         try { _changed.Release(); }
         catch (SemaphoreFullException) { }
         catch (ObjectDisposedException) { }
+    }
+
+    public Task SetConfigurationModeAsync(bool enabled) => EditAsync(root => root["ConfigurationMode"] = enabled);
+    public Task SavePerspectivesAsync(PhotoBooth.Networking.PerspectiveDefinition[] expected, PhotoBooth.Networking.PerspectiveDefinition[] next) => EditAsync(root =>
+    {
+        var current = ControllerOptions.Parse(root.ToJsonString(), _environment);
+        if (!current.ConfigurationMode || !current.Perspectives.SequenceEqual(expected))
+            throw new InvalidOperationException("Perspectives changed remotely; reload before editing again.");
+        root["Perspectives"] = System.Text.Json.JsonSerializer.SerializeToNode(next);
+    });
+    private async Task EditAsync(Action<System.Text.Json.Nodes.JsonObject> edit)
+    {
+        await _edits.WaitAsync(_cancellation.Token);
+        try
+        {
+            await Task.Run(() =>
+            {
+                using var fileLock = new FileStream(Path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                var original = File.ReadAllText(Path);
+                var root = System.Text.Json.Nodes.JsonNode.Parse(original, new() { PropertyNameCaseInsensitive = true })!.AsObject();
+                edit(root);
+                var text = root.ToJsonString(ControllerOptions.Json);
+                ControllerOptions.Parse(text, _environment);
+                if (File.ReadAllText(Path) != original) throw new IOException("Configuration changed during this edit; please retry.");
+                ConfigurationDefaults.Write(Path, text);
+                Signal();
+            }, _cancellation.Token);
+        }
+        finally { _edits.Release(); }
     }
 
     private async Task WatchAsync()

@@ -57,7 +57,7 @@ internal sealed class UdpBroadcastListener(Func<BroadcastOptions> options,
             {
                 var packet = await binding.Client.ReceiveAsync(token).ConfigureAwait(false);
                 BroadcastEnvelope message;
-                try { message = BroadcastEnvelope.Parse(packet.Buffer); }
+                try { message = BroadcastEnvelope.Parse(packet.Buffer) with { SenderAddress = packet.RemoteEndPoint.Address.ToString() }; }
                 catch (Exception ex) when (ex is ArgumentException or JsonException)
                 {
                     Telemetry.Warning("UdpRequestInvalid", new { Sender = packet.RemoteEndPoint.ToString(), Bytes = packet.Buffer.Length, Reason = ex.Message });

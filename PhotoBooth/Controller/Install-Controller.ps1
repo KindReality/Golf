@@ -54,6 +54,7 @@ try {
         Write-Host ('Media account ready: '+$env:COMPUTERNAME+'\'+$mediaUserName)
         foreach ($firewall in @(
             @{Name='HomeTechnologies.Controller.UDP';Display='Home Technologies UDP events and commands';Protocol='UDP';Ports=@('54242','54243')},
+            @{Name='HomeTechnologies.Controller.Definitions';Display='Home Technologies shared definitions';Protocol='TCP';Ports=@('54244')},
             @{Name='HomeTechnologies.Controller.Media';Display='Home Technologies media share';Protocol='TCP';Ports=@('445')}
         )) {
             if (Get-NetFirewallRule -Name $firewall.Name -ErrorAction SilentlyContinue) {
@@ -62,6 +63,12 @@ try {
             } else {
                 New-NetFirewallRule -Name $firewall.Name -DisplayName $firewall.Display -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet -Protocol $firewall.Protocol -LocalPort $firewall.Ports | Out-Null
             }
+        }
+        $definitionUrl = 'http://+:54244/'
+        $reservation = & netsh.exe http show urlacl url=$definitionUrl
+        if ($reservation -notmatch 'S-1-5-32-545|BU|Users') {
+            & netsh.exe http add urlacl url=$definitionUrl 'sddl=D:(A;;GX;;;BU)' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not reserve the shared definitions HTTP endpoint.' }
         }
         Set-Content -LiteralPath $ResultFile -Value 'OK'
         exit 0

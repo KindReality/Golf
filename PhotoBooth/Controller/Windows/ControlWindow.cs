@@ -23,6 +23,9 @@ internal sealed class ControlWindow : Form
     private readonly ListView _activity = List("Time", "Level", "Activity");
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 250 };
     private ControllerHost? _host;
+    private readonly PhotoBooth.Windows.ConfigurationShortcut _configurationShortcut;
+    private Button _configurationButton = null!, _editorButton = null!;
+    private PerspectiveEditor? _editor;
     private PhotoBooth.Updates.BuildUpdateMonitor? _updates;
     private ActivityEntry? _latest;
     private bool _closing, _closed;
@@ -33,6 +36,7 @@ internal sealed class ControlWindow : Form
     public ControlWindow(string path, string? templateDirectory = null)
     {
         _path = path;
+        _configurationShortcut = new("Controller", () => { if (!IsDisposed && IsHandleCreated) BeginInvoke(new Action(EnableConfiguration)); });
         _templateDirectory = templateDirectory;
         Text = "Home Technologies • Controller";
         TopMost = true;
@@ -63,12 +67,13 @@ internal sealed class ControlWindow : Form
         layout.RowStyles.Add(new(SizeType.Absolute, 152));
         layout.RowStyles.Add(new(SizeType.Percent, 100));
         layout.RowStyles.Add(new(SizeType.Absolute, 30));
-        var configuration = new Button { Text = "Open configuration", AutoSize = true };
+        var configuration = _configurationButton = new Button { Text = "Configuration mode", AutoSize = true };
         DarkTheme.Button(configuration);
-        configuration.Click += (_, _) =>
+        configuration.Click += async (_, _) =>
         {
-            try { Process.Start(new ProcessStartInfo(_path) { UseShellExecute = true }); }
-            catch (Exception ex) { _host?.Log.Error("OpenConfigurationFailed", ex); }
+            if (_host?.Options.ConfigurationMode == true)
+            { try { await _host.SetConfigurationModeAsync(false); } catch (Exception ex) { _host.Log.Error("ConfigurationModeFailed", ex); } }
+            else _configurationShortcut.EnableBoth();
         };
         var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Margin = Padding.Empty };
         header.ColumnStyles.Add(new(SizeType.Percent, 100)); header.ColumnStyles.Add(new(SizeType.Absolute, 190));
@@ -78,7 +83,11 @@ internal sealed class ControlWindow : Form
         header.Controls.Add(DarkTheme.Caption("SCENES  /  PLAYLISTS  /  DEVICE EVENTS"), 0, 1);
         header.Controls.Add(_identity, 0, 2);
         configuration.Dock = DockStyle.Fill; configuration.Margin = new Padding(0, 3, 0, 5);
-        header.Controls.Add(configuration, 1, 1); header.SetRowSpan(configuration, 2);
+        header.Controls.Add(configuration, 1, 1);
+        _editorButton = new Button { Text="Perspectives…", Dock=DockStyle.Fill, Enabled=false };
+        DarkTheme.Button(_editorButton);
+        _editorButton.Click += (_,_) => { if(_host is null)return; if(_editor is null || _editor.IsDisposed){_editor=new(_host);_editor.Show(this);} else _editor.Activate(); };
+        header.Controls.Add(_editorButton,1,2);
         layout.Controls.Add(header, 0, 0); layout.SetColumnSpan(header, 2);
         layout.Controls.Add(CommandCard("SCENE CONTROL", _scenes, _activate, _sceneStatus, null, new Padding(0, 0, 8, 12)), 0, 1);
         layout.Controls.Add(CommandCard("STORYBOARD PLAYBACK", _playlists, _run, DarkTheme.Caption("Select an active run below to cancel it."), _cancel, new Padding(8, 0, 0, 12)), 1, 1);
@@ -168,6 +177,8 @@ internal sealed class ControlWindow : Form
     {
         if (_host is null || _closing) return;
         var options = _host.Options;
+        _configurationButton.Text = options.ConfigurationMode ? "Exit configuration" : "Configuration mode";
+        _editorButton.Enabled = options.ConfigurationMode;
         ApplyDisplayPlacement(options);
         _connectionStatus.Text = "●  NETWORK ACTIVE";
         _identity.Text = $"{options.EffectiveDeviceName} • {options.Build.Environment} • Events {options.UdpEventsPort} • Commands {options.UdpCommandsPort}";
@@ -267,9 +278,39 @@ internal sealed class ControlWindow : Form
         if (previous is not null && box.Items.Contains(previous)) box.SelectedItem = previous;
         else if (names.Length > 0) box.SelectedIndex = 0;
     }
+    private async void EnableConfiguration()
+    {
+        if (_host is null || _closing) return;
+        try
+        {
+            FocusEditor();
+            await _host.SetConfigurationModeAsync(true);
+            if (!_closing) FocusEditor();
+        }
+        catch (Exception ex) { _host.Log.Error("ConfigurationModeFailed", ex); }
+    }
+    private void FocusEditor()
+    {
+        Form target = _editor is not null && !_editor.IsDisposed ? _editor : this;
+        if (target.WindowState == FormWindowState.Minimized) target.WindowState = FormWindowState.Normal;
+        target.Activate(); target.Focus();
+        _host?.Log.Info("ConfigurationEditorFocusRequested","Requested Controller editor focus",new{Handle=target.Handle.ToInt64(),ForegroundProcessId=PhotoBooth.Windows.ConfigurationShortcut.ForegroundProcessId,Focused=PhotoBooth.Windows.ConfigurationShortcut.ApplicationFocused,ControllerDetected=PhotoBooth.Windows.ConfigurationShortcut.ControllerRunning});
+    }
+    private async void ExitConfiguration()
+    {
+        if (_host is null) return;
+        try { await _host.SetConfigurationModeAsync(false); }
+        catch (Exception ex) { _host.Log.Error("ConfigurationModeFailed",ex); }
+    }
+    protected override bool ProcessCmdKey(ref Message m, Keys key)
+    {
+        if (_host?.Options.ConfigurationMode == true && key == Keys.C && ActiveControl is not TextBoxBase && ActiveControl is not ComboBox)
+        { ExitConfiguration(); return true; }
+        return base.ProcessCmdKey(ref m,key);
+    }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _refresh.Dispose();
+        if (disposing) { _configurationShortcut.Dispose(); _editor?.Close(); _refresh.Dispose(); }
         base.Dispose(disposing);
     }
     private static ListView List(params string[] columns)

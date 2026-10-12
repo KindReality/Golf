@@ -12,6 +12,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     // Form's base constructor calls CreateParams before this constructor assigns the supplied options.
     private ExperienceOptions _options = new();
     private VideoRenderer? _renderer;
+    private ScreenMediaCatalog _mediaCatalog = ScreenMediaCatalog.Empty;
     private TopmostGuard? _guard;
     private bool _available;
     private PointCalibration? _calibration;
@@ -25,8 +26,12 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     private ScreenNameEditor? _nameEditor;
     private ScreenSurface? _editingScreen;
     private string? _originalName;
+    private string? _pendingBrowseName;
+    private readonly Queue<int> _nameDirections = new();
+    private bool _browsingName, _finishAfterBrowse;
     internal event Action<bool>? TextEditingChanged;
     internal event Action<ScreenSurface, string, string>? RenameRequested;
+    internal Func<ScreenSurface, string, string, Task<bool>>? BrowseRenameRequested;
     internal VideoRenderer? Renderer => _renderer;
     internal ScreenOptions? ScreenDefinition(string id) => _options.ScreensFor(_display).FirstOrDefault(s => s.Id == id);
     internal IEnumerable<ScreenSurface> Surfaces => _options.ScreensFor(_display).Select(s => Surface(s.Id));
@@ -87,7 +92,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         RefreshDisplay();
         var dispatcher = Dispatcher.CurrentDispatcher;
         _renderer = CreateRenderer(dispatcher);
-        _guard = new TopmostGuard(Handle, Dispatcher.CurrentDispatcher, () => Visible && (State != RendererState.Idle || _options.ConfigurationMode || _options.ScreensFor(_display).Any(s => s.IsMat) || DisplayBackground.For(_display, _options).A > 0), () => _renderer?.RequestId);
+        _guard = new TopmostGuard(Handle, Dispatcher.CurrentDispatcher, () => Visible && (State != RendererState.Idle || _options.ConfigurationMode || _options.ScreensFor(_display).Any(s => s.IsMat || s.IsVisualization) || DisplayBackground.For(_display, _options).A > 0), () => _renderer?.RequestId);
         ClientSizeChanged += (_, _) => _renderer?.Resize(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
         if (_available)
             ShowSurface();
@@ -103,7 +108,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             {
                 _calibration?.Cancel("DisplayUnavailable");
                 Hide();
-                _renderer?.Stop("DisplayUnavailable");
+                _renderer?.SetDisplayAvailable(false);
             }
             if (_available || _renderer is null)
                 Telemetry.Warning("DisplayUnavailable", new
@@ -116,7 +121,9 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         var bounds = _options.DeveloperMode ? new System.Drawing.Rectangle(screen.WorkingArea.Location, new(800, 600)) : screen.Bounds;
         if (Bounds != bounds)
             Bounds = bounds;
+        var restored = !_available;
         _available = true;
+        if (restored) _renderer?.SetDisplayAvailable(true);
         if (_renderer?.State == RendererState.Failed)
         {
             Hide();
@@ -126,7 +133,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
                 _tasks.Run(_ => RecoverRendererAsync(), "Recover renderer");
             return;
         }
-        if (_waitingForRenderer && _renderer?.State == RendererState.Idle)
+        if (_waitingForRenderer && _renderer?.State is RendererState.Idle or RendererState.Opening or RendererState.Playing or RendererState.FadingOut)
         {
             _waitingForRenderer = false;
             _recovery.Ready();
@@ -140,7 +147,12 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             ShowSurface();
     }
     private VideoRenderer CreateRenderer(Dispatcher dispatcher) => new(Handle, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height), _options, _display,
-        () => { if (!_closing && !dispatcher.HasShutdownStarted) dispatcher.BeginInvoke(new Action(() => { if (!_closing) Hide(); })); }, _beforePresent);
+        () => { if (!_closing && !dispatcher.HasShutdownStarted) dispatcher.BeginInvoke(new Action(() => { if (!_closing) Hide(); })); }, _beforePresent, _mediaCatalog);
+    internal void UpdateMediaCatalog(ScreenMediaCatalog catalog)
+    {
+        _mediaCatalog = catalog;
+        _renderer?.UpdateMediaCatalog(catalog);
+    }
     private async Task RecoverRendererAsync()
     {
         _recovering = true;
@@ -181,7 +193,8 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _options = options;
         foreach (var id in _surfaces.Keys.Where(id => ScreenDefinition(id) is null).ToArray())
             _surfaces.Remove(id);
-        if (_editingScreen is not null && (!options.ConfigurationMode || ScreenDefinition(_editingScreen.ScreenId)?.Name != _originalName))
+        if (_editingScreen is not null && (!options.ConfigurationMode ||
+            (ScreenDefinition(_editingScreen.ScreenId)?.Name != _originalName && ScreenDefinition(_editingScreen.ScreenId)?.Name != _pendingBrowseName)))
             FinishNameEdit(false);
         _renderer?.Configure(options);
         if (changed && IsHandleCreated)
@@ -226,7 +239,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         var y = (double)e.Y / Math.Max(1, ClientSize.Height - 1);
         var screens = _options.ScreensFor(_display);
         // A flat list supports any number of points, preserving screen/point overlap order.
-        var allPoints = screens.SelectMany(screen => PointEditing.Points(screen.Points).Select((p, point) => (screen, point, p))).ToArray();
+        var allPoints = screens.Where(s => !s.IsVisualization).SelectMany(screen => PointEditing.Points(screen.Points).Select((p, point) => (screen, point, p))).ToArray();
         var radius = PointEditing.HitRadius(ClientSize.Width, ClientSize.Height, _options.PointHitDiameterPercent);
         var hits = allPoints.Select((item, index) => (item, index)).Where(t =>
         {
@@ -249,7 +262,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             if (selected?.DisplayName == _display && ScreenDefinition(selected.ScreenId) is { } selectedDefinition &&
                 ScreenNameLabel.Bounds(selected.ScreenName, selectedDefinition.Points, ClientSize.Width, ClientSize.Height).Contains(e.Location))
             {
-                if (!ScreenSelection.Contains(selectedDefinition.Points, x, y))
+                if (selectedDefinition.IsVisualization || !ScreenSelection.Contains(selectedDefinition.Points, x, y))
                 {
                     BeginNameEdit(selected);
                     return;
@@ -291,15 +304,25 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         ReleaseCalibrationCapture();
         _calibration?.RequestInsertPoint(Surface(target.screen.Id), target.edge.Edge, target.edge.Point);
     }
+    internal void EditScreenName(ScreenSurface surface)
+    {
+        if (!_options.ConfigurationMode || surface.DisplayName != _display || ScreenDefinition(surface.ScreenId) is null) return;
+        Activate(); Focus();
+        ReleaseCalibrationCapture();
+        BeginNameEdit(surface);
+    }
     private void BeginNameEdit(ScreenSurface surface)
     {
+        if (_nameEditor is not null) FinishNameEdit(false);
         _calibration?.Cancel("ScreenNameEdit");
         _editingScreen = surface;
         _originalName = surface.ScreenName;
         TextEditingChanged?.Invoke(true);
         var k = ScreenDefinition(surface.ScreenId)!.Points;
         var bounds = ScreenNameLabel.Bounds(surface.ScreenName, k, ClientSize.Width, ClientSize.Height);
-        _nameEditor = new(FinishNameEdit)
+        _nameDirections.Clear();
+        _finishAfterBrowse = false;
+        _nameEditor = new(FinishNameEdit, ScreenDefinition(surface.ScreenId)!.IsVideo ? BrowseMediaName : null)
         {
             Text = surface.ScreenName,
             MaxLength = 80,
@@ -314,10 +337,55 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _nameEditor.Focus();
         _nameEditor.SelectAll();
     }
+    private void BrowseMediaName(int direction)
+    {
+        if (_nameEditor is null || _editingScreen is null || BrowseRenameRequested is null || _nameDirections.Count >= 32) return;
+        _nameDirections.Enqueue(direction);
+        if (!_browsingName) _tasks.Run(BrowseMediaNamesAsync, "Browse screen media names");
+    }
+    private async Task BrowseMediaNamesAsync(CancellationToken token)
+    {
+        _browsingName = true;
+        try
+        {
+            while (_nameEditor is { } editor && _editingScreen is { } surface && _nameDirections.TryDequeue(out var direction))
+            {
+                token.ThrowIfCancellationRequested();
+                var definition = ScreenDefinition(surface.ScreenId);
+                if (definition is null || !definition.IsVideo) break;
+                var others = _options.ScreensFor(_display).Where(s => s.Id != surface.ScreenId).ToArray();
+                var names = _mediaCatalog.Names().Where(name => !others.Any(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(s.DefaultName, name, StringComparison.OrdinalIgnoreCase))).ToArray();
+                var defaultName = ScreenOptions.DefaultFor(definition, _options.ScreensFor(_display));
+                var next = ScreenMediaNameCycle.Next(defaultName, _mediaCatalog.BrowseName(definition) ?? definition.Name, names, direction);
+                if (next == definition.Name) continue;
+                _pendingBrowseName = next;
+                editor.ReadOnly = true;
+                var renamed = await BrowseRenameRequested!(surface, definition.Name, next);
+                if (!ReferenceEquals(editor, _nameEditor)) break;
+                _pendingBrowseName = null;
+                _originalName = ScreenDefinition(surface.ScreenId)?.Name ?? definition.Name;
+                editor.Text = _originalName;
+                editor.SelectAll();
+                editor.ReadOnly = false;
+                if (!renamed) { _nameDirections.Clear(); break; }
+            }
+        }
+        finally
+        {
+            _browsingName = false;
+            _pendingBrowseName = null;
+            if (_nameEditor is not null) _nameEditor.ReadOnly = false;
+            if (_finishAfterBrowse) { _finishAfterBrowse = false; FinishNameEdit(true); }
+        }
+    }
     private void FinishNameEdit(bool commit)
     {
         if (_nameEditor is null || _editingScreen is null)
             return;
+        if (commit && _browsingName) { _finishAfterBrowse = true; return; }
+        _nameDirections.Clear();
+        _finishAfterBrowse = false;
         var surface = _editingScreen;
         var oldName = _originalName!;
         var name = _nameEditor.Text.Trim();

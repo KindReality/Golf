@@ -135,6 +135,20 @@ internal sealed class ConfigurationService : IAsyncDisposable
         return expected;
     }
 
+    public async Task<double> AdjustScreenBrightnessAsync(string display, string screenId, double delta, CancellationToken cancellation = default)
+    {
+        _dispatcher.VerifyAccess();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var json = await _store.AdjustScreenBrightnessAsync(display, screenId, delta, cancellation);
+        cancellation.ThrowIfCancellationRequested();
+        await ReloadAsync();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var expected = ExperienceOptions.Parse(json).ScreensFor(display).Single(s => s.Id == screenId).Brightness;
+        if (_options.ScreensFor(display).FirstOrDefault(s => s.Id == screenId)?.Brightness != expected)
+            throw new InvalidOperationException("Screen brightness could not be applied or was changed again remotely.");
+        return expected;
+    }
+
     private async Task ReloadLoopAsync()
     {
         while (_reloadAgain && !_disposed)
@@ -202,6 +216,7 @@ internal sealed class ConfigurationService : IAsyncDisposable
         _options.ConfigurationMode,
         _options.PointHitDiameterPercent,
         _options.DisplayScreens,
+        _options.Visualization,
         _options.CalibrationGridEnabled,
         _options.RequestDeduplicationSeconds
     });

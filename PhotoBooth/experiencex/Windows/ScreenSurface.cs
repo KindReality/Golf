@@ -7,6 +7,7 @@ internal sealed class ScreenSurface(MainWindow owner, string id) : IPointSurface
     public string ScreenName => owner.ScreenDefinition(id)?.Name ?? "";
     public int PixelWidth => owner.ClientSize.Width;
     public int PixelHeight => owner.ClientSize.Height;
+    private MainWindow Owner => owner;
     private bool _selected;
     private int _point = -1;
     public void SelectScreen(bool selected)
@@ -23,6 +24,14 @@ internal sealed class ScreenSurface(MainWindow owner, string id) : IPointSurface
     public void FlashCalibration(int point, bool success) => owner.Renderer?.FlashCalibration(point, success, id);
     public void FlashCalibrationPoints(int mask) => owner.Renderer?.FlashCalibrationPoints(mask, true, id);
     public void PreviewPoints(PointOptions? value) => owner.Renderer?.PreviewPoints(value, id);
+    public void PreviewPointGroup(IReadOnlyDictionary<IPointSurface, PointOptions?> values)
+    {
+        if (values.Keys.All(surface => surface is ScreenSurface screen && screen.Owner == owner))
+            owner.Renderer?.PreviewPointGroup(values.ToDictionary(entry => entry.Key.ScreenId!, entry => entry.Value));
+        else
+        foreach (var entry in values)
+            entry.Key.PreviewPoints(entry.Value);
+    }
     public Task<bool> ConfirmCalibrationAsync(PointOptions expected) => owner.Renderer?.ConfirmPointsAsync(expected, id) ?? Task.FromResult(false);
     public void ReleaseCalibrationCapture() => owner.ReleaseCalibrationCapture();
 }

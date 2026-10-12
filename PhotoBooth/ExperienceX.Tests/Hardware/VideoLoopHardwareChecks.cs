@@ -73,6 +73,13 @@ internal static class VideoLoopHardwareChecks
                     if (fading.Frames <= repeated.Frames) throw new Exception("Video stopped decoding before becoming transparent.");
                     await Send("controller-a", "stop-current-again", Stop("replacement"));
                     var idle = await Until(s => s.RequestId is null && s.State == RendererState.Idle && s.Opacity == 0, 5);
+                    Telemetry.Stop();
+                    var reports = Directory.EnumerateFiles(folder, "*.jsonl", SearchOption.AllDirectories)
+                        .SelectMany(File.ReadLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
+                        .Where(e => e.GetProperty("Event").GetString() == "DirectXPlaybackPerformance").ToArray();
+                    if (reports.Length == 0 || reports.Any(e => e.GetProperty("Data").GetProperty("MaxVideoTimestampGapMilliseconds").GetDouble() > 10000))
+                        throw new Exception("Frame telemetry includes a no-frame sentinel timestamp or lacks playback reports.");
+                    Console.WriteLine("Passed native frame telemetry across looping, replacement and stop without sentinel timestamps.");
                     Console.WriteLine("Passed real UDP loop/replacement, stale/foreign/reordered stops, decoding through the three-second stop fade and transparent completion.");
                     completion.TrySetResult();
                 }

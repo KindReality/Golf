@@ -12,6 +12,8 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
     public const int MaximumDatagramBytes = 1200;
     public const int MaximumHops = 8;
     public CommandContext? Context { get; init; }
+    // Transport metadata, never supplied by or serialized into the JSON message.
+    internal string? SenderAddress { get; init; }
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private sealed record Fields
     {

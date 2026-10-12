@@ -5,17 +5,50 @@ using Forms = System.Windows.Forms;
 namespace ExperienceX;
 
 // A message-only window receives shortcuts even while another application has focus.
-internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action close, Action toggleBackground) : Forms.NativeWindow, IDisposable
+internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action close, Action toggleBackground, Func<bool>? isFocused = null) : Forms.NativeWindow, IDisposable
 {
     internal const int ConfigurationId = 0x584B, CloseId = 0x5858, BackgroundId = 0x5842;
+    internal const int PerspectiveId = 0x5850;
+    public Action? ChoosePerspective
+    {
+        get; set;
+    }
+    private bool _perspectiveRegistered;
     internal const int AddId = 0x5841, VideoId = 0x5856;
-    internal const int NewId = 0x584E, MatId = 0x584D;
+    internal const int VisualizationId = 0x5847;
+    public Action? AddVisualizationScreen { get; set; }
+    private bool _visualizationRegistered;
+    internal const int NameId = 0x584E, MatId = 0x584D;
     internal const int TransparencyId = 0x5854;
     internal const int SizingId = 0x5853;
-    public Action? ToggleScreenSizing { get; set; }
+    internal const int BrightnessPlusId = 0x5860, BrightnessShiftPlusId = 0x5861,
+        BrightnessMinusId = 0x5862, BrightnessNumpadPlusId = 0x5863, BrightnessNumpadMinusId = 0x5864;
+    private static readonly (int Id, uint Key, uint Modifiers, string Label, int Direction)[] BrightnessKeys =
+    [
+        (BrightnessPlusId, 0xBB, 0x4000, "+/=", 1),
+        (BrightnessShiftPlusId, 0xBB, 0x4004, "+", 1),
+        (BrightnessMinusId, 0xBD, 0x4000, "-", -1),
+        (BrightnessNumpadPlusId, 0x6B, 0x4000, "Numpad +", 1),
+        (BrightnessNumpadMinusId, 0x6D, 0x4000, "Numpad -", -1)
+    ];
+    private readonly bool[] _brightnessRegistered = new bool[BrightnessKeys.Length];
+    public Action<int>? AdjustScreenBrightness
+    {
+        get; set;
+    }
+    public Action? ToggleScreenSizing
+    {
+        get; set;
+    }
     internal const int WhiteBackgroundId = 0x5857;
-    public Action? ToggleScreenTransparency { get; set; }
-    public Action? ChooseWhiteBackground { get; set; }
+    public Action? ToggleScreenTransparency
+    {
+        get; set;
+    }
+    public Action? ChooseWhiteBackground
+    {
+        get; set;
+    }
     public Action? AddScreenPrefix
     {
         get; set;
@@ -24,31 +57,46 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
     {
         get; set;
     }
-    public Action? NewScreenPrefix { get; set; }
-    public Action? AddMatScreen { get; set; }
-    private bool _addRegistered, _videoRegistered, _newRegistered, _matRegistered, _transparencyRegistered, _whiteRegistered, _sizingRegistered, _editingText, _choosingBackground;
+    public Action? EditScreenName
+    {
+        get; set;
+    }
+    public Action? AddMatScreen
+    {
+        get; set;
+    }
+    private bool _addRegistered, _videoRegistered, _nameRegistered, _matRegistered, _transparencyRegistered, _whiteRegistered, _sizingRegistered, _editingText, _choosingBackground;
     internal const uint Modifiers = 0x4007; // MOD_NOREPEAT | MOD_CONTROL | MOD_ALT | MOD_SHIFT
     internal const uint LetterModifiers = 0x4000; // MOD_NOREPEAT
     private bool _configurationRegistered, _closeRegistered, _backgroundRegistered, _disposed;
     private bool _configurationMode;
+    private bool _focused;
+    private readonly Forms.Timer _focusPoll = new() { Interval = 100 };
 
     public string[] Register(bool configurationMode = false, bool editingText = false, bool choosingBackground = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (Handle == nint.Zero)
             CreateHandle(new Forms.CreateParams { Caption = "ExperienceX.ApplicationHotkeys", Parent = new nint(-3) });
-        if (_configurationMode != configurationMode || _editingText != editingText || _choosingBackground != choosingBackground)
+        var focused = (isFocused?.Invoke() ?? PhotoBooth.Windows.ConfigurationShortcut.ApplicationFocused);
+        if (_configurationMode != configurationMode || _editingText != editingText || _choosingBackground != choosingBackground || _focused != focused)
         {
             Unregister();
             _configurationMode = configurationMode;
+            _focused = focused;
             _editingText = editingText;
             _choosingBackground = choosingBackground;
         }
+        if (!_focusPoll.Enabled)
+        {
+            _focusPoll.Tick += (_, _) => Register(_configurationMode, _editingText, _choosingBackground);
+            _focusPoll.Start();
+        }
         List<string> unavailable = [];
-        if (editingText)
+        if (editingText || !configurationMode || !focused)
             return [];
         var modifiers = configurationMode ? LetterModifiers : Modifiers;
-        Register(ConfigurationId, 0x43, modifiers, configurationMode ? "C" : "Ctrl+Shift+Alt+C", "ConfigurationHotkey", ref _configurationRegistered, unavailable);
+        Register(ConfigurationId, 0x45, modifiers, "E", "ConfigurationHotkey", ref _configurationRegistered, unavailable);
         if (configurationMode)
         {
             Register(CloseId, 0x58, modifiers, "X", "CloseHotkey", ref _closeRegistered, unavailable);
@@ -59,12 +107,22 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 Register(TransparencyId, 0x54, modifiers, "T", "ScreenTransparencyHotkey", ref _transparencyRegistered, unavailable);
             if (ToggleScreenSizing is not null)
                 Register(SizingId, 0x53, modifiers, "S", "ScreenSizingHotkey", ref _sizingRegistered, unavailable);
+            if (AdjustScreenBrightness is not null)
+                for (int i = 0; i < BrightnessKeys.Length; i++)
+                {
+                    var chord = BrightnessKeys[i];
+                    Register(chord.Id, chord.Key, chord.Modifiers, chord.Label, "ScreenBrightnessHotkey", ref _brightnessRegistered[i], unavailable);
+                }
+            if (ChoosePerspective is not null)
+                Register(PerspectiveId, 0x50, modifiers, "P", "PerspectiveHotkey", ref _perspectiveRegistered, unavailable);
             if (AddScreenPrefix is not null)
                 Register(AddId, 0x41, modifiers, "A", "AddScreenHotkey", ref _addRegistered, unavailable);
             if (AddVideoScreen is not null)
                 Register(VideoId, 0x56, modifiers, "V", "AddVideoScreenHotkey", ref _videoRegistered, unavailable);
-            if (NewScreenPrefix is not null)
-                Register(NewId, 0x4E, modifiers, "N", "NewScreenHotkey", ref _newRegistered, unavailable);
+            if (EditScreenName is not null)
+                Register(NameId, 0x4E, modifiers, "N", "ScreenNameHotkey", ref _nameRegistered, unavailable);
+            if (AddVisualizationScreen is not null)
+                Register(VisualizationId, 0x47, modifiers, "G", "AddVisualizationScreenHotkey", ref _visualizationRegistered, unavailable);
             if (AddMatScreen is not null)
                 Register(MatId, 0x4D, modifiers, "M", "AddMatScreenHotkey", ref _matRegistered, unavailable);
         }
@@ -96,18 +154,27 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
 
     protected override void WndProc(ref Forms.Message message)
     {
-        if (message.Msg == 0x0312 && !_disposed)
+        if (message.Msg == 0x0312 && !_disposed && (isFocused?.Invoke() ?? PhotoBooth.Windows.ConfigurationShortcut.ApplicationFocused))
         {
             // Mode changes can leave old shortcut messages queued. Match the current chord.
             var data = message.LParam.ToInt64();
             var modifiers = (uint)(data & 0xFFFF);
             var key = (uint)((data >> 16) & 0xFFFF);
+            for (int i = 0; i < BrightnessKeys.Length; i++)
+            {
+                var chord = BrightnessKeys[i];
+                if (_brightnessRegistered[i] && message.WParam == chord.Id && key == chord.Key && modifiers == (chord.Modifiers & 7))
+                {
+                    AdjustScreenBrightness?.Invoke(chord.Direction);
+                    return;
+                }
+            }
             if (modifiers != (_configurationMode ? 0u : 7u))
             {
                 base.WndProc(ref message);
                 return;
             }
-            if (message.WParam == ConfigurationId && key == 0x43 && _configurationRegistered)
+            if (message.WParam == ConfigurationId && key == 0x45 && _configurationRegistered)
             {
                 toggleConfiguration();
                 return;
@@ -147,8 +214,26 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 AddVideoScreen?.Invoke();
                 return;
             }
-            if (message.WParam == NewId && key == 0x4E && _newRegistered) { NewScreenPrefix?.Invoke(); return; }
-            if (message.WParam == MatId && key == 0x4D && _matRegistered) { AddMatScreen?.Invoke(); return; }
+            if (message.WParam == PerspectiveId && key == 0x50 && _perspectiveRegistered)
+            {
+                ChoosePerspective?.Invoke();
+                return;
+            }
+            if (message.WParam == NameId && key == 0x4E && _nameRegistered)
+            {
+                EditScreenName?.Invoke();
+                return;
+            }
+            if (message.WParam == VisualizationId && key == 0x47 && _visualizationRegistered)
+            {
+                AddVisualizationScreen?.Invoke();
+                return;
+            }
+            if (message.WParam == MatId && key == 0x4D && _matRegistered)
+            {
+                AddMatScreen?.Invoke();
+                return;
+            }
         }
         base.WndProc(ref message);
     }
@@ -158,6 +243,8 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
         if (_disposed)
             return;
         _disposed = true;
+        _focusPoll.Stop();
+        _focusPoll.Dispose();
         Unregister();
         if (Handle != nint.Zero)
             DestroyHandle();
@@ -165,6 +252,19 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
 
     private void Unregister()
     {
+        if (_visualizationRegistered) UnregisterHotKey(Handle, VisualizationId);
+        _visualizationRegistered = false;
+        if (_perspectiveRegistered)
+        {
+            UnregisterHotKey(Handle, PerspectiveId);
+            _perspectiveRegistered = false;
+        }
+        for (int i = 0; i < BrightnessKeys.Length; i++)
+        {
+            if (_brightnessRegistered[i])
+                UnregisterHotKey(Handle, BrightnessKeys[i].Id);
+            _brightnessRegistered[i] = false;
+        }
         if (_configurationRegistered)
             UnregisterHotKey(Handle, ConfigurationId);
         if (_closeRegistered)
@@ -175,15 +275,20 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
             UnregisterHotKey(Handle, AddId);
         if (_videoRegistered)
             UnregisterHotKey(Handle, VideoId);
-        if (_newRegistered) UnregisterHotKey(Handle, NewId);
-        if (_matRegistered) UnregisterHotKey(Handle, MatId);
-        if (_transparencyRegistered) UnregisterHotKey(Handle, TransparencyId);
-        if (_sizingRegistered) UnregisterHotKey(Handle, SizingId);
-        if (_whiteRegistered) UnregisterHotKey(Handle, WhiteBackgroundId);
+        if (_nameRegistered)
+            UnregisterHotKey(Handle, NameId);
+        if (_matRegistered)
+            UnregisterHotKey(Handle, MatId);
+        if (_transparencyRegistered)
+            UnregisterHotKey(Handle, TransparencyId);
+        if (_sizingRegistered)
+            UnregisterHotKey(Handle, SizingId);
+        if (_whiteRegistered)
+            UnregisterHotKey(Handle, WhiteBackgroundId);
         _whiteRegistered = false;
         _transparencyRegistered = false;
         _sizingRegistered = false;
-        _configurationRegistered = _closeRegistered = _backgroundRegistered = _addRegistered = _videoRegistered = _newRegistered = _matRegistered = false;
+        _configurationRegistered = _closeRegistered = _backgroundRegistered = _addRegistered = _videoRegistered = _nameRegistered = _matRegistered = false;
     }
 
     [DllImport("user32.dll", SetLastError = true)]

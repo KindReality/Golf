@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows.Threading;
 using ExperienceX;
+using PhotoBooth.Networking;
 using Forms = System.Windows.Forms;
 
 internal static class ScreenEditingWorkflowChecks
@@ -28,11 +29,14 @@ internal static class ScreenEditingWorkflowChecks
                     var commandsPort = ((IPEndPoint)commandSocket.Client.LocalEndPoint!).Port;
                     var eventsPort = ((IPEndPoint)eventSocket.Client.LocalEndPoint!).Port;
                     commandSocket.Dispose(); eventSocket.Dispose();
+                    var definition = new PerspectiveDefinition { Name = "bottom-third", Rectangle = new() { Y = 66.67, Height = 33.33 } };
+                    var definitions = new ControllerSharedDefinitions { ControllerId = Guid.NewGuid().ToString("N"), ControllerName = "test-controller", Hostname = Environment.MachineName, Perspectives = [definition] };
                     var options = new ExperienceOptions
                     {
                         DeveloperMode = true, ConfigurationMode = true, CalibrationGridEnabled = false,
                         MediaDiscovery = new() { Enabled = false },
                         DefaultDisplayName = primary, UdpCommandsPort = commandsPort, UdpEventsPort = eventsPort,
+                        ControllerDefinitions = new() { [definitions.ControllerId] = definitions },
                         DisplayScreens = displays.ToDictionary(d => d, d => d == other && d != primary ? new List<ScreenOptions> { new() } : []),
                         DisplayBackgrounds = displays.ToDictionary(d => d, _ => new DisplayBackgroundOptions { IsTransparent = true })
                     };
@@ -60,6 +64,15 @@ internal static class ScreenEditingWorkflowChecks
                     }
                     void AddVideo()
                     {
+                        using var accept = new Forms.Timer { Interval = 20 };
+                        accept.Tick += (_, _) =>
+                        {
+                            var picker = Forms.Application.OpenForms.OfType<PerspectivePicker>().FirstOrDefault();
+                            if (picker is null) return;
+                            picker.DialogResult = Forms.DialogResult.OK;
+                            picker.Close();
+                        };
+                        accept.Start();
                         SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.AddId, (nint)(0x41 << 16));
                         SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.VideoId, (nint)(0x56 << 16));
                     }
@@ -68,13 +81,44 @@ internal static class ScreenEditingWorkflowChecks
                         SendMessage(window.Handle, 0x201, 1, (nint)((y << 16) | x));
                         SendMessage(window.Handle, 0x202, 0, (nint)((y << 16) | x));
                     }
+                    var editingWindow = host.DisplayWindows.Single(w => w.DisplayName == primary);
+                    editingWindow.Activate();
+                    editingWindow.Focus();
+                    await Until(() => PhotoBooth.Windows.ConfigurationShortcut.ApplicationFocused);
+                    await Task.Delay(150); // Focus-scoped shortcut registration refreshes every 100 ms.
                     AddVideo();
                     await Until(() => Read().ScreensFor(primary).Count == 1 && host.SelectedScreen?.DisplayName == primary);
                     var first = Read().ScreensFor(primary).Single();
                     Check(first.Name == "screen1" && first.Points == new PointOptions(), "A/V did not create a full-size first screen on the default display.");
+                    void PickPerspective(int index, Forms.DialogResult result)
+                    {
+                        using var accept = new Forms.Timer { Interval = 20 };
+                        accept.Tick += (_, _) =>
+                        {
+                            var picker = Forms.Application.OpenForms.OfType<PerspectivePicker>().FirstOrDefault();
+                            if (picker is null) return;
+                            picker.Controls.OfType<Forms.ListBox>().Single().SelectedIndex = index;
+                            picker.DialogResult = result;
+                            picker.Close();
+                        };
+                        accept.Start();
+                        SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.PerspectiveId, (nint)(0x50 << 16));
+                    }
+                    PickPerspective(1, Forms.DialogResult.Cancel);
+                    await Task.Delay(100);
+                    Check(Read().ScreensFor(primary).Single().Perspective is null, "Cancel changed the screen perspective.");
+                    PickPerspective(1, Forms.DialogResult.OK);
+                    await Until(() => Read().ScreensFor(primary).Single().Perspective?.PerspectiveId == definition.Id);
+                    Check(Read().ScreensFor(primary).Single().Points == first.Points, "Selecting a source perspective changed destination points.");
+                    PickPerspective(0, Forms.DialogResult.OK);
+                    await Until(() => Read().ScreensFor(primary).Single().Perspective is null);
+                    Console.WriteLine("Passed actual perspective picker selection, cancellation and restoration to Full without changing destination points.");
+                    await GForceFullscreenChecks.FocusForTest(editingWindow.Handle);
+                    await Task.Delay(150); // Focus-scoped letters register after the modal picker closes.
                     SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.SizingId, (nint)(0x53 << 16));
                     await Until(() => Read().ScreensFor(primary).Single().SizingMode == "stretch" &&
                         host.DisplayWindows.Single(w => w.DisplayName == primary).ScreenDefinition(first.Id)?.SizingMode == "stretch");
+                    await Task.Delay(150); // Let the first toggle finish renderer confirmation before another key.
                     SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.SizingId, (nint)(0x53 << 16));
                     await Until(() => Read().ScreensFor(primary).Single().SizingMode == "fit");
                     var target = host.DisplayWindows.Single(w => w.DisplayName == other);
@@ -108,7 +152,7 @@ internal static class ScreenEditingWorkflowChecks
                     // An additional A/V must keep the selected screen's display and choose the lowest free default name.
                     AddVideo();
                     await Until(() => Read().ScreensFor(other).Count == 3);
-                    Check(Read().ScreensFor(other)[2].Name == "screen2", "New screen default naming did not skip occupied names/reuse an available default.");
+                    Check(Read().ScreensFor(other)[2].Name == "screen3", "New screen default naming did not preserve the renamed screen's reserved default.");
                     Check(Read().ScreensFor(other)[1].Id == created.Id && File.Exists(path + ".bak"), "Renaming lost screen identity or atomic backup.");
                     var dragged = Read().ScreensFor(other)[2];
                     await Until(() => target.ScreenDefinition(dragged.Id) is not null);

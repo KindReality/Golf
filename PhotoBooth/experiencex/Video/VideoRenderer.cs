@@ -5,7 +5,7 @@ using Vortice.MediaFoundation;
 
 namespace ExperienceX;
 
-internal sealed record ScreenPlaybackSnapshot(string Id, string Name, RendererState State, double Position, double Opacity, long Frames, string? RequestId, int Loops = 0);
+internal sealed record ScreenPlaybackSnapshot(string Id, string Name, RendererState State, double Position, double Opacity, long Frames, string? RequestId, int Loops = 0, bool NameLocked = false, string? BoundPath = null, double Brightness = 100);
 
 // One worker/device/swap chain per physical display. Screens own independent decoders and textures.
 internal sealed class VideoRenderer : IDisposable
@@ -20,6 +20,8 @@ internal sealed class VideoRenderer : IDisposable
     private readonly List<DisplayScreenTrack> _tracks = [];
     private readonly VideoStopHistory _stops = new();
     private ExperienceOptions _options;
+    private ScreenMediaCatalog _mediaCatalog;
+    private bool _displayAvailable = true;
     private volatile bool _shutdown;
     private int _disposeRequested;
     private volatile RendererState _state = RendererState.Starting;
@@ -37,10 +39,11 @@ internal sealed class VideoRenderer : IDisposable
     }
 
     public VideoRenderer(nint hwnd, int width, int height, ExperienceOptions options, string display,
-        Action hideAfterFailure, Action? beforePresent = null)
+        Action hideAfterFailure, Action? beforePresent = null, ScreenMediaCatalog? mediaCatalog = null)
     {
         _display = display;
         _options = options;
+        _mediaCatalog = mediaCatalog ?? ScreenMediaCatalog.Empty;
         _hideAfterFailure = hideAfterFailure;
         _beforePresent = beforePresent;
         _graphics = new(hwnd, width, height, display);
@@ -86,20 +89,41 @@ internal sealed class VideoRenderer : IDisposable
                 _tracks.Add(track); // Register ownership immediately, including partial reconciliation failures.
             }
             track.Configure(screen, _options);
+            track.ApplyMediaBinding(_mediaCatalog.Match(screen), _displayAvailable);
             ordered.Add(track);
         }
         _tracks.Clear();
         _tracks.AddRange(ordered);
     }
+    public void UpdateMediaCatalog(ScreenMediaCatalog catalog) => Enqueue("MediaCatalog", () =>
+    {
+        _mediaCatalog = catalog;
+        foreach (var track in _tracks)
+            track.ApplyMediaBinding(catalog.Match(track.Screen), _displayAvailable);
+    });
+    public void SetDisplayAvailable(bool available) => Enqueue("Availability", () =>
+    {
+        _displayAvailable = available;
+        foreach (var track in _tracks)
+            if (available) track.ApplyMediaBinding(_mediaCatalog.Match(track.Screen), true);
+            else track.Complete("DisplayUnavailable");
+        _needsRedraw = true;
+    });
     public void ShowCalibration(int selected, string? id = null, bool selectedScreen = true) => Enqueue("Visibility:" + id, () => { Track(id)?.Show(selected, selectedScreen); _needsRedraw = true; });
     public void FadeCalibration(string? id = null) => Enqueue("Visibility:" + id, () => { Track(id)?.Fade(); _needsRedraw = true; });
+    public void PreviewPointGroup(IReadOnlyDictionary<string, PointOptions?> values) => Enqueue("PreviewGroup", () =>
+    {
+        foreach (var entry in values) Track(entry.Key)?.Preview(entry.Value);
+        _needsRedraw = true;
+    });
     public void PreviewPoints(PointOptions? value, string? id = null) => Enqueue("Preview:" + id, () => { Track(id)?.Preview(value); _needsRedraw = true; });
     public void FlashCalibration(int point, bool success, string? id = null) => Enqueue("Flash:" + id, () => { Track(id)?.FlashPoint(point, success); _needsRedraw = true; });
     public void FlashCalibrationPoints(int mask, bool success, string? id = null) => Enqueue("Flash:" + id, () => { Track(id)?.Flash(mask, success); _needsRedraw = true; });
     public void Play(string path, ExperienceRequest request) => Enqueue("Playback:" + request.ScreenId, () =>
     {
         if (_stops.Contains(request.Source, request.RequestId)) return;
-        var track = Track(request.ScreenId) ?? throw new ArgumentException("The requested screen is no longer configured.");
+        var track = (request.ScreenId is null ? _tracks.FirstOrDefault(t => t.Screen.IsVideo) : Track(request.ScreenId)) ?? throw new ArgumentException("The requested screen is no longer configured.");
+        if (track.NameLocked) { track.ReportIgnoredCommand(request); return; }
         try
         {
             track.Open(path, request);
@@ -165,13 +189,14 @@ internal sealed class VideoRenderer : IDisposable
                 if (_shutdown)
                     break;
                 var animating = _tracks.Any(t => t.Animating);
-                var playing = _tracks.Any(t => t.IsOpen);
+                var playing = _tracks.Any(t => t.IsVideoOpen);
                 if (!playing && !animating)
                 {
                     if (_needsRedraw || _wasAnimating)
                         Draw();
-                    _state = RendererState.Idle;
-                    _requestId = null;
+                    var held = _tracks.FirstOrDefault(t => t.IsOpen);
+                    _state = held?.State ?? RendererState.Idle;
+                    _requestId = held?.RequestId;
                     _wake.WaitOne();
                     continue;
                 }
@@ -242,8 +267,8 @@ internal sealed class VideoRenderer : IDisposable
         foreach (var track in _tracks)
             track.DrawMat();
         // Tools are drawn after all content, so overlapping video cannot obscure editing handles.
-        foreach (var track in _tracks)
-            track.DrawOverlay();
+        foreach (var track in _tracks.Where(t => !t.SelectedScreen)) track.DrawOverlay();
+        foreach (var track in _tracks.Where(t => t.SelectedScreen)) track.DrawOverlay();
         _beforePresent?.Invoke();
         _graphics.SwapChain.Present(1, PresentFlags.None).CheckError();
         foreach (var track in _tracks)

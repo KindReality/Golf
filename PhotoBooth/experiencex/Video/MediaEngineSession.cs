@@ -71,7 +71,11 @@ internal sealed class MediaEngineSession(Action wake) : IDisposable
     public bool TryGetFrame(out long timestamp)
     {
         timestamp = 0;
-        return Ready && _engine!.OnVideoStreamTick(out timestamp);
+        if (!Ready) return false;
+        // The convenience wrapper treats S_FALSE as success, although it means no new frame.
+        var result = _engine!.OnVideoStreamTick_(out timestamp);
+        result.CheckError();
+        return result.Code == 0;
     }
     public void TransferFrame(IDXGISurface surface, int width, int height) => _engine!.TransferVideoFrame(surface, null, new Vortice.RawRect(0, 0, width, height), null);
     public void Dispose()

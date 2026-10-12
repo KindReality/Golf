@@ -4,6 +4,78 @@ internal static class TestSuites
 {
     public static async Task RunAsync(string[] arguments)
     {
+        if (arguments.SequenceEqual(["--snapping-hardware"]))
+        {
+            await PointSnappingHardwareChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--snapping"]))
+        {
+            await PointSnappingChecks.Run();
+            await CalibrationChecks.Run();
+            await CalibrationConfirmationChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--visualization"]))
+        {
+            await VisualizationConfigurationChecks.Run();
+            await VisualizationChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--gforce-native-fullscreen"]))
+        {
+            await GForceFullscreenChecks.Run(true,true);
+            return;
+        }
+        if (arguments.SequenceEqual(["--gforce-fullscreen-key"]))
+        {
+            await GForceFullscreenChecks.Run(true);
+            return;
+        }
+        if (arguments.SequenceEqual(["--gforce-fullscreen"]))
+        {
+            await GForceFullscreenChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--local-focus"]))
+        {
+            await LocalControllerExperienceChecks.Run(true);
+            return;
+        }
+        if (arguments.SequenceEqual(["--local-integration"]))
+        {
+            await LocalControllerExperienceChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--perspectives"]))
+        {
+            await PerspectiveChecks.Run();
+            await ConfigurationHotkeyChecks.Run();
+            GpuShaderChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--brightness"]))
+        {
+            await ScreenBrightnessChecks.Run();
+            await ConfigurationHotkeyChecks.Run();
+            GpuShaderChecks.Run();
+            await ScreenMediaNameBrowsingChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--name-browsing"]))
+        {
+            await ScreenMediaNameCycleChecks.Run();
+            await ConfigurationHotkeyChecks.Run();
+            await ScreenMediaNameBrowsingChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--screen-media"]))
+        {
+            ScreenMediaBindingChecks.Run();
+            GpuShaderChecks.Run();
+            await ScreenMediaBindingHardwareChecks.Run();
+            return;
+        }
         if (arguments.SequenceEqual(["--sizing"]))
         {
             await ScreenSizingChecks.Run();
@@ -116,6 +188,10 @@ internal static class TestSuites
         bool unit = !arguments.Contains("--hardware") || arguments.Contains("--all");
         if (unit)
         {
+            await VisualizationConfigurationChecks.Run();
+            await PerspectiveChecks.Run();
+            ScreenMediaBindingChecks.Run();
+            await ScreenMediaNameCycleChecks.Run();
             await MediaPathChecks.Run();
             CoreChecks.Run();
             VideoLoopChecks.Run();
@@ -128,6 +204,7 @@ internal static class TestSuites
             await ScreenTransparencyChecks.Run();
             await ScreenSizingChecks.Run();
             AudioVolumeChecks.Run();
+            await ScreenBrightnessChecks.Run();
             CoordinatedAudioChecks.Run();
             await MachineConfigurationChecks.Run();
             await ConfigurationServiceChecks.Run();
@@ -136,6 +213,7 @@ internal static class TestSuites
             SingleInstanceChecks.Run();
             await UdpListenerChecks.Run();
             await BroadcastChecks.Run();
+            await PointSnappingChecks.Run();
             await CalibrationChecks.Run();
             ReliabilityChecks.Run();
             await CalibrationConfirmationChecks.Run();

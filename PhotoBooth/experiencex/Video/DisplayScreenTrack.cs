@@ -30,6 +30,9 @@ internal sealed class DisplayScreenTrack : IDisposable
     private double _lastPosition;
     private bool _loop;
     private int _loops;
+    private ScreenMediaBinding? _binding;
+    private bool _stillImage;
+    private long _retryAt;
     private readonly Action<int, int> _createVideoTexture;
     public ScreenOptions Screen
     {
@@ -39,10 +42,12 @@ internal sealed class DisplayScreenTrack : IDisposable
     {
         get; private set;
     }
-    public bool IsOpen => _media.IsOpen;
-    internal ScreenPlaybackSnapshot Snapshot => new(Screen.Id, Screen.Name, State, _media.Position, _alpha, _metrics.TransferredFrames, RequestId, _loops);
+    public bool IsOpen => _media.IsOpen || _stillImage;
+    public bool IsVideoOpen => _media.IsOpen;
+    public bool NameLocked => _binding is not null;
+    internal ScreenPlaybackSnapshot Snapshot => new(Screen.Id, Screen.Name, State, _media.Position, _alpha, _stillImage ? 1 : _metrics.TransferredFrames, RequestId, _loops, NameLocked, _binding?.Path, Screen.Brightness);
     public RendererState State => _state.Current;
-    public bool Animating => _overlay.Animating(_options);
+    public bool Animating => _overlay.Animating(_options) || _stillImage && _alpha < 1;
     public long TransformComputations => _transforms.Computations + _overlayTransforms.Computations;
     public DisplayScreenTrack(GraphicsResources graphics, string display, ScreenOptions screen, ExperienceOptions options, Action wake, Action present)
     {
@@ -79,9 +84,73 @@ internal sealed class DisplayScreenTrack : IDisposable
     public void Flash(int mask, bool success) => _overlay.Flash(mask, success);
     public void FlashPoint(int point, bool success) => _overlay.FlashPoint(point, success);
     public bool Matches(PointOptions expected) => Screen.Points == expected && (_overlay.Preview is null || _overlay.Preview == expected);
+    public void ApplyMediaBinding(ScreenMediaBinding? binding, bool available)
+    {
+        if (_binding != binding)
+        {
+            Complete(binding is null ? "ScreenMediaUnlocked" : "ScreenMediaChanged");
+            _binding = binding;
+            _retryAt = 0;
+            Telemetry.Info(binding is null ? "ScreenMediaUnlocked" : "ScreenMediaLocked", new
+            {
+                DisplayName = _display, ScreenName = Screen.Name, ScreenId = Screen.Id,
+                Path = binding?.Path, binding?.IsImage, binding?.Error
+            });
+            if (binding?.Error is { } error)
+                Telemetry.Warning("ScreenMediaBindingAmbiguous", new { DisplayName = _display, ScreenName = Screen.Name, Reason = error });
+        }
+        if (!available || IsOpen || binding?.Path is not { } path || Stopwatch.GetTimestamp() < _retryAt) return;
+        var request = new ExperienceRequest
+        {
+            Experience = "video", Value = System.IO.Path.GetFileName(path), Loop = true, Mute = true,
+            Source = _options.EffectiveDeviceName, TargetDevice = _options.EffectiveDeviceName,
+            RequestId = Guid.NewGuid().ToString("N"), ScreenId = Screen.Id, ScreenName = Screen.Name
+        };
+        Telemetry.SetRequestContext(request.RequestId, request.LogContext(path));
+        try
+        {
+            if (binding.IsImage) OpenImage(path, request);
+            else Open(path, request);
+            Telemetry.Info("ScreenMediaPlaybackStarted", new { DisplayName = _display, ScreenName = Screen.Name, Path = path, binding.IsImage, Loop = !binding.IsImage }, RequestId);
+        }
+        catch (Exception ex)
+        {
+            Complete("Error");
+            Telemetry.Error("ScreenMediaPlaybackFailed", ex, new { DisplayName = _display, ScreenName = Screen.Name, Path = path, RetrySeconds = 5 }, request.RequestId);
+            // Device failures must still reach the renderer's existing recovery path.
+            if (unchecked((uint)ex.HResult) is 0x887A0005 or 0x887A0006 or 0x887A0007 or 0x887A0020) throw;
+        }
+    }
+    public void ReportIgnoredCommand(ExperienceRequest request) => Telemetry.Info("VideoCommandIgnoredScreenLocked", new
+    {
+        DisplayName = _display, ScreenId = Screen.Id, ScreenName = Screen.Name,
+        BoundPath = _binding?.Path, RequestedVideo = request.Value, request.Command
+    }, request.RequestId);
+    private void OpenImage(string path, ExperienceRequest request)
+    {
+        Complete("Replaced");
+        RequestId = request.RequestId;
+        _source = request.Source;
+        _state.TransitionTo(RendererState.Opening);
+        var image = StillImagePixels.Read(path);
+        _graphics.Context.PSUnsetShaderResource(0);
+        _view?.Dispose(); _view = null;
+        _texture?.Dispose(); _texture = null;
+        _texture = _graphics.Device.CreateTexture2D<byte>(image.Bgra, Vortice.DXGI.Format.B8G8R8A8_UNorm,
+            (uint)image.Width, (uint)image.Height, 1, 1, BindFlags.ShaderResource);
+        _view = _graphics.Device.CreateShaderResourceView(_texture);
+        _videoWidth = image.Width; _videoHeight = image.Height;
+        _stillImage = true;
+        _loops = 0;
+        _timeline.Reset(true);
+        Draw(0); _present();
+        _timeline.Start();
+        _state.TransitionTo(RendererState.Playing);
+        Telemetry.Info("ImagePlaybackConfirmed", new { DisplayName = _display, ScreenName = Screen.Name, Path = path, image.Width, image.Height, SurfaceOpacity = 0 }, RequestId);
+    }
     public void Open(string path, ExperienceRequest request)
     {
-        if (Screen.IsMat) throw new ArgumentException("Mat screens cannot receive playback commands.");
+        if (!Screen.IsVideo) throw new ArgumentException("Only video screens receive playback commands.");
         Complete("Replaced");
         RequestId = request.RequestId;
         _source = request.Source;
@@ -106,6 +175,11 @@ internal sealed class DisplayScreenTrack : IDisposable
     }
     public void Tick()
     {
+        if (_stillImage)
+        {
+            Draw(_timeline.Advance(_options, null, 0, false).Opacity);
+            return;
+        }
         _media.StartIfReady(_createVideoTexture);
         if (_media.TryGetFrame(out var timestamp) && timestamp != _metrics.LastTimestamp)
         {
@@ -170,21 +244,28 @@ internal sealed class DisplayScreenTrack : IDisposable
     }
     public void StopPlayback(string? source, string playbackRequestId)
     {
+        if (NameLocked)
+        {
+            if (RequestId == playbackRequestId && string.Equals(_source, source, StringComparison.OrdinalIgnoreCase))
+                Telemetry.Info("VideoStopIgnoredScreenLocked", new { DisplayName = _display, ScreenName = Screen.Name, BoundPath = _binding?.Path, PlaybackRequestId = playbackRequestId }, RequestId);
+            return;
+        }
         if (!_media.IsOpen || RequestId != playbackRequestId || !string.Equals((_source ?? "").Trim(), (source ?? "").Trim(), StringComparison.OrdinalIgnoreCase)) return;
         if (!_timeline.Started) { Complete("SceneStopped"); return; }
         _timeline.RequestStop(_options.TransitionOutSeconds);
     }
     public void DrawVideo()
     {
-        if (Screen.IsMat) return;
+        if (!Screen.IsVideo) return;
         var points = _overlay.Preview ?? Screen.Points;
         var inverse = _alpha > 0 ? _transforms.Get(points) : default;
-        _graphics.DrawLayer(_view, _alpha, _options, inverse, _videoWidth, _videoHeight, Screen.EffectiveBlackKey(_options), Screen.SizingMode, points);
+        _graphics.DrawLayer(_view, _alpha, _options, inverse, _videoWidth, _videoHeight, Screen.EffectiveBlackKey(_options), Screen.SizingMode, points, _stillImage, Screen.Brightness, Screen.Perspective?.Rectangle);
     }
     public void DrawMat()
     {
         if (Screen.IsMat) _mat.Draw(_overlay.Preview ?? Screen.Points);
     }
+    internal bool SelectedScreen => _overlay.SelectedScreen;
     public void DrawOverlay()
     {
         if (_overlay.Visible(_options))
@@ -209,7 +290,8 @@ internal sealed class DisplayScreenTrack : IDisposable
     private void Report() => _metrics.Report(_graphics, _media, _display, RequestId, _alpha, TransformComputations, Screen.Name);
     public void Complete(string reason)
     {
-        if (!_media.IsOpen)
+        if (reason == "Error") _retryAt = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
+        if (!IsOpen)
         {
             _state.TransitionTo(RendererState.Idle);
             _alpha = 0;
@@ -228,7 +310,7 @@ internal sealed class DisplayScreenTrack : IDisposable
             PositionSeconds = _media.Position,
             DwmFlushResult = flushResult
         }, RequestId);
-        Report();
+        if (!_stillImage) Report();
         Telemetry.Info("PlaybackStopped", new
         {
             DisplayName = _display,
@@ -238,6 +320,7 @@ internal sealed class DisplayScreenTrack : IDisposable
             Reason = reason
         }, RequestId);
         _media.Dispose();
+        _stillImage = false;
         _state.TransitionTo(RendererState.Idle);
         _alpha = 0;
         RequestId = null;

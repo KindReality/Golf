@@ -41,6 +41,7 @@ internal static class DisplayBackground
 
     public static Color4 For(string display, ExperienceOptions options)
     {
+        if (options.ScreensFor(display).Any(s => s.IsVisualization)) return new(0, 0, 0, 0);
         foreach (var entry in options.DisplayBackgrounds)
             if (string.Equals(Resolve(entry.Key, options.DisplayAliases), display, StringComparison.OrdinalIgnoreCase))
                 return entry.Value.IsTransparent ? new(0, 0, 0, 0) : Parse(entry.Value.BackgroundColor);

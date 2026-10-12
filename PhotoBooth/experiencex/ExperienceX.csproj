@@ -10,6 +10,7 @@
     <None Include="..\Shared\Updates\Stage-ApplicationUpdate.ps1" Link="Stage-ApplicationUpdate.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Compile Include="..\Shared\Configuration\*.cs" Link="Configuration\Shared\%(Filename)%(Extension)" />
     <Compile Include="..\Shared\Networking\*.cs" Link="Networking\Shared\%(Filename)%(Extension)" />
+    <Compile Include="..\Shared\Windows\*.cs" Link="Windows\Shared\%(Filename)%(Extension)" />
   </ItemGroup>
   <PropertyGroup>
     <OutputType>WinExe</OutputType>

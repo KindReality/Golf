@@ -42,7 +42,7 @@ internal static class ScreenSelection
         var outputs = new List<(string, ScreenOptions)>();
         foreach (var display in displays.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var videos = options.ScreensFor(display).Where(s => !s.IsMat);
+            var videos = options.ScreensFor(display).Where(s => s.IsVideo);
             if (target.Name is null) videos = videos.Take(1);
             else if (target.Name != "*") videos = videos.Where(s => s.Name.Equals(target.Name, StringComparison.OrdinalIgnoreCase));
             outputs.AddRange(videos.Select(screen => (display, screen)));

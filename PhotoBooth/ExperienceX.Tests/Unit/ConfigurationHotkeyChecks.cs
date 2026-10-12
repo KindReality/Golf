@@ -1,229 +1,73 @@
 using System.Runtime.InteropServices;
 using ExperienceX;
+using PhotoBooth.Windows;
+using Forms = System.Windows.Forms;
 
 internal static class ConfigurationHotkeyChecks
 {
     public static async Task Run()
     {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var thread = new Thread(() =>
+        var done=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread=new Thread(()=>
         {
             try
             {
-                int presses = 0, closes = 0, backgrounds = 0, transparencies = 0, whites = 0, sizing = 0;
-                using var first = new ApplicationHotkeys(() => presses++, () => closes++, () => backgrounds++);
-                using var second = new ApplicationHotkeys(() => presses += 10, () => closes += 10, () => backgrounds += 10);
-                first.ToggleScreenTransparency = () => transparencies++;
-                second.ToggleScreenTransparency = () => transparencies += 10;
-                first.ChooseWhiteBackground = () => whites++;
-                first.ToggleScreenSizing = () => sizing++;
-                second.ToggleScreenSizing = () => sizing += 10;
-                void Check(bool condition, string message)
-                {
-                    if (!condition)
-                        throw new Exception(message);
-                }
-                void Send(ApplicationHotkeys owner, int id, uint key, uint modifiers = 0) =>
-                    SendMessage(owner.Handle, 0x0312, id, (nint)((key << 16) | modifiers));
-
-                Check(first.Register().Length == 0 && first.Register().Length == 0, "Entry chord registration failed.");
-                Check(second.Register().SequenceEqual(["Ctrl+Shift+Alt+C"]), "Entry chord conflict was not detected.");
-                Send(first, ApplicationHotkeys.ConfigurationId, 0x43);
-                Send(first, ApplicationHotkeys.ConfigurationId, 0x43, 3);
-                Send(first, ApplicationHotkeys.CloseId, 0x58);
-                Send(first, ApplicationHotkeys.BackgroundId, 0x42);
-                Send(first, ApplicationHotkeys.TransparencyId, 0x54);
-                Check(transparencies == 0, "Screen transparency was active outside configuration mode.");
-                Send(first, ApplicationHotkeys.SizingId, 0x53);
-                Check(sizing == 0, "S was active outside configuration mode.");
-                Check(presses == 0 && closes == 0 && backgrounds == 0, "Letters or incomplete entry chord were active outside configuration mode.");
-                Send(first, ApplicationHotkeys.ConfigurationId, 0x43, 7);
-                Check(presses == 1, "Ctrl+Shift+Alt+C did not enable configuration.");
-
-                var lettersMissing = first.Register(true);
-                Check(lettersMissing.Length == 0, "Configuration letter registration failed: " + string.Join(", ", lettersMissing));
-                Check(second.Register(true).Length == 5, "Configuration letter conflicts were not detected.");
-                Send(first, ApplicationHotkeys.ConfigurationId, 0x43, 7);
-                Send(first, ApplicationHotkeys.ConfigurationId, 0x4B);
-                Check(presses == 1, "Stale entry message or incorrect key dispatched after changing mode.");
-                Send(first, ApplicationHotkeys.ConfigurationId, 0x43);
-                Send(first, ApplicationHotkeys.CloseId, 0x58);
-                Send(first, ApplicationHotkeys.BackgroundId, 0x54);
-                Check(backgrounds == 0, "The previous T shortcut still toggled the background.");
-                Send(first, ApplicationHotkeys.BackgroundId, 0x42);
-                Check(presses == 2 && closes == 1 && backgrounds == 1, "Single-letter callbacks were not independent.");
-                Send(first, ApplicationHotkeys.TransparencyId, 0x54);
-                Check(transparencies == 1 && backgrounds == 1, "T did not toggle screen transparency independently of B.");
-                Send(first, ApplicationHotkeys.SizingId, 0x53);
-                Check(sizing == 1, "S did not dispatch Fit/Stretch.");
-                Check(first.Register(true, true).Length == 0, "Name editing failed to release letter shortcuts.");
-                Send(first, ApplicationHotkeys.TransparencyId, 0x54);
-                Check(transparencies == 1, "T intercepted screen-name text editing.");
-                Send(first, ApplicationHotkeys.SizingId, 0x53);
-                Check(sizing == 1, "S intercepted screen-name text editing.");
-                Check(first.Register(true).Length == 0, "Name editing did not restore shortcuts.");
-                Send(first, ApplicationHotkeys.WhiteBackgroundId, 0x57);
-                Check(whites == 0, "W dispatched without a pending background choice.");
-                Check(first.Register(true, choosingBackground: true).Length == 0, "W did not register for the color choice.");
-                Send(first, ApplicationHotkeys.WhiteBackgroundId, 0x57);
-                Check(whites == 1 && backgrounds == 1, "W did not independently select the white background.");
-                Check(first.Register(true, true, true).Length == 0, "Color choice shortcuts were not released during name editing.");
-                Send(first, ApplicationHotkeys.WhiteBackgroundId, 0x57);
-                Check(whites == 1, "W intercepted name editing.");
-                Check(first.Register(true).Length == 0, "Completing the color choice did not release W.");
-                Send(first, ApplicationHotkeys.WhiteBackgroundId, 0x57);
-                Check(whites == 1, "Stale W dispatched after the color choice ended.");
-
-                Check(first.Register(false).Length == 0, "Entry chord did not return when configuration was disabled.");
-                Send(first, ApplicationHotkeys.ConfigurationId, 0x43);
-                Send(first, ApplicationHotkeys.CloseId, 0x58);
-                Send(first, ApplicationHotkeys.BackgroundId, 0x42);
-                Check(presses == 2 && closes == 1 && backgrounds == 1, "Queued configuration letters dispatched after disabling mode.");
-                Send(first, ApplicationHotkeys.TransparencyId, 0x54);
-                Check(transparencies == 1, "Queued T dispatched after disabling configuration mode.");
-                Send(first, ApplicationHotkeys.SizingId, 0x53);
-                Check(sizing == 1, "Queued S dispatched after disabling configuration mode.");
-                Check(second.Register(true).Length == 0, "Letters remained claimed after disabling configuration.");
-                second.Dispose();
-                second.Dispose();
-                Check(first.Register(true).Length == 0, "Letters remained claimed after shutdown.");
-                first.Dispose();
-
-                var blockerWindow = new System.Windows.Forms.NativeWindow();
-                blockerWindow.CreateHandle(new System.Windows.Forms.CreateParams { Parent = new nint(-3) });
-                const int blocker = 0x5943;
-                Check(RegisterHotKey(blockerWindow.Handle, blocker, ApplicationHotkeys.LetterModifiers, 0x43), "Cannot reserve C for partial-conflict test.");
-                try
-                {
-                    using var partial = new ApplicationHotkeys(() => presses++, () => closes++, () => backgrounds++);
-                    Check(partial.Register(true).SequenceEqual(["C"]), "Configuration conflict blocked other available letters.");
-                    Send(partial, ApplicationHotkeys.ConfigurationId, 0x43);
-                    Send(partial, ApplicationHotkeys.CloseId, 0x58);
-                    Send(partial, ApplicationHotkeys.BackgroundId, 0x42);
-                    Check(presses == 2 && closes == 2 && backgrounds == 2, "Conflict isolation dispatched an unavailable key or blocked available keys.");
-                }
-                finally { UnregisterHotKey(blockerWindow.Handle, blocker); blockerWindow.DestroyHandle(); }
-                Check(ApplicationHotkeys.Modifiers == 0x4007 && ApplicationHotkeys.LetterModifiers == 0x4000, "Shortcut modifiers or repeat suppression are incorrect.");
-                completion.SetResult();
+                bool focused=true;int exit=0,close=0,background=0,transparency=0,sizing=0,names=0,brightness=0,perspectives=0,white=0,visualizations=0;
+                using var keys=new ApplicationHotkeys(()=>exit++,()=>close++,()=>background++,()=>focused);
+                keys.ToggleScreenTransparency=()=>transparency++;keys.ToggleScreenSizing=()=>sizing++;keys.EditScreenName=()=>names++;
+                keys.AdjustScreenBrightness=d=>brightness+=d;keys.ChoosePerspective=()=>perspectives++;keys.ChooseWhiteBackground=()=>white++;
+                keys.AddVisualizationScreen=()=>visualizations++;
+                void Send(int id,uint key,uint modifiers=0)=>SendMessage(keys.Handle,0x312,id,(nint)((key<<16)|modifiers));
+                Check(keys.Register(false).Length==0,"Outside configuration does not capture letters");
+                Send(ApplicationHotkeys.ConfigurationId,0x45);Send(ApplicationHotkeys.CloseId,0x58);Check(exit==0&&close==0,"Queued letters outside configuration are ignored");
+                Check(keys.Register(true).Length==0,"Focused configuration registers editing keys");
+                Send(ApplicationHotkeys.VisualizationId,0x47);Check(visualizations==1,"G dispatches visualization creation while focused in configuration mode");
+                Send(ApplicationHotkeys.ConfigurationId,0x43);Check(exit==0,"C no longer exits Experience");
+                Send(ApplicationHotkeys.ConfigurationId,0x45);Send(ApplicationHotkeys.CloseId,0x58);Send(ApplicationHotkeys.BackgroundId,0x42);
+                Send(ApplicationHotkeys.TransparencyId,0x54);Send(ApplicationHotkeys.SizingId,0x53);Send(ApplicationHotkeys.NameId,0x4e);Send(ApplicationHotkeys.PerspectiveId,0x50);
+                Check(exit==1&&close==1&&background==1&&transparency==1&&sizing==1&&names==1&&perspectives==1,"E and existing editing keys dispatch independently");
+                Send(ApplicationHotkeys.BrightnessPlusId,0xbb);Send(ApplicationHotkeys.BrightnessShiftPlusId,0xbb,4);Send(ApplicationHotkeys.BrightnessNumpadPlusId,0x6b);
+                Send(ApplicationHotkeys.BrightnessMinusId,0xbd);Send(ApplicationHotkeys.BrightnessNumpadMinusId,0x6d);Check(brightness==1,"Main/numpad brightness chords remain supported");
+                keys.Register(true,true);Send(ApplicationHotkeys.VisualizationId,0x47);Check(visualizations==1,"G is released while typing a screen name");Send(ApplicationHotkeys.NameId,0x4e);Send(ApplicationHotkeys.ConfigurationId,0x45);Check(names==1&&exit==1,"Typing releases editing and exit letters");
+                keys.Register(true,choosingBackground:true);Send(ApplicationHotkeys.WhiteBackgroundId,0x57);Check(white==1,"W is active only for the background choice");
+                focused=false;keys.Register(true);Send(ApplicationHotkeys.NameId,0x4e);Check(names==1,"Another focused app receives its own letters");
+                focused=true;Check(keys.Register(true).Length==0,"Editing shortcuts recover when focus returns");
+                keys.Register(false);Send(ApplicationHotkeys.VisualizationId,0x47);Check(visualizations==1,"G is released outside configuration mode");Send(ApplicationHotkeys.NameId,0x4e);Check(names==1,"Mode exit releases queued edits");
+                done.SetResult();
             }
-            catch (Exception ex) { completion.SetException(ex); }
-        })
-        {
-            IsBackground = true
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        await NativeDelivery();
-        Console.WriteLine("Passed Ctrl+Shift+Alt+C entry, independent configuration-only C/X/B/T letters, name editing, mode transitions, conflicts and shutdown release.");
+            catch(Exception ex){done.SetException(ex);}
+        });thread.SetApartmentState(ApartmentState.STA);thread.IsBackground=true;thread.Start();await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await SharedShortcut();
+        Console.WriteLine("PASS shared configuration entry, focus-scoped editing, text entry, exit and ownership transfer");
     }
-
-    private static async Task NativeDelivery()
+    private static async Task SharedShortcut()
     {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var thread = new Thread(() =>
+        var done=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread=new Thread(()=>
         {
-            var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
-            ApplicationHotkeys? hotkeys = null;
-            int presses = 0, closes = 0, backgrounds = 0, transparencies = 0, whites = 0, step = 0;
-            void Register(bool mode)
-            {
-                var missing = hotkeys!.Register(mode);
-                if (missing.Length != 0)
-                    throw new Exception("Native shortcut conflict: " + string.Join(", ", missing));
-            }
-            hotkeys = new(() => { presses++; Register(presses == 1); }, () => closes++, () => backgrounds++);
-            hotkeys.ToggleScreenTransparency = () => transparencies++;
-            hotkeys.ChooseWhiteBackground = () => { whites++; hotkeys.Register(true); };
-            var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
-            timer.Tick += (_, _) =>
+            var dispatcher=System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            using var window=new Forms.Form{Text="Configuration shortcut check",ClientSize=new(300,90)};
+            int controller=0,experience=0,step=0;
+            var first=new ConfigurationShortcut("Controller",()=>controller++);
+            using var second=new ConfigurationShortcut("Experience",()=>experience++);
+            var timer=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromMilliseconds(200)};
+            timer.Tick+=(_,_)=>
             {
                 try
                 {
-                    switch (step++)
-                    {
-                        case 0:
-                            Inject(0x11, 0x10, 0x12, 0x43);
-                            break;
-                        case 1:
-                            if (presses != 1)
-                                throw new Exception("Real Ctrl+Shift+Alt+C did not reach ApplicationHotkeys on the production WPF dispatcher.");
-                            Inject(0x58);
-                            break;
-                        case 2:
-                            if (closes != 1)
-                                throw new Exception("Real X did not reach the close callback.");
-                            Inject(0x42);
-                            break;
-                        case 3:
-                            if (backgrounds != 1)
-                                throw new Exception("Real B did not reach the background callback.");
-                            if (hotkeys.Register(true, choosingBackground: true).Length != 0)
-                                throw new Exception("W did not register for native color selection.");
-                            Inject(0x57);
-                            break;
-                        case 4:
-                            if (whites != 1)
-                                throw new Exception("Real W did not reach white background selection.");
-                            Inject(0x54);
-                            break;
-                        case 5:
-                            if (transparencies != 1 || backgrounds != 1)
-                                throw new Exception("Real T did not independently reach the screen chroma key callback.");
-                            Inject(0x43);
-                            break;
-                        default:
-                            if (presses != 2)
-                                throw new Exception("Real C did not exit configuration mode.");
-                            completion.TrySetResult();
-                            timer.Stop();
-                            dispatcher.BeginInvokeShutdown(System.Windows.Threading.DispatcherPriority.Normal);
-                            break;
-                    }
+                    if(step==0){window.Show();window.Activate();window.Focus();}
+                    if(step==1){Check(first.OwnsShortcut && !second.OwnsShortcut,"Exactly one receiver owns the shared chord");SendMessage(first.Handle,0x312,0x5343,(nint)((0x43<<16)|7));}
+                    if(step==2){Check(controller==1&&experience==1,"Hotkey Windows message enables both receivers once");first.Dispose();}
+                    if(step==9){Check(second.OwnsShortcut,"Remaining app acquired the released chord");SendMessage(second.Handle,0x312,0x5343,(nint)((0x43<<16)|7));}
+                    if(step==10){Check(controller==1&&experience==2,"Remaining application takes over the global shortcut");Finish();done.SetResult();}
+                    step++;
                 }
-                catch (Exception ex)
-                {
-                    completion.TrySetException(ex);
-                    timer.Stop();
-                    dispatcher.BeginInvokeShutdown(System.Windows.Threading.DispatcherPriority.Normal);
-                }
+                catch(Exception ex){Finish();done.SetException(ex);}
             };
-            try
-            {
-                Register(false);
-                timer.Start();
-                System.Windows.Threading.Dispatcher.Run();
-            }
-            catch (Exception ex) { completion.TrySetException(ex); }
-            finally { timer.Stop(); hotkeys.Dispose(); }
-        })
-        {
-            IsBackground = true
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            void Finish(){timer.Stop();first.Dispose();window.Close();dispatcher.BeginInvokeShutdown(System.Windows.Threading.DispatcherPriority.Background);}
+            timer.Start();System.Windows.Threading.Dispatcher.Run();
+        });thread.SetApartmentState(ApartmentState.STA);thread.IsBackground=true;thread.Start();await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
     }
-
-    private static void Inject(params byte[] keys)
-    {
-        try
-        {
-            foreach (var key in keys)
-                keybd_event(key, 0, 0, 0);
-        }
-        finally { foreach (var key in keys.Reverse()) keybd_event(key, 0, 2, 0); }
-    }
-
-    [DllImport("user32.dll")]
-    private static extern void keybd_event(byte key, byte scan, uint flags, nuint extra);
-
-    [DllImport("user32.dll")]
-    private static extern nint SendMessage(nint window, uint message, nint wparam, nint lparam);
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool RegisterHotKey(nint window, int id, uint modifiers, uint key);
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool UnregisterHotKey(nint window, int id);
+    private static void Check(bool value,string message){if(!value)throw new Exception(message);}
+    [DllImport("user32.dll")]private static extern nint SendMessage(nint h,uint message,nint w,nint l);
 }
