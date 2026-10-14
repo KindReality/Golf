@@ -37,7 +37,7 @@ internal static class ScreenChromaKeyHardwareChecks
             {
                 graphics.BeginFrame(DisplayBackground.For("TEST", options));
                 foreach (var screen in new[] { left, right })
-                    graphics.DrawLayer(view, 1, options, VideoTransform.Inverse(screen.Points), 64, 64, screen.EffectiveBlackKey(options));
+                    graphics.DrawLayer(view, 1, options, VideoTransform.Inverse(screen.Points), screen.EffectiveBlackKey(options));
                 using var buffer = graphics.SwapChain.GetBuffer<ID3D11Texture2D>(0);
                 graphics.Context.CopyResource(staging, buffer);
                 var map = graphics.Context.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);

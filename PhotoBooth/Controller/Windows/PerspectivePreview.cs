@@ -133,7 +133,7 @@ internal sealed class PerspectivePreview : C.Grid
             for (int i = 0; i < 4; i++)
             {
                 var point = Corners(r)[i];
-                var azure = selected && i == (_handle < 0 ? 0 : _handle);
+                var azure = selected && (_handle >= 4 ? EdgeCorners(_handle - 4).Contains(i) : i == (_handle < 0 ? 0 : _handle));
                 var color = azure ? M.Color.FromRgb(0, 166, 255) : M.Color.FromRgb(255, 67, 83);
                 var orb = new S.Ellipse
                 {
@@ -175,26 +175,47 @@ internal sealed class PerspectivePreview : C.Grid
     {
         if (e.OriginalSource is C.TextBlock { Tag: string id }) { Select(id); RenameRequested?.Invoke(); e.Handled = true; return; }
         Focus();
-        var pointer = e.GetPosition(_overlay); var a = MediaArea;
-        if (a.Width <= 0 || a.Height <= 0) return;
+        e.Handled = BeginPointer(e.GetPosition(_overlay));
+    }
+    internal bool BeginPointer(W.Point pointer)
+    {
+        var a = MediaArea;
+        if (a.Width <= 0 || a.Height <= 0) return false;
         var radius = HitDiameterPercent / 200 * Math.Sqrt(a.Width * a.Width + a.Height * a.Height);
         var candidates = new List<(PerspectiveDefinition P, int H)>();
         foreach (var p in _perspectives)
         { var corners = Corners(Rectangle(p.Rectangle)); for (int i = 0; i < 4; i++) if ((corners[i] - pointer).Length <= radius) candidates.Add((p, i)); }
+        if (candidates.Count == 0) foreach (var p in _perspectives)
+        {
+            var r = Rectangle(p.Rectangle);
+            if (pointer.X >= r.Left - 8 && pointer.X <= r.Right + 8 && Math.Abs(pointer.Y - r.Top) <= 8) candidates.Add((p, 4));
+            if (pointer.Y >= r.Top - 8 && pointer.Y <= r.Bottom + 8 && Math.Abs(pointer.X - r.Right) <= 8) candidates.Add((p, 5));
+            if (pointer.X >= r.Left - 8 && pointer.X <= r.Right + 8 && Math.Abs(pointer.Y - r.Bottom) <= 8) candidates.Add((p, 6));
+            if (pointer.Y >= r.Top - 8 && pointer.Y <= r.Bottom + 8 && Math.Abs(pointer.X - r.Left) <= 8) candidates.Add((p, 7));
+        }
         if (candidates.Count == 0) foreach (var p in _perspectives) if (Rectangle(p.Rectangle).Contains(pointer)) candidates.Add((p, -1));
-        if (candidates.Count == 0) { Select(null); return; }
+        if (candidates.Count == 0) { Select(null); return false; }
         var hits = string.Join("|", candidates.Select(c => c.P.Id + ":" + c.H));
         _cycle = hits == _hits ? (_cycle + 1) % candidates.Count : 0; _hits = hits;
         var target = candidates[_cycle]; SelectedId = target.P.Id; _handle = target.H; _original = target.P; _start = pointer;
-        _overlay.CaptureMouse(); Selected?.Invoke(SelectedId); Draw(); e.Handled = true;
+        _overlay.CaptureMouse(); Selected?.Invoke(SelectedId); Draw(); return true;
     }
     private void Move(object sender, I.MouseEventArgs e)
     {
         if (_original is null || e.LeftButton != I.MouseButtonState.Pressed) return;
-        var a = MediaArea; var delta = e.GetPosition(_overlay) - _start;
+        MovePointer(e.GetPosition(_overlay));
+    }
+    internal void MovePointer(W.Point pointer)
+    {
+        if (_original is null) return;
+        var a = MediaArea; var delta = pointer - _start;
         var dx = delta.X / a.Width * 100; var dy = delta.Y / a.Height * 100; var r = _original.Rectangle;
         double left = r.X, top = r.Y, right = r.X + r.Width, bottom = r.Y + r.Height;
-        if (_handle < 0) { left = Math.Clamp(left + dx, 0, 100 - r.Width); top = Math.Clamp(top + dy, 0, 100 - r.Height); right = left + r.Width; bottom = top + r.Height; }
+        if (_handle >= 4)
+        {
+            var resized = DragEdge(r, _handle - 4, dx, dy); left = resized.X; top = resized.Y; right = left + resized.Width; bottom = top + resized.Height;
+        }
+        else if (_handle < 0) { left = Math.Clamp(left + dx, 0, 100 - r.Width); top = Math.Clamp(top + dy, 0, 100 - r.Height); right = left + r.Width; bottom = top + r.Height; }
         else
         {
             if (_handle is 0 or 2) left = Math.Clamp(left + dx, 0, right - Math.Min(.1,r.Width)); else right = Math.Clamp(right + dx, left + Math.Min(.1,r.Width), 100);
@@ -204,11 +225,23 @@ internal sealed class PerspectivePreview : C.Grid
         _perspectives = _perspectives.Select(p => p.Id == next.Id ? next : p).ToArray(); Draw();
     }
     private void Up(object sender, I.MouseButtonEventArgs e)
+        => FinishPointer();
+    internal void FinishPointer()
     {
         if (_original is not { } original) return;
         var next = _perspectives.Single(p => p.Id == original.Id); _original = null; _overlay.ReleaseMouseCapture();
         if (next != original) Completed?.Invoke(original, next);
         Draw();
+    }
+    private static int[] EdgeCorners(int edge) => edge switch { 0 => [0, 1], 1 => [1, 3], 2 => [2, 3], _ => [0, 2] };
+    private static PerspectiveRectangle DragEdge(PerspectiveRectangle r, int edge, double dx, double dy)
+    {
+        var left = r.X; var top = r.Y; var right = r.X + r.Width; var bottom = r.Y + r.Height;
+        if (edge == 0) top = Math.Clamp(top + dy, 0, bottom - Math.Min(.1, r.Height));
+        if (edge == 1) right = Math.Clamp(right + dx, left + Math.Min(.1, r.Width), 100);
+        if (edge == 2) bottom = Math.Clamp(bottom + dy, top + Math.Min(.1, r.Height), 100);
+        if (edge == 3) left = Math.Clamp(left + dx, 0, right - Math.Min(.1, r.Width));
+        return new() { X = left, Y = top, Width = right - left, Height = bottom - top };
     }
     public void CancelEdit()
     {
@@ -219,7 +252,7 @@ internal sealed class PerspectivePreview : C.Grid
     public void NextPoint(bool reverse)
     {
         FinishKeyboardEdit();
-        _handle = (_handle + (reverse ? 3 : 1) + 4) % 4; Draw();
+        _handle = ((_handle >= 4 ? -1 : _handle) + (reverse ? 3 : 1) + 4) % 4; Draw();
     }
     public void Nudge(int x, int y, int pixels)
     {
@@ -228,7 +261,11 @@ internal sealed class PerspectivePreview : C.Grid
         var r = selected.Rectangle;
         var dx = x * pixels / Math.Max(1, _mediaWidth) * 100; var dy = y * pixels / Math.Max(1, _mediaHeight) * 100;
         double left = r.X, top = r.Y, right = r.X + r.Width, bottom = r.Y + r.Height;
-        if (_handle < 0) { left = Math.Clamp(left + dx, 0, 100 - r.Width); top = Math.Clamp(top + dy, 0, 100 - r.Height); right = left + r.Width; bottom = top + r.Height; }
+        if (_handle >= 4)
+        {
+            var resized = DragEdge(r, _handle - 4, dx, dy); left = resized.X; top = resized.Y; right = left + resized.Width; bottom = top + resized.Height;
+        }
+        else if (_handle < 0) { left = Math.Clamp(left + dx, 0, 100 - r.Width); top = Math.Clamp(top + dy, 0, 100 - r.Height); right = left + r.Width; bottom = top + r.Height; }
         else
         {
             if (_handle is 0 or 2) left = Math.Clamp(left + dx, 0, right - Math.Min(.1,r.Width)); else right = Math.Clamp(right + dx, left + Math.Min(.1,r.Width), 100);

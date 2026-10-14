@@ -2,6 +2,9 @@ namespace ExperienceX;
 
 internal static class ScreenSelection
 {
+    internal static IEnumerable<ScreenOptions> EditablePoints(IReadOnlyList<ScreenOptions> screens, string? selectedId)
+        => screens.FirstOrDefault(s => s.IsVisualization && s.Id == selectedId) is { } visual
+            ? [visual] : screens.Where(s => !s.IsVisualization);
     // Selection always uses the configured coordinates, including before video starts.
     public static bool Contains(PointOptions k, double x, double y)
     {
@@ -35,14 +38,24 @@ internal static class ScreenSelection
     }
     public static IReadOnlyList<(string Display, ScreenOptions Screen)> VideoOutputs(ExperienceRequest request, ExperienceOptions options,
         IReadOnlyList<string> available, string? primary)
+        => Outputs(request, options, available, primary, s => s.IsVideo);
+    public static IReadOnlyList<(string Display, ScreenOptions Screen)> VisualizationOutputs(ExperienceRequest request, ExperienceOptions options,
+        IReadOnlyList<string> available, string? primary)
+        => Outputs(request, options, available, primary, s => s.IsVisualization);
+    private static IReadOnlyList<(string Display, ScreenOptions Screen)> Outputs(ExperienceRequest request, ExperienceOptions options,
+        IReadOnlyList<string> available, string? primary, Func<ScreenOptions, bool> include)
     {
+        if (request.HasRoles)
+            return available.Distinct(StringComparer.OrdinalIgnoreCase).SelectMany(display => options.ScreensFor(display)
+                .Where(screen => include(screen) && PhotoBooth.Networking.RoleList.Matches(screen.Roles, request.Roles))
+                .Select(screen => (display, screen))).ToArray();
         var target = Target(request);
         var single = target.Display == "*" ? null : OutputSelection.Display(target.Display, options.DefaultDisplayName, available, primary, options.DisplayAliases);
         var displays = target.Display == "*" ? available : single is null ? [] : new[] { single };
         var outputs = new List<(string, ScreenOptions)>();
         foreach (var display in displays.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var videos = options.ScreensFor(display).Where(s => s.IsVideo);
+            var videos = options.ScreensFor(display).Where(include);
             if (target.Name is null) videos = videos.Take(1);
             else if (target.Name != "*") videos = videos.Where(s => s.Name.Equals(target.Name, StringComparison.OrdinalIgnoreCase));
             outputs.AddRange(videos.Select(screen => (display, screen)));

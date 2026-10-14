@@ -59,7 +59,7 @@ internal sealed class CoordinatedAudioOutput : IDisposable
             var mix = _client.MixFormat;
             _rate = mix.SampleRate;
             _channels = mix.Channels;
-            if (request.Channel > _channels || (!request.Channel.HasValue && source.Channels > _channels))
+            if (request.Channel > _channels || (!request.Channel.HasValue && _channels != 1 && source.Channels > _channels))
                 throw new ArgumentException("Audio source/channel does not fit the selected endpoint layout.");
             WaveFormat format = _channels > 2 ? new WaveFormatExtensible(_rate, 32, _channels)
                 : WaveFormat.CreateIeeeFloatWaveFormat(_rate, _channels);

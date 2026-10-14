@@ -9,6 +9,12 @@ internal sealed record AudioDeviceSelection(AudioOutput[] Devices, string[] Unav
         var missing = new List<string>();
         void Physical(string target)
         {
+            if (target.Trim() == "*")
+            {
+                foreach (var output in available) devices.TryAdd(output.Id, output);
+                if (available.Count == 0) missing.Add("All active audio outputs");
+                return;
+            }
             var device = OutputSelection.Audio(target, null, available, defaultId);
             if (device is null)
                 missing.Add(target);
@@ -30,7 +36,13 @@ internal sealed record AudioDeviceSelection(AudioOutput[] Devices, string[] Unav
             foreach (var member in group.Value)
                 Physical(member);
         }
-        if (request.AudioDevices is not null)
+        if (request.HasRoles)
+        {
+            foreach (var device in available.Where(device => PhotoBooth.Networking.RoleList.Matches(AudioDeviceOptions.RolesFor(device, options), request.Roles)))
+                devices.TryAdd(device.Id, device);
+            if (devices.Count == 0) missing.Add("Roles: " + request.Roles);
+        }
+        else if (request.AudioDevices is not null)
         {
             foreach (var target in request.AudioDevices)
                 Expand(target);
@@ -79,7 +91,7 @@ internal sealed record AudioDeviceSelection(AudioOutput[] Devices, string[] Unav
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in groups)
         {
-            if (string.IsNullOrWhiteSpace(pair.Key) || pair.Key.Contains(',') || !names.Add(pair.Key.Trim()) ||
+            if (string.IsNullOrWhiteSpace(pair.Key) || pair.Key.Trim() == "*" || pair.Key.Contains(',') || !names.Add(pair.Key.Trim()) ||
                 pair.Value is null || pair.Value.Length is 0 or > 32 || pair.Value.Any(string.IsNullOrWhiteSpace))
                 throw new ArgumentException("VirtualAudioDevices requires unique nonempty names without commas and lists of 1–32 physical device names/IDs.");
         }

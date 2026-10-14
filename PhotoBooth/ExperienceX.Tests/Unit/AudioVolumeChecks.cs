@@ -23,6 +23,10 @@ internal static class AudioVolumeChecks
         }
 
         var options = new ExperienceOptions { AudioTransitionInSeconds = 0, AudioTransitionOutSeconds = 0 };
+        var mono = new RoutedAudioProvider(new TestSamples(), 1, null, false, 1, options, 50);
+        var monoSamples = new float[48_000];
+        if (mono.Read(monoSamples, 0, monoSamples.Length) != monoSamples.Length || monoSamples.Any(sample => Math.Abs(sample - .25f) > .000001))
+            throw new Exception("Mono output lost source audio, per-track gain, or frame count.");
         foreach (var volume in new[] { 0.0, 12.5, 50, 100 })
         {
             var provider = new RoutedAudioProvider(new TestSamples(), 2, 2, false, 1, options, volume);

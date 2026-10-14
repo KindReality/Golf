@@ -31,6 +31,8 @@ internal sealed class DisplayScreenTrack : IDisposable
     private bool _loop;
     private int _loops;
     private ScreenMediaBinding? _binding;
+    private VideoPriorityLease? _priority;
+    private VideoLoopIdentity? _loopIdentity;
     private bool _stillImage;
     private long _retryAt;
     private readonly Action<int, int> _createVideoTexture;
@@ -48,6 +50,7 @@ internal sealed class DisplayScreenTrack : IDisposable
     internal ScreenPlaybackSnapshot Snapshot => new(Screen.Id, Screen.Name, State, _media.Position, _alpha, _stillImage ? 1 : _metrics.TransferredFrames, RequestId, _loops, NameLocked, _binding?.Path, Screen.Brightness);
     public RendererState State => _state.Current;
     public bool Animating => _overlay.Animating(_options) || _stillImage && _alpha < 1;
+    internal bool ContentAnimating => _stillImage && _alpha < 1;
     public long TransformComputations => _transforms.Computations + _overlayTransforms.Computations;
     public DisplayScreenTrack(GraphicsResources graphics, string display, ScreenOptions screen, ExperienceOptions options, Action wake, Action present)
     {
@@ -151,7 +154,25 @@ internal sealed class DisplayScreenTrack : IDisposable
     public void Open(string path, ExperienceRequest request)
     {
         if (!Screen.IsVideo) throw new ArgumentException("Only video screens receive playback commands.");
+        var looping = VideoLoopIdentity.For(path, _display, request);
+        if (_media.IsOpen && !_timeline.Stopping && looping is not null && _loopIdentity == looping)
+        {
+            var previousRequestId = RequestId;
+            var previousPriority = _priority;
+            _priority = request.VideoPriority;
+            previousPriority?.Dispose();
+            RequestId = request.RequestId;
+            _source = request.Source;
+            Telemetry.Info("VideoLoopContinued", new
+            {
+                Path = path, DisplayName = _display, ScreenName = Screen.Name,
+                PreviousRequestId = previousRequestId, PositionSeconds = _media.Position, SurfaceOpacity = _alpha, request.IsAmbient
+            }, RequestId);
+            return;
+        }
         Complete("Replaced");
+        _priority = request.VideoPriority;
+        _loopIdentity = looping;
         RequestId = request.RequestId;
         _source = request.Source;
         _loop = request.Loop;
@@ -170,11 +191,13 @@ internal sealed class DisplayScreenTrack : IDisposable
             ScreenName = Screen.Name,
             Muted = request.Mute,
             request.Loop,
+            request.IsAmbient,
             SurfaceOpacity = 0
         }, RequestId);
     }
     public void Tick()
     {
+        if (StopInterrupted()) return;
         if (_stillImage)
         {
             Draw(_timeline.Advance(_options, null, 0, false).Opacity);
@@ -259,11 +282,11 @@ internal sealed class DisplayScreenTrack : IDisposable
         if (!Screen.IsVideo) return;
         var points = _overlay.Preview ?? Screen.Points;
         var inverse = _alpha > 0 ? _transforms.Get(points) : default;
-        _graphics.DrawLayer(_view, _alpha, _options, inverse, _videoWidth, _videoHeight, Screen.EffectiveBlackKey(_options), Screen.SizingMode, points, _stillImage, Screen.Brightness, Screen.Perspective?.Rectangle);
+        _graphics.DrawLayer(_view, _alpha, _options, inverse, Screen.EffectiveBlackKey(_options), _stillImage, Screen.Brightness, Screen.Perspective?.Rectangle);
     }
     public void DrawMat()
     {
-        if (Screen.IsMat) _mat.Draw(_overlay.Preview ?? Screen.Points);
+        if (Screen.IsPolygon) _mat.Draw(_overlay.Preview ?? Screen.Points, Screen.IsVisualization || Screen.IsNegative);
     }
     internal bool SelectedScreen => _overlay.SelectedScreen;
     public void DrawOverlay()
@@ -288,7 +311,23 @@ internal sealed class DisplayScreenTrack : IDisposable
         _view = _graphics.Device.CreateShaderResourceView(_texture);
     }
     private void Report() => _metrics.Report(_graphics, _media, _display, RequestId, _alpha, TransformComputations, Screen.Name);
+    internal bool StopInterrupted()
+    {
+        if (_priority?.IsInterrupted != true) return false;
+        Complete("NormalVideoPriority");
+        return true;
+    }
     public void Complete(string reason)
+    {
+        try { CompleteCore(reason); }
+        finally
+        {
+            _priority?.Dispose();
+            _priority = null;
+            _loopIdentity = null;
+        }
+    }
+    private void CompleteCore(string reason)
     {
         if (reason == "Error") _retryAt = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
         if (!IsOpen)
@@ -327,6 +366,8 @@ internal sealed class DisplayScreenTrack : IDisposable
     }
     public void Dispose()
     {
+        _priority?.Dispose();
+        _priority = null;
         _media.Dispose();
         _overlay.Dispose();
         _mat.Dispose();

@@ -9,6 +9,7 @@
     <Compile Include="..\Shared\Updates\*.cs" Link="Updates\%(Filename)%(Extension)" />
     <None Include="..\Shared\Updates\Stage-ApplicationUpdate.ps1" Link="Stage-ApplicationUpdate.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Compile Include="..\Shared\Configuration\*.cs" Link="Configuration\Shared\%(Filename)%(Extension)" />
+    <Compile Include="..\Shared\Appearance\*.cs" Link="Appearance\%(Filename)%(Extension)" />
     <Compile Include="..\Shared\Networking\*.cs" Link="Networking\Shared\%(Filename)%(Extension)" />
     <Compile Include="..\Shared\Windows\*.cs" Link="Windows\Shared\%(Filename)%(Extension)" />
   </ItemGroup>
@@ -24,7 +25,7 @@
     <RootNamespace>ExperienceX</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
-    <ApplicationIcon Condition="Exists('Media\icon.ico')">Media\icon.ico</ApplicationIcon>
+    <ApplicationIcon>..\Shared\Appearance\Application.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <None Update="appsettings.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />

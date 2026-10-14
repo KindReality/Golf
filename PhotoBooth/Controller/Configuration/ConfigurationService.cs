@@ -74,6 +74,22 @@ internal sealed class ConfigurationService : IAsyncDisposable
             throw new InvalidOperationException("Perspectives changed remotely; reload before editing again.");
         root["Perspectives"] = System.Text.Json.JsonSerializer.SerializeToNode(next);
     });
+    public async Task<PhotoBooth.Networking.PerspectiveDefinition> CreatePerspectiveAsync(PhotoBooth.Networking.PerspectiveCreateRequest request)
+    {
+        request.Validate(); PhotoBooth.Networking.PerspectiveDefinition? saved=null;
+        await EditAsync(root=>
+        {
+            var current=ControllerOptions.Parse(root.ToJsonString(),_environment);
+            if(current.ControllerId!=request.ControllerId)throw new ArgumentException("The perspective targets another Controller.");
+            var existing=current.Perspectives.FirstOrDefault(p=>p.Id==request.PerspectiveId);
+            if(existing is not null) { saved=existing; return; } // Persistent idempotence, even after restart or retention expiry.
+            var name=request.Name;var names=current.Perspectives.Select(p=>p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            for(int i=2;names.Contains(name);i++){var suffix="-"+i;name=request.Name[..Math.Min(request.Name.Length,80-suffix.Length)]+suffix;}
+            saved=new(){Id=request.PerspectiveId,Name=name,Rectangle=request.Rectangle()};
+            root["Perspectives"]=System.Text.Json.JsonSerializer.SerializeToNode(current.Perspectives.Append(saved));
+        });
+        return saved!;
+    }
     private async Task EditAsync(Action<System.Text.Json.Nodes.JsonObject> edit)
     {
         await _edits.WaitAsync(_cancellation.Token);

@@ -9,6 +9,7 @@ namespace ExperienceX;
 internal sealed class TopmostGuard : IDisposable
 {
     private readonly Dispatcher _dispatcher;
+    private readonly bool _yieldToController;
     private readonly Func<bool> _isActive;
     private readonly Func<string?> _requestId;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
@@ -21,9 +22,9 @@ internal sealed class TopmostGuard : IDisposable
     private long _lastRaiseLog;
     private int _suppressedRaiseLogs;
 
-    public TopmostGuard(IntPtr handle, Dispatcher dispatcher, Func<bool> isActive, Func<string?> requestId)
+    public TopmostGuard(IntPtr handle, Dispatcher dispatcher, Func<bool> isActive, Func<string?> requestId, bool yieldToController = true)
     {
-        _dispatcher = dispatcher;
+        _dispatcher = dispatcher; _yieldToController=yieldToController;
         _isActive = isActive;
         _requestId = requestId;
         _handle = handle;
@@ -60,7 +61,8 @@ internal sealed class TopmostGuard : IDisposable
 
     public void EnsureTopmost(string reason, bool force = false)
     {
-        if (!_disposed && PhotoBooth.Windows.ConfigurationShortcut.ControllerFocused)
+        if (!_disposed && _yieldToController && ConfigurationDialog.Active) return;
+        if (!_disposed && _yieldToController && PhotoBooth.Windows.ConfigurationShortcut.ControllerFocused)
         {
             SetWindowPos(_handle, new IntPtr(-2), 0, 0, 0, 0, 0x0013);
             return;

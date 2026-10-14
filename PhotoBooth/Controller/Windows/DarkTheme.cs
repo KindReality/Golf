@@ -2,30 +2,18 @@ namespace Controller.Windows;
 
 internal static class DarkTheme
 {
-    public static readonly Color Background = Color.FromArgb(11, 16, 25);
-    public static readonly Color Surface = Color.FromArgb(19, 28, 41);
-    public static readonly Color Raised = Color.FromArgb(25, 38, 56);
-    public static readonly Color Border = Color.FromArgb(42, 60, 80);
-    public static readonly Color Text = Color.FromArgb(229, 237, 244);
-    public static readonly Color Muted = Color.FromArgb(147, 166, 186);
-    public static readonly Color Accent = Color.FromArgb(99, 215, 232);
-    public static readonly Color Selection = Color.FromArgb(30, 61, 78);
-    public static readonly Color Warning = Color.FromArgb(234, 191, 112);
-    public static readonly Color Error = Color.FromArgb(244, 139, 150);
+    public static readonly Color Background = PhotoBooth.Appearance.DarkFormsTheme.Background;
+    public static readonly Color Surface = PhotoBooth.Appearance.DarkFormsTheme.Surface;
+    public static readonly Color Raised = PhotoBooth.Appearance.DarkFormsTheme.Raised;
+    public static readonly Color Border = PhotoBooth.Appearance.DarkFormsTheme.Border;
+    public static readonly Color Text = PhotoBooth.Appearance.DarkFormsTheme.Text;
+    public static readonly Color Muted = PhotoBooth.Appearance.DarkFormsTheme.Muted;
+    public static readonly Color Accent = PhotoBooth.Appearance.DarkFormsTheme.Accent;
+    public static readonly Color Selection = PhotoBooth.Appearance.DarkFormsTheme.Selection;
+    public static readonly Color Warning = PhotoBooth.Appearance.DarkFormsTheme.Warning;
+    public static readonly Color Error = PhotoBooth.Appearance.DarkFormsTheme.Error;
 
-    public static void Button(Button button, bool primary = false)
-    {
-        button.FlatStyle = FlatStyle.Flat;
-        button.UseVisualStyleBackColor = false;
-        button.BackColor = primary ? Selection : Raised;
-        button.ForeColor = primary ? Accent : Text;
-        button.FlatAppearance.BorderColor = primary ? Color.FromArgb(61, 123, 143) : Border;
-        button.FlatAppearance.MouseOverBackColor = Selection;
-        button.FlatAppearance.MouseDownBackColor = Color.FromArgb(38, 80, 97);
-        button.Padding = new Padding(12, 5, 12, 5);
-        button.MinimumSize = new Size(0, 36);
-        button.Cursor = Cursors.Hand;
-    }
+    public static void Button(Button button, bool primary = false) => PhotoBooth.Appearance.DarkFormsTheme.Button(button, primary);
 
     public static void Choices(ComboBox box)
     {

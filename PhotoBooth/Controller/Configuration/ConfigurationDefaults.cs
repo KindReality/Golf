@@ -8,6 +8,16 @@ internal static class ConfigurationDefaults
         var options = ControllerOptions.Parse(text, build);
         var root = JsonNode.Parse(text)!.AsObject();
         var changed = false;
+        var existingPlaylists = root.FirstOrDefault(entry => ControllerOptions.Same(entry.Key, "Playlists")).Value as JsonArray;
+        if (existingPlaylists is not null)
+            foreach (var playlist in existingPlaylists.OfType<JsonObject>())
+                if (playlist.FirstOrDefault(entry => ControllerOptions.Same(entry.Key, "Items")).Value is JsonArray items)
+                    foreach (var item in items.OfType<JsonObject>())
+                    {
+                        if (!item.Any(entry => ControllerOptions.Same(entry.Key, "Roles"))) { item["Roles"] = ""; changed = true; }
+                        if (!item.Any(entry => ControllerOptions.Same(entry.Key, "BroadcastMode"))) { item["BroadcastMode"] = "Broadcast"; changed = true; }
+                        if (!item.Any(entry => ControllerOptions.Same(entry.Key, "IncludeSubwoofer"))) { item["IncludeSubwoofer"] = false; changed = true; }
+                    }
         if (string.IsNullOrWhiteSpace(options.ControllerId)) { root["ControllerId"] = Guid.NewGuid().ToString("N"); changed = true; }
         if (!root.Any(p => ControllerOptions.Same(p.Key, "Perspectives"))) { root["Perspectives"] = new JsonArray(); changed = true; }
         foreach (var key in new[] { "DefaultDisplayName", "DisplayAliases" })

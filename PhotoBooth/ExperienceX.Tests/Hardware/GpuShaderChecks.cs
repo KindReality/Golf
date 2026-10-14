@@ -103,17 +103,11 @@ internal static class GpuShaderChecks
             if (Math.Abs(dimOverBackground[dimRed + 2] - 56) > 1 || dimOverBackground[dimRed + 3] != 255 || dimOverBackground[0] != 96)
                 throw new Exception("Screen brightness dimmed the display background or changed fade compositing.");
             Console.WriteLine("GPU readback passed video/image brightness, zero brightness, unchanged chroma key/alpha/fades and independent display background.");
-            var fitWide = Render(1, false, contentScale: VideoSizing.ContentScale("fit", 1920, 1080, 16, 16));
-            var fitTall = Render(1, false, contentScale: VideoSizing.ContentScale("fit", 1080, 1920, 16, 16));
-            var stretch = Render(1, false, contentScale: VideoSizing.ContentScale("stretch", 1920, 1080, 16, 16));
-            if (Alpha(fitWide, 8, 1) != 0 || Alpha(fitWide, 8, 8) != 255 || Alpha(fitTall, 1, 8) != 0 || Alpha(fitTall, 8, 8) != 255 || Alpha(stretch, 8, 1) != 255)
-                throw new Exception("GPU Fit did not letterbox/pillarbox, or Stretch did not fill the screen.");
+            var stretch = Render(1, false, contentScale: new(1,1,0,0));
             var narrowScreen = new PointOptions { Enabled = true, TopLeft = new(.25, 0), TopRight = new(.75, 0), BottomLeft = new(.25, 1), BottomRight = new(.75, 1) };
-            var narrowFit = Render(1, false, narrowScreen, contentScale: VideoSizing.ContentScale("fit", 1920, 1080, 16, 16, narrowScreen));
-            var narrowStretch = Render(1, false, narrowScreen, contentScale: VideoSizing.ContentScale("stretch", 1920, 1080, 16, 16, narrowScreen));
-            if (Alpha(narrowFit, 8, 4) != 0 || Alpha(narrowFit, 8, 8) != 255 || Alpha(narrowStretch, 8, 4) != 255)
-                throw new Exception("Fit used display proportions instead of the selected screen's proportions.");
-            Console.WriteLine("GPU readback passed Fit aspect-ratio bars and Stretch coverage.");
+            var narrowStretch = Render(1, false, narrowScreen, contentScale: new(1,1,0,0));
+            if (Alpha(stretch,8,1)!=255 || Alpha(narrowStretch,8,4)!=255) throw new Exception("Stretch did not fill the configured screen.");
+            Console.WriteLine("GPU readback passed stretch-only coverage within screen points.");
             var faded = Render(0.25f, true);
             if (Alpha(faded, 3, 3) != 0 || Math.Abs(Alpha(faded, 12, 3) - 64) > 1 || Math.Abs(faded[(3 * 16 + 12) * 4 + 2] - 64) > 1)
                 throw new Exception("GPU black key or premultiplied fade produced incorrect pixels.");

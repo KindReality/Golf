@@ -18,9 +18,12 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
     internal const int VisualizationId = 0x5847;
     public Action? AddVisualizationScreen { get; set; }
     private bool _visualizationRegistered;
+    internal const int LedId = 0x584C;
+    public Action? AddLedScreen { get; set; }
+    private bool _ledRegistered;
     internal const int NameId = 0x584E, MatId = 0x584D;
     internal const int TransparencyId = 0x5854;
-    internal const int SizingId = 0x5853;
+    internal const int CreatePerspectiveId = 0x5846;
     internal const int BrightnessPlusId = 0x5860, BrightnessShiftPlusId = 0x5861,
         BrightnessMinusId = 0x5862, BrightnessNumpadPlusId = 0x5863, BrightnessNumpadMinusId = 0x5864;
     private static readonly (int Id, uint Key, uint Modifiers, string Label, int Direction)[] BrightnessKeys =
@@ -36,7 +39,7 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
     {
         get; set;
     }
-    public Action? ToggleScreenSizing
+    public Action? CreatePerspective
     {
         get; set;
     }
@@ -65,7 +68,7 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
     {
         get; set;
     }
-    private bool _addRegistered, _videoRegistered, _nameRegistered, _matRegistered, _transparencyRegistered, _whiteRegistered, _sizingRegistered, _editingText, _choosingBackground;
+    private bool _addRegistered, _videoRegistered, _nameRegistered, _matRegistered, _transparencyRegistered, _whiteRegistered, _createPerspectiveRegistered, _editingText, _choosingBackground;
     internal const uint Modifiers = 0x4007; // MOD_NOREPEAT | MOD_CONTROL | MOD_ALT | MOD_SHIFT
     internal const uint LetterModifiers = 0x4000; // MOD_NOREPEAT
     private bool _configurationRegistered, _closeRegistered, _backgroundRegistered, _disposed;
@@ -96,7 +99,7 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
         if (editingText || !configurationMode || !focused)
             return [];
         var modifiers = configurationMode ? LetterModifiers : Modifiers;
-        Register(ConfigurationId, 0x45, modifiers, "E", "ConfigurationHotkey", ref _configurationRegistered, unavailable);
+        Register(ConfigurationId, 0x43, modifiers, "C", "ApplicationSwitchHotkey", ref _configurationRegistered, unavailable);
         if (configurationMode)
         {
             Register(CloseId, 0x58, modifiers, "X", "CloseHotkey", ref _closeRegistered, unavailable);
@@ -105,8 +108,8 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 Register(WhiteBackgroundId, 0x57, modifiers, "W", "WhiteBackgroundHotkey", ref _whiteRegistered, unavailable);
             if (ToggleScreenTransparency is not null)
                 Register(TransparencyId, 0x54, modifiers, "T", "ScreenTransparencyHotkey", ref _transparencyRegistered, unavailable);
-            if (ToggleScreenSizing is not null)
-                Register(SizingId, 0x53, modifiers, "S", "ScreenSizingHotkey", ref _sizingRegistered, unavailable);
+            if (CreatePerspective is not null)
+                Register(CreatePerspectiveId, 0x46, modifiers, "F", "CreatePerspectiveHotkey", ref _createPerspectiveRegistered, unavailable);
             if (AdjustScreenBrightness is not null)
                 for (int i = 0; i < BrightnessKeys.Length; i++)
                 {
@@ -125,6 +128,8 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 Register(VisualizationId, 0x47, modifiers, "G", "AddVisualizationScreenHotkey", ref _visualizationRegistered, unavailable);
             if (AddMatScreen is not null)
                 Register(MatId, 0x4D, modifiers, "M", "AddMatScreenHotkey", ref _matRegistered, unavailable);
+            if (AddLedScreen is not null)
+                Register(LedId, 0x4C, modifiers, "L", "AddLedScreenHotkey", ref _ledRegistered, unavailable);
         }
         return unavailable.ToArray();
     }
@@ -174,7 +179,7 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 base.WndProc(ref message);
                 return;
             }
-            if (message.WParam == ConfigurationId && key == 0x45 && _configurationRegistered)
+            if (message.WParam == ConfigurationId && key == 0x43 && _configurationRegistered)
             {
                 toggleConfiguration();
                 return;
@@ -194,9 +199,9 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 ToggleScreenTransparency?.Invoke();
                 return;
             }
-            if (message.WParam == SizingId && key == 0x53 && _sizingRegistered)
+            if (message.WParam == CreatePerspectiveId && key == 0x46 && _createPerspectiveRegistered)
             {
-                ToggleScreenSizing?.Invoke();
+                CreatePerspective?.Invoke();
                 return;
             }
             if (message.WParam == WhiteBackgroundId && key == 0x57 && _whiteRegistered)
@@ -234,6 +239,7 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
                 AddMatScreen?.Invoke();
                 return;
             }
+            if (message.WParam == LedId && key == 0x4C && _ledRegistered) { AddLedScreen?.Invoke(); return; }
         }
         base.WndProc(ref message);
     }
@@ -252,6 +258,8 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
 
     private void Unregister()
     {
+        if (_ledRegistered) UnregisterHotKey(Handle, LedId);
+        _ledRegistered = false;
         if (_visualizationRegistered) UnregisterHotKey(Handle, VisualizationId);
         _visualizationRegistered = false;
         if (_perspectiveRegistered)
@@ -281,13 +289,13 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action clos
             UnregisterHotKey(Handle, MatId);
         if (_transparencyRegistered)
             UnregisterHotKey(Handle, TransparencyId);
-        if (_sizingRegistered)
-            UnregisterHotKey(Handle, SizingId);
+        if (_createPerspectiveRegistered)
+            UnregisterHotKey(Handle, CreatePerspectiveId);
         if (_whiteRegistered)
             UnregisterHotKey(Handle, WhiteBackgroundId);
         _whiteRegistered = false;
         _transparencyRegistered = false;
-        _sizingRegistered = false;
+        _createPerspectiveRegistered = false;
         _configurationRegistered = _closeRegistered = _backgroundRegistered = _addRegistered = _videoRegistered = _nameRegistered = _matRegistered = false;
     }
 

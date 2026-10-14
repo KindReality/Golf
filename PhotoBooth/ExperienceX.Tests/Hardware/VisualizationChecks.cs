@@ -5,6 +5,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using PhotoBooth.Networking;
 using System.Windows.Threading;
 using ExperienceX;
 using Forms = System.Windows.Forms;
@@ -23,12 +25,12 @@ internal static class VisualizationChecks
                 ExperienceHost? host = null;
                 var folder = Path.Combine(Path.GetTempPath(), "ExperienceX-visualization-" + Guid.NewGuid().ToString("N"));
                 var preferences = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SoundSpectrum", "G-Force", "Preferences (Standalone).txt");
-                byte[]? backup = null;
+                Dictionary<string, byte[]>? backups = null;
                 int[] owned = [];
                 try
                 {
                     Check(!Process.GetProcesses().Any(p => { using (p) { try { return p.ProcessName.StartsWith("G-Force Standalone", StringComparison.OrdinalIgnoreCase); } catch { return false; } } }), "No independent Standalone is disturbed by this test");
-                    backup = File.ReadAllBytes(preferences);
+                    backups = Directory.GetFiles(Path.GetDirectoryName(preferences)!, "*.txt").ToDictionary(path => path, File.ReadAllBytes);
                     File.WriteAllText(preferences, File.ReadAllText(preferences).Replace("G-Force.AutoLaunchToolbar = 1", "G-Force.AutoLaunchToolbar = 0"));
                     Directory.CreateDirectory(folder);
                     var displays = Forms.Screen.AllScreens;
@@ -58,12 +60,14 @@ internal static class VisualizationChecks
                     host = new(dispatcher, path); host.Start();
                     var window = host.DisplayWindows.Single(w => w.DisplayName == primary);
                     window.Activate(); window.Focus();
+                    await GForceFullscreenChecks.FocusForTest(window.Handle);
                     await Until(() => PhotoBooth.Windows.ConfigurationShortcut.ApplicationFocused, "Experience has focus for configuration shortcuts");
                     await Task.Delay(200);
                     void Add() { SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.AddId, (nint)(0x41 << 16)); SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.VisualizationId, (nint)(0x47 << 16)); }
                     Add();
                     await Until(() => Read().ScreensFor(primary).Any(s => s.IsVisualization), "A then G creates a visualization screen");
                     var visual = Read().ScreensFor(primary).Single();
+                    Check(visual.Name == "gforce", "A/G creates a screen named gforce");
                     Check(visual.Points == new PointOptions(), "Visualization covers the complete display");
                     Check(DisplayBackground.For(primary, Read()).A == 0 && Read().DisplayBackgrounds[primary].BackgroundColor == "#102030", "Visualization makes the background transparent without losing the configured color");
                     Check(!ScreenSelection.VideoOutputs(new() { Screen = "*" }, Read(), [primary], primary).Any(), "Video broadcasts exclude visualization screens");
@@ -71,13 +75,59 @@ internal static class VisualizationChecks
                     Check(Read().ScreensFor(primary).Count == 1, "A second visualization on the same display is rejected");
                     await Until(() => host.VisualizationProcessIds.Length == 1 && GForceWindow.Find(host.VisualizationProcessIds[0], GForceWindow.FullscreenClass) != 0, "Owned G-Force starts in actual fullscreen", 23000);
                     owned = host.VisualizationProcessIds;
+                    using (var controls = await GForceControlClient.ConnectAsync(owned[0]))
+                    {
+                        Check(await controls.GetActiveThemeAsync() == "(Standard)", "Owned fullscreen starts with the configured theme");
+                        await UntilAsync(async () => await controls.GetColorMapAsync() == "Clear Blue Water", "Owned fullscreen applies the configured palette", 12000);
+                        Check(!await controls.EnsureAutomaticChangesOffAsync(default), "Automatic changes start off for all visual types");
+                        using var sender = new UdpClient();
+                        async Task SendVisual(string action, string family, string? value = null, string? id = null, string target = "*")
+                        {
+                            var bytes = BroadcastEnvelope.Create(new BroadcastOptions { DeviceName = "visualization-test" }, "command", options.EffectiveDeviceName,
+                                new { experience = "visualization", command = action, visualType = family, value = value ?? "", screen = target, transitionSeconds = 0 }, id);
+                            await sender.SendAsync(bytes, new IPEndPoint(IPAddress.Loopback, options.UdpCommandsPort));
+                        }
+                        var names = await controls.NamesAsync("ColorMap", default);
+                        var index = Array.IndexOf(names, "Clear Blue Water"); var next = names[(index + 1) % names.Length];
+                        var requestId = Guid.NewGuid().ToString("N");
+                        await SendVisual("next", "colorMap", id: requestId);
+                        await UntilAsync(async () => await controls.GetColorMapAsync() == next, "UDP next changes the owned fullscreen palette");
+                        await SendVisual("next", "colorMap", id: requestId);
+                        await Task.Delay(200);
+                        Check(await controls.GetColorMapAsync() == next, "Duplicate visualization retries do not advance twice");
+                        await SendVisual("previous", "colorMap");
+                        await UntilAsync(async () => await controls.GetColorMapAsync() == "Clear Blue Water", "UDP previous restores the palette");
+                        await SendVisual("select", "colorMap", "Acid Gap", target: primary + "/missing"); await Task.Delay(200);
+                        Check(await controls.GetColorMapAsync() == "Clear Blue Water", "Wrong screen does not change the visualizer");
+                        var edited = JsonNode.Parse(File.ReadAllText(path))!;
+                        edited["Visualization"]!["ColorMap"] = "Unknown Saft Palette";
+                        File.WriteAllText(path, edited.ToJsonString());
+                        await Task.Delay(1800);
+                        Check(await controls.GetColorMapAsync() == "Clear Blue Water" && host.VisualizationProcessIds.Single() == owned[0], "Invalid named defaults retain the current visuals and process");
+                        edited["Visualization"]!["ColorMap"] = "Acid Gap";
+                        edited["Visualization"]!["TransitionSeconds"] = 0;
+                        File.WriteAllText(path, edited.ToJsonString());
+                        await UntilAsync(async () => await controls.GetColorMapAsync() == "Acid Gap", "Live configuration changes apply without restarting G-Force");
+                        Check(host.VisualizationProcessIds.Single() == owned[0], "Live defaults keep the existing visualizer process");
+                        await controls.SetColorMapSlideshowAsync(true);
+                        await UntilAsync(async () => (await controls.ExecuteAsync("printf( \"%d\", SlideshowEnabled( \"ColorMap\" ) );")) == "0", "Periodic enforcement disables externally enabled automatic changes");
+                    }
                     var fullscreen = GForceWindow.Find(owned[0], GForceWindow.FullscreenClass);
                     Check(GForceWindow.Bounds(fullscreen) == assigned.Bounds, "Fullscreen is on its assigned display");
                     var store = new PointConfigurationStore(path);
                     var calibration = new PointCalibration(Read, () => window.Surfaces, store, () => Task.CompletedTask);
                     Check(!calibration.BeginScreenDrag(window.Surface(visual.Id), .2, .2) && calibration.SelectedScreen?.ScreenId == visual.Id, "Visualization can be selected but cannot be dragged");
                     await calibration.DisposeAsync();
-                    try { await store.SaveAsync(primary, visual.Points, visual.Points with { TopLeft = new(.1, .1) }, visual.Id); throw new Exception("Visualization point edit was accepted."); } catch (InvalidOperationException) { Console.WriteLine("PASS Visualization point edits are rejected"); }
+                    await store.SaveAsync(primary, visual.Points, visual.Points with { Enabled = true, TopLeft = new(.15, .15) }, visual.Id);
+                    await Until(() => window.ScreenDefinition(visual.Id)!.Points.TopLeft.X == .15, "Visualization mask point edit reloads without resizing G-Force");
+                    await store.SetConfigurationModeAsync(false); await Task.Delay(700);
+                    using (var maskImage = new Bitmap(assigned.Bounds.Width, assigned.Bounds.Height))
+                    {
+                        using var paint = Graphics.FromImage(maskImage); paint.CopyFromScreen(assigned.Bounds.Location, Point.Empty, assigned.Bounds.Size);
+                        var masked = maskImage.GetPixel((int)(assigned.Bounds.Width * .02), (int)(assigned.Bounds.Height * .02));
+                        Check(masked.R < 3 && masked.G < 3 && masked.B < 3, "Owned inverse mat blacks out the live G-Force output outside its polygon");
+                    }
+                    await store.SetConfigurationModeAsync(true);
                     var media = await store.AddScreenAsync(primary);
                     var mat = await store.AddScreenAsync(primary, type: "mat");
                     await store.SaveAsync(primary, mat.Points, new() { Enabled = true, TopLeft = new(.7, .2), TopRight = new(.9, .2), BottomLeft = new(.7, .7), BottomRight = new(.9, .7) }, mat.Id);
@@ -112,16 +162,21 @@ internal static class VisualizationChecks
                     window.Activate(); window.Focus();
                     await Until(() => PhotoBooth.Windows.ConfigurationShortcut.ApplicationFocused, "Experience regains focus for visualization editing");
                     await Task.Delay(200);
+                    var maskBeforeSelection = Read().PointsFor(primary, visual.Id);
                     var click = (nint)(((window.ClientSize.Height / 10) << 16) | (window.ClientSize.Width / 10));
                     SendMessage(window.Handle, 0x201, 1, click);
                     SendMessage(window.Handle, 0x200, 1, (nint)(((window.ClientSize.Height / 5) << 16) | (window.ClientSize.Width / 5)));
                     SendMessage(window.Handle, 0x202, 0, click);
-                    Check(host.SelectedScreen?.ScreenId == visual.Id && Read().PointsFor(primary, visual.Id) == visual.Points, "Mouse selects the visualization without moving its full-display geometry");
+                    Check(host.SelectedScreen?.ScreenId == visual.Id && Read().PointsFor(primary, visual.Id) == maskBeforeSelection &&
+                        GForceWindow.Bounds(GForceWindow.Find(owned[0], GForceWindow.FullscreenClass)) == b,
+                        "Mouse selects the visualization without moving its edited mask or fullscreen window");
                     SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.NameId, (nint)(0x4e << 16));
                     var editor = window.Controls.OfType<ScreenNameEditor>().Single();
                     editor.Text = "Spectrum";
                     SendMessage(editor.Handle, 0x100, 13, 0);
                     await Until(() => Read().ScreensFor(primary).Single(s => s.IsVisualization).Name == "Spectrum", "N edits and saves the visualization name");
+                    await Until(() => window.ScreenDefinition(visual.Id)?.Name == "Spectrum" && !host.CalibrationBusy,
+                        "Renaming reloads before the next editing command");
                     SendMessage(window.Handle, 0x100, 0x2e, 0);
                     await Until(() => !Read().ScreensFor(primary).Any(s => s.IsVisualization) && host.VisualizationProcessIds.All(pid => GForceWindow.Bounds(GForceWindow.Find(pid, GForceWindow.FullscreenClass)) != b), "Deleting the visualization closes its fullscreen process");
                     Check(DisplayBackground.For(primary, Read()).A == 1, "Deletion restores the original solid display background");
@@ -134,7 +189,7 @@ internal static class VisualizationChecks
                     {
                         if (host is not null) await host.DisposeAsync();
                         foreach (var pid in owned) Check(!Alive(pid), "Owned visualizer is closed after deletion or shutdown");
-                        if (backup is not null) File.WriteAllBytes(preferences, backup);
+                        if (backups is not null) foreach (var (file, bytes) in backups) File.WriteAllBytes(file, bytes);
                         PhotoBooth.Diagnostics.Telemetry.Stop();
                     }
                     catch (Exception ex) { failure ??= ex; }

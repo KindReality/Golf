@@ -23,6 +23,9 @@ internal sealed record PlaylistItem
     public int CooldownMilliseconds { get; init; }
     public int? MinIntervalMilliseconds { get; init; }
     public int? MaxIntervalMilliseconds { get; init; }
+    public string Roles { get; init; } = "";
+    public string BroadcastMode { get; init; } = "Broadcast";
+    public bool IncludeSubwoofer { get; init; }
     public PlaylistCommand[] Commands { get; init; } = [];
 }
 internal sealed record PlaylistCommand

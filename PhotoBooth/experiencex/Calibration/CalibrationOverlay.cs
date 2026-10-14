@@ -94,15 +94,18 @@ internal sealed class CalibrationOverlay : IDisposable
         var k = Preview ?? _options.PointsFor(_display, screenId);
         var isVisualization = _options.ScreensFor(_display).FirstOrDefault(s => s.Id == screenId)?.IsVisualization == true;
         var isMat = _options.ScreensFor(_display).FirstOrDefault(s => s.Id == screenId)?.IsMat == true;
+        var definition = _options.ScreensFor(_display).FirstOrDefault(s => s.Id == screenId);
+        var isLed = definition?.IsLed == true;
         UpdatePoints(graphics, k);
         var now = Now;
-        var opacity = _options.ConfigurationMode ? 1 : 0;
+        var opacity = _options.ConfigurationMode && (!isVisualization || _selectedScreen) ? 1 : 0;
         var flash = _flashAt >= 0 && now >= _flashAt && now - _flashAt <= 0.28 ? (now - _flashAt) / 0.28 : -1;
+        if (isVisualization && !_selectedScreen && flash < 0) return;
         var selectedScreen = _selectedScreen && _options.ConfigurationMode;
-        var showTools = selectedScreen && _options.CalibrationGridEnabled && !isMat && !isVisualization;
+        var showTools = selectedScreen && _options.CalibrationGridEnabled && !isMat && !isVisualization && !isLed;
         if (selectedScreen)
             UpdateLabel(graphics, _options, _display, screenId, now);
-        var inverse = isMat ? default : transforms.Get(k with
+        var inverse = isMat || isVisualization || isLed ? default : transforms.Get(k with
         {
             Enabled = true
         });
@@ -110,13 +113,24 @@ internal sealed class CalibrationOverlay : IDisposable
         var data = new OverlayConstants
         {
             Screen = new(graphics.Width, graphics.Height, (float)(now % 1000), (float)opacity),
-            Selection = new(isVisualization ? -2 : _selectedPoint, _flashPointMask, (float)flash, _flashSuccess ? 1 : 0),
+            Selection = new(_selectedPoint, _flashPointMask, (float)flash, _flashSuccess ? 1 : 0),
             Grid = new(showTools ? 1 : 0, _labelWidth, _labelHeight, selectedScreen ? 1 : 0),
-            Label = new(center.X, center.Y, selectedScreen ? .16f : _options.ConfigurationMode && !isMat ? .04f : 0, k.Vertices.Count),
+            Label = new(center.X, center.Y, selectedScreen ? .16f : _options.ConfigurationMode && !isMat && !isVisualization ? .04f : 0, k.Vertices.Count),
             Row0 = inverse.Item1,
             Row1 = inverse.Item2,
             Row2 = inverse.Item3
         };
+        if (isLed && definition?.IsLedArray == false && selectedScreen)
+        {
+            var handle = LedGeometry.RotationHandle(k, graphics.Width, graphics.Height);
+            data.Grid.X = -1;
+            data.Row0 = new((float)handle.X, (float)handle.Y, (float)((k.TopLeft.X+k.TopRight.X)/2), (float)((k.TopLeft.Y+k.TopRight.Y)/2));
+        }
+        else if (definition?.IsLedArray == true)
+        {
+            data.Grid.X=-2;
+            data.Row0.X=(float)(Math.Max(graphics.Width,graphics.Height)*definition.Perspective!.Led!.SamplingThicknessPercent/100);
+        }
         graphics.Context.UpdateSubresource(in data, _overlayConstants);
         graphics.Context.RSSetViewport(0, 0, graphics.Width, graphics.Height);
         graphics.Context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);

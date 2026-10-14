@@ -24,7 +24,17 @@ internal static class Program
     {
         try
         {
-            if (args.SequenceEqual(["--preview-playback"])) PerspectivePreviewPlaybackChecks.Run().GetAwaiter().GetResult();
+            if(args.SequenceEqual(["--perspective-create"])) PerspectiveCreationChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--roles"])) RolePlaylistChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--perspective-shortcuts"])) PerspectiveShortcutChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--live"])) LiveChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--live-ui"])) LivePageChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--led-editor"])) LedEditorChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--wled-discovery"]))
+            {
+                foreach(var device in WledDiscovery.FindAsync().GetAwaiter().GetResult()) Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(device));
+            }
+            else if (args.SequenceEqual(["--preview-playback"])) PerspectivePreviewPlaybackChecks.Run().GetAwaiter().GetResult();
             else if (args.SequenceEqual(["--perspectives"])) PerspectiveEditorChecks.Run().GetAwaiter().GetResult();
             else if (args.SequenceEqual(["--updates"])) BuildUpdateChecks.Run("Controller").GetAwaiter().GetResult();
             else if (args.Contains("--window")) Window();
@@ -174,7 +184,7 @@ internal static class Program
             Check(sends.Select(s => s.Command.Device).SequenceEqual(["slow", "fail", "same-item", "last"]), "Item commands remain ordered; failure continues");
             Check(Stopwatch.GetElapsedTime(sends[2].At, sends[3].At).TotalMilliseconds >= 37, "Item delay begins after previous item finishes sending");
             Check(sends.Select(s => s.RequestId).Distinct().Count() == 4 && sends.Select(s => s.Chain.CorrelationId).Distinct().Count() == 1, "Sends have unique IDs and share one chain");
-            Check(sends.All(send => send.Command.Context is { Playlist: "demo" } && send.Command.Context.Item is "first" or "last"), "Every dispatched command includes its actual playlist and item context");
+            Check(sends.All(send => send.Command.Context is { Playlist: "demo", IsAmbient: false } && send.Command.Context.Item is "first" or "last"), "Regular playlists send normal commands with playlist and item context");
         }
         recorder = new();
         options = Valid(Options(Board("child", Item("child1"), Item("child2", 55)), Board("parent", Item("nested") with { Commands = [new() { Playlist = "child" }, Command("after-child")] }, Item("parent2", 25))));
@@ -184,6 +194,18 @@ internal static class Program
             Check(recorder.Sends.Select(s => s.Command.Device).SequenceEqual(["child1", "child2", "after-child", "parent2"]), "Nested storyboards complete before the parent continues");
             Check(recorder.Sends.First().Chain.ActionHistory.Length == 2, "Nested playlist ancestry is retained");
             Check(recorder.Sends.Select(send => send.Command.Context!.Playlist).SequenceEqual(["child", "child", "parent", "parent"]), "Nested commands report the playlist that actually sent them");
+            Check(recorder.Sends.All(send => send.Command.Context?.IsAmbient == false), "Nested regular playlists retain normal priority");
+        }
+        recorder = new();
+        var ambientItem = RandomItem("background", 20, 20) with { Commands = [new() { Playlist = "child" }, Command("ambient-direct")] };
+        options = Valid(Options(Board("child", Item("nested-command")), Ambient("background", ambientItem)));
+        await using (var engine = new PlaylistEngine(options, recorder, new()))
+        {
+            await engine.RunAmbientItem(options.Playlist("background", "ambient"), ambientItem, options, "idle", CancellationToken.None).Completion;
+            Check(recorder.Sends.Count == 2 && recorder.Sends.All(send => send.Command.Context?.IsAmbient == true), "Ambient items and their nested storyboards send only ambient commands");
+            var command = recorder.Sends.First().Command;
+            var ambientMessage = BroadcastEnvelope.Parse(BroadcastEnvelope.Create(options, command.Type, command.Device!, command.Payload, context: command.Context));
+            Check(ambientMessage.Context?.IsAmbient == true, "Ambient priority survives the UDP envelope");
         }
         recorder = new();
         options = Valid(Options(Board("demo", Item("first", device: "old"), Item("later", 130, "old-later"))));

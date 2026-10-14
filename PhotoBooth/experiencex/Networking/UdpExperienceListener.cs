@@ -11,12 +11,17 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
     internal int Port => _listener.Port;
 
     public UdpExperienceListener(Dispatcher dispatcher, Func<ExperienceOptions> options,
-        Action<ExperienceRequest> received, Action<BroadcastEnvelope>? eventReceived = null)
+        Action<ExperienceRequest> received, Action<BroadcastEnvelope>? eventReceived = null, Action? discovered = null)
     {
         _listener = new(() => options(), async (message, token) =>
         {
             // Controllers own discovery commands; clients only consume the discovery events.
-            if (ControllerDiscovery.IsRequest(message)) return;
+            if (ControllerDiscovery.IsRequest(message) || message.Event == ExperienceDiscovery.Event || message.Body.TryGetProperty("command",out var command) && command.ValueKind==JsonValueKind.String && command.GetString()=="perspective.create") return;
+            if (ExperienceDiscovery.IsRequest(message))
+            {
+                await dispatcher.InvokeAsync(() => { if (!token.IsCancellationRequested && message.Targets(options().EffectiveDeviceName) && !message.IsExpired(DateTimeOffset.UtcNow)) discovered?.Invoke(); }, DispatcherPriority.Normal, token);
+                return;
+            }
             if (message.Type == "event")
             {
                 await dispatcher.InvokeAsync(() =>
@@ -42,7 +47,8 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
                     RequestId = message.RequestId,
                     Source = message.Source,
                     TargetDevice = message.Device,
-                    Context = message.Context
+                    Context = message.Context,
+                    Expired = () => message.IsExpired(DateTimeOffset.UtcNow)
                 };
             }
             catch (Exception ex) when (ex is JsonException or ArgumentException)
@@ -64,6 +70,8 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
                 {
                     message.Device,
                     request.Experience,
+                    request.IsAmbient,
+                    request.Roles,
                     request.Value,
                     request.Screen,
                     request.DisplayName,
@@ -74,6 +82,10 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
                     request.Loop,
                     request.Command,
                     request.PlaybackRequestId,
+                    request.VisualType,
+                    request.TransitionSeconds,
+                    request.DelaySeconds,
+                    request.DurationSeconds,
                     Volume = request.VolumePercent,
                     message.Source
                 }, message.RequestId);

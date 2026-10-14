@@ -34,12 +34,13 @@ internal sealed class PlaylistEngine : IAsyncDisposable
     internal Task StopSceneLoopsAsync(SceneVideoLoops loops) => loops.StopAsync(_dispatcher, _log, _shutdown.Token);
     private bool _started, _stopping;
     internal Func<int, int, int> ChooseInterval { get; init; } = Random.Shared.Next;
+    internal Func<int, int> ChooseRole { get; init; } = Random.Shared.Next;
 
     public PlaylistEngine(ControllerOptions options, ICommandDispatcher dispatcher, ActivityLog log)
     { _options = options; _dispatcher = dispatcher; _log = log; _scheduler = new(log); }
     public void Start() { lock (_gate) { _started = true; ApplyTimers(); } }
     public void Apply(ControllerOptions options) { lock (_gate) { _options = options; if (_started) ApplyTimers(); } }
-    public PlaylistRun Run(string name, ControllerOptions? snapshot = null, BroadcastChain? chain = null, string? owner = null, CancellationToken token = default, SceneVideoLoops? loops = null)
+    public PlaylistRun Run(string name, ControllerOptions? snapshot = null, BroadcastChain? chain = null, string? owner = null, CancellationToken token = default, SceneVideoLoops? loops = null, bool isAmbient = false, string? roles = null, bool includeSubwoofer = false)
     {
         var options = snapshot ?? Volatile.Read(ref _options);
         var playlist = options.Playlist(name, "storyboard");
@@ -53,15 +54,15 @@ internal sealed class PlaylistEngine : IAsyncDisposable
                     await ExecuteItemAsync(playlist, item, options, ancestry, state).ConfigureAwait(false);
                     Interlocked.Decrement(ref state.Remaining);
                 }
-            }, loops: loops);
+            }, loops: loops, isAmbient: isAmbient, roles: roles, includeSubwoofer: includeSubwoofer);
     }
     public string RunManually(string name) => Run(name, owner: "Manual").Id;
     internal PlaylistRun RunAmbientItem(PlaylistOptions playlist, PlaylistItem item, ControllerOptions options, string scene, CancellationToken token, SceneVideoLoops? loops = null)
     {
         var chain = BroadcastChain.Root(options.EffectiveDeviceName).Enter($"{options.EffectiveDeviceName}/playlist:{playlist.Name}");
-        return StartRun(playlist, options, chain, $"Scene: {scene}", token, state => ExecuteItemAsync(playlist, item, options, chain, state), 1, loops);
+        return StartRun(playlist, options, chain, $"Scene: {scene}", token, state => ExecuteItemAsync(playlist, item, options, chain, state), 1, loops, isAmbient: true);
     }
-    private PlaylistRun StartRun(PlaylistOptions playlist, ControllerOptions options, BroadcastChain chain, string? owner, CancellationToken token, Func<RunState, Task> execute, int? count = null, SceneVideoLoops? loops = null)
+    private PlaylistRun StartRun(PlaylistOptions playlist, ControllerOptions options, BroadcastChain chain, string? owner, CancellationToken token, Func<RunState, Task> execute, int? count = null, SceneVideoLoops? loops = null, bool isAmbient = false, string? roles = null, bool includeSubwoofer = false)
     {
         RunState state;
         lock (_gate)
@@ -71,6 +72,9 @@ internal sealed class PlaylistEngine : IAsyncDisposable
             if (_runs.Count >= 256) throw new InvalidOperationException("At most 256 playlist runs may be active.");
             state = new(Guid.NewGuid().ToString("N"), playlist.Name, owner, count ?? playlist.Items.Count(i => i.Enabled), CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token));
             state.Loops = loops ?? Volatile.Read(ref _sceneLoops);
+            state.IsAmbient = isAmbient;
+            state.Roles = roles;
+            state.IncludeSubwoofer = includeSubwoofer;
             _runs.Add(state.Id, state);
             _scheduler.Post(() => _ = ExecuteRunAsync(state, execute, chain));
         }
@@ -78,7 +82,7 @@ internal sealed class PlaylistEngine : IAsyncDisposable
     }
     private async Task ExecuteRunAsync(RunState state, Func<RunState, Task> execute, BroadcastChain chain)
     {
-        _log.Info("PlaylistStarted", $"Started {state.Name}", new { state.Id, Playlist = state.Name, state.Owner, chain.CorrelationId });
+        _log.Info("PlaylistStarted", $"Started {state.Name}", new { state.Id, Playlist = state.Name, state.Owner, state.IsAmbient, chain.CorrelationId });
         try { await execute(state).ConfigureAwait(false); _log.Info("PlaylistFinished", $"Finished {state.Name}", new { state.Id }); }
         catch (OperationCanceledException) when (state.Cancellation.IsCancellationRequested) { _log.Info("PlaylistCancelled", $"Cancelled {state.Name}", new { state.Id }); }
         catch (Exception ex) { _log.Error("PlaylistFailed", ex, new { state.Id, Playlist = state.Name }); }
@@ -113,6 +117,12 @@ internal sealed class PlaylistEngine : IAsyncDisposable
         {
             var cooldown = RemainingCooldown(state, item.CooldownMilliseconds);
             if (cooldown > 0) await _scheduler.UntilAsync(Stopwatch.GetTimestamp() + DeadlineScheduler.Ticks(cooldown), token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            var roles = PlaylistRoleTarget.Select(item, run.Roles, ChooseRole);
+            var includeSubwoofer = run.IncludeSubwoofer || item.IncludeSubwoofer;
+            if (RoleList.Parse(roles).Length > 0)
+                _log.Info("PlaylistRoleTargetSelected", $"{playlist.Name}/{item.Name} → roles {roles}", new
+                { Playlist = playlist.Name, Item = item.Name, run.Id, run.IsAmbient, item.BroadcastMode, ConfiguredRoles = item.Roles, SelectedRoles = roles, IncludeSubwoofer = includeSubwoofer, chain.CorrelationId });
             foreach (var command in item.Commands)
             {
                 token.ThrowIfCancellationRequested(); attempted = true;
@@ -120,14 +130,14 @@ internal sealed class PlaylistEngine : IAsyncDisposable
                 try
                 {
                     if (command.Playlist is { } nested)
-                        await Run(nested, options, chain, run.Owner, token, run.Loops).Completion.ConfigureAwait(false);
+                        await Run(nested, options, chain, run.Owner, token, run.Loops, run.IsAmbient, roles, includeSubwoofer).Completion.ConfigureAwait(false);
                     else
                     {
-                        var outgoing = command with { Context = new() { Scene = run.Loops?.SceneName, Playlist = playlist.Name, Item = item.Name } };
+                        var outgoing = PlaylistRoleTarget.Apply(command, roles, includeSubwoofer) with { Context = new() { Scene = run.Loops?.SceneName, Playlist = playlist.Name, Item = item.Name, IsAmbient = run.IsAmbient } };
                         Telemetry.SetRequestContext(id, new()
                         {
-                            Source = options.EffectiveDeviceName, Device = command.Device,
-                            Scene = outgoing.Context.Scene, Playlist = playlist.Name, Item = item.Name,
+                            Source = options.EffectiveDeviceName, Device = outgoing.Device, Roles = ControllerOptions.Text(outgoing.Payload, "roles"),
+                            Scene = outgoing.Context.Scene, Playlist = playlist.Name, Item = item.Name, IsAmbient = run.IsAmbient,
                             Experience = ControllerOptions.Text(command.Payload, "experience"), Value = ControllerOptions.Text(command.Payload, "value"),
                             CorrelationId = chain.CorrelationId
                         });
@@ -139,7 +149,7 @@ internal sealed class PlaylistEngine : IAsyncDisposable
                         try { receipt = await _dispatcher.SendAsync(outgoing, options, chain, id, token).ConfigureAwait(false); }
                         finally { sending?.TrySetResult(); }
                         var value = ControllerOptions.Text(command.Payload, "value");
-                        _log.Info("CommandSent", $"{playlist.Name}/{item.Name} → {command.Device}" + (value is null ? "" : $" ({value})"), new { Playlist = playlist.Name, Item = item.Name, command.Transport, command.Type, command.Device, Value = value, chain.CorrelationId, SendLatencyMilliseconds = receipt.SentAt > 0 ? Stopwatch.GetElapsedTime(due, receipt.SentAt).TotalMilliseconds : (double?)null }, id);
+                        _log.Info("CommandSent", $"{playlist.Name}/{item.Name} → {outgoing.Device}" + (value is null ? "" : $" ({value})"), new { Playlist = playlist.Name, Item = item.Name, run.IsAmbient, command.Transport, command.Type, outgoing.Device, Roles = ControllerOptions.Text(outgoing.Payload, "roles"), Value = value, chain.CorrelationId, SendLatencyMilliseconds = receipt.SentAt > 0 ? Stopwatch.GetElapsedTime(due, receipt.SentAt).TotalMilliseconds : (double?)null }, id);
                     }
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
@@ -228,6 +238,9 @@ internal sealed class PlaylistEngine : IAsyncDisposable
     {
         public string Id = id, Name = name; public string? Owner = owner; public int Remaining = remaining;
         public SceneVideoLoops? Loops;
+        public bool IsAmbient;
+        public bool IncludeSubwoofer;
+        public string? Roles;
         public long Started = Stopwatch.GetTimestamp(); public CancellationTokenSource Cancellation = cancellation;
         public TaskCompletionSource Completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }

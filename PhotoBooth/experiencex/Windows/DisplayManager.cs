@@ -11,7 +11,11 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
     private readonly Dictionary<string, MainWindow> _windows = new(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly VisualizationManager _visualizations = new();
+    private readonly LedOutputManager _leds = new();
+    internal LedOutputManager LedOutput => _leds;
+    private void UpdateLeds() => _leds.Update(_windows.Values.SelectMany(w=>w.LedScreens));
     internal int[] VisualizationProcessIds => _visualizations.ProcessIds;
+    internal Task ControlVisualizationAsync(ExperienceRequest request, ExperienceOptions options, CancellationToken token) => _visualizations.ExecuteAsync(request, options, token);
     private ExperienceOptions _options = new();
     private ScreenMediaCatalog _mediaCatalog = ScreenMediaCatalog.Empty;
     private bool _disposed;
@@ -79,6 +83,7 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
             var window = new MainWindow(screen.DeviceName, _options);
             window.UpdateMediaCatalog(_mediaCatalog);
             window.AttachCalibration(_calibration);
+            window.LedGeometryChanged += UpdateLeds;
             window.TextEditingChanged += editing => TextEditingChanged?.Invoke(editing);
             window.RenameRequested += (surface, oldName, name) => RenameRequested?.Invoke(surface, oldName, name);
             window.BrowseRenameRequested = (surface, oldName, name) => BrowseRenameRequested?.Invoke(surface, oldName, name) ?? Task.FromResult(false);
@@ -100,6 +105,7 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
         foreach (var window in _windows.Values)
             window.RefreshDisplay();
         _visualizations.Refresh(_options, _windows.Values);
+        UpdateLeds();
         var aliases = _options.DisplayAliases.Select(a => new
         {
             Alias = a.Key.Trim(),
@@ -152,6 +158,7 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
         _disposed = true;
         _timer.Stop();
         SystemEvents.DisplaySettingsChanged -= DisplaySettingsChanged;
+        await _leds.DisposeAsync();
         await _visualizations.DisposeAsync();
         await Task.WhenAll(_windows.Values.Select(window => window.ShutdownWindowAsync()));
         _windows.Clear();

@@ -23,6 +23,8 @@ public sealed record RequestLogContext
     public string? Scene { get; init; }
     public string? Playlist { get; init; }
     public string? Item { get; init; }
+    public bool IsAmbient { get; init; }
+    public string? Roles { get; init; }
     public string? Path { get; init; }
     public string? CorrelationId { get; init; }
 }

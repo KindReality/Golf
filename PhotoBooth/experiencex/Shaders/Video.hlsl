@@ -1,7 +1,7 @@
 cbuffer Settings : register(b0) {
     float4 row0; float4 row1; float4 row2;
     float4 effects; // opacity, threshold, softness, black key enabled
-    float4 aspect; // content width, height, use source alpha, brightness multiplier
+    float4 aspect; // reserved XY, use source alpha, brightness multiplier
     float4 crop; // source origin XY and size WH, normalized 0–1
 };
 Texture2D video : register(t0);
@@ -16,7 +16,6 @@ float4 PSMain(Vertex input) : SV_Target {
     float divisor = dot(row2.xyz,p);
     if (abs(divisor) < 0.000001) return 0;
     float2 uv = float2(dot(row0.xyz,p),dot(row1.xyz,p))/divisor;
-    uv = (uv-0.5)/aspect.xy+0.5;
     if (any(uv<0) || any(uv>1)) return 0;
     uv = crop.xy + uv*crop.zw;
     float4 color = video.Sample(linearClamp,uv);

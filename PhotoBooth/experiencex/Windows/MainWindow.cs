@@ -12,6 +12,41 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     // Form's base constructor calls CreateParams before this constructor assigns the supplied options.
     private ExperienceOptions _options = new();
     private VideoRenderer? _renderer;
+    private LedCalibrationWindow? _ledTools;
+    private bool _recoveringLedTools;
+    private readonly Dictionary<string,PointOptions> _ledPreviews = new();
+    internal VideoRenderer? ToolsRenderer => _ledTools?.Renderer;
+    internal event Action? LedGeometryChanged;
+    internal IEnumerable<LedOutputScreen> LedScreens => !_available || !Visible || State==RendererState.Failed ? [] : _options.ScreensFor(_display).Where(s=>s.IsLed && s.Perspective!.Available).Select(s=>new LedOutputScreen(_display,new(PointToScreen(System.Drawing.Point.Empty),ClientSize), _ledPreviews.TryGetValue(s.Id,out var points) ? s with {Points=points} : s));
+    internal void PreviewLed(string id,PointOptions? points)
+    {
+        if(points is null) _ledPreviews.Remove(id); else _ledPreviews[id]=points;
+        LedGeometryChanged?.Invoke();
+    }
+    private void RefreshLedTools()
+    {
+        if (_renderer is null || _closing) return;
+        if (_recoveringLedTools) return;
+        if (_ledTools?.Renderer.State == RendererState.Failed)
+        {
+            _tasks.Run(async _ =>
+            {
+                _recoveringLedTools=true;var failed=_ledTools;_ledTools=null;
+                try { if(failed is not null) await failed.ShutdownAsync(); }
+                catch(Exception ex) { Telemetry.Error("LedCalibrationRecoveryFailed",ex,new {DisplayName=_display}); }
+                finally { _recoveringLedTools=false; }
+                if(!_closing) { Telemetry.Info("LedCalibrationRecoveryStarted",new {DisplayName=_display}); RefreshLedTools(); }
+            },"Recover LED calibration renderer");
+            return;
+        }
+        bool needed=_available && _options.ConfigurationMode && _options.ScreensFor(_display).Any(s=>s.IsLed);
+        if(needed && _ledTools is null)
+        {
+            _ledTools=new(this,_options);
+        }
+        _ledTools?.Update(this,_options);
+        _renderer?.ShowTools(!needed);
+    }
     private ScreenMediaCatalog _mediaCatalog = ScreenMediaCatalog.Empty;
     private TopmostGuard? _guard;
     private bool _available;
@@ -23,11 +58,12 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     private readonly Dictionary<string, ScreenSurface> _surfaces = new(StringComparer.OrdinalIgnoreCase);
     private readonly PointHitCycle _pointCycle = new(), _screenCycle = new();
     private readonly PointHitCycle _edgeCycle = new();
+    private readonly PointHitCycle _edgeDragCycle = new();
     private ScreenNameEditor? _nameEditor;
     private ScreenSurface? _editingScreen;
     private string? _originalName;
     private string? _pendingBrowseName;
-    private readonly Queue<int> _nameDirections = new();
+    private readonly Queue<(ScreenSurface Surface, ScreenNameEditor? Editor, int Direction)> _nameDirections = new();
     private bool _browsingName, _finishAfterBrowse;
     internal event Action<bool>? TextEditingChanged;
     internal event Action<ScreenSurface, string, string>? RenameRequested;
@@ -96,6 +132,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         ClientSizeChanged += (_, _) => _renderer?.Resize(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
         if (_available)
             ShowSurface();
+        RefreshLedTools();
     }
     public void RefreshDisplay()
     {
@@ -116,6 +153,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
                     DisplayName = _display
                 });
             _available = false;
+            RefreshLedTools();
             return;
         }
         var bounds = _options.DeveloperMode ? new System.Drawing.Rectangle(screen.WorkingArea.Location, new(800, 600)) : screen.Bounds;
@@ -145,6 +183,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         }
         else if (!Visible && !_recovering && !_waitingForRenderer && _renderer is not null)
             ShowSurface();
+        RefreshLedTools();
     }
     private VideoRenderer CreateRenderer(Dispatcher dispatcher) => new(Handle, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height), _options, _display,
         () => { if (!_closing && !dispatcher.HasShutdownStarted) dispatcher.BeginInvoke(new Action(() => { if (!_closing) Hide(); })); }, _beforePresent, _mediaCatalog);
@@ -205,6 +244,8 @@ public sealed class MainWindow : Forms.Form, IPointSurface
                 ReleaseCalibrationCapture();
         }
         RefreshDisplay();
+        RefreshLedTools();
+        LedGeometryChanged?.Invoke();
     }
     internal void ShowCalibration(int point)
     {
@@ -238,8 +279,17 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         var x = (double)e.X / Math.Max(1, ClientSize.Width - 1);
         var y = (double)e.Y / Math.Max(1, ClientSize.Height - 1);
         var screens = _options.ScreensFor(_display);
+        if (selected?.DisplayName == _display && ScreenDefinition(selected.ScreenId) is { IsLed: true, IsLedArray: false } matrix)
+        {
+            var handle=LedGeometry.RotationHandle(matrix.Points,ClientSize.Width,ClientSize.Height);
+            if(Math.Pow((handle.X-x)*(ClientSize.Width-1),2)+Math.Pow((handle.Y-y)*(ClientSize.Height-1),2)<=18*18)
+            {
+                _mouseHeld=_calibration?.BeginRotation(selected,x,y)==true; _dragScreen=_mouseHeld ? selected:null; Capture=_mouseHeld; return;
+            }
+        }
         // A flat list supports any number of points, preserving screen/point overlap order.
-        var allPoints = screens.Where(s => !s.IsVisualization).SelectMany(screen => PointEditing.Points(screen.Points).Select((p, point) => (screen, point, p))).ToArray();
+        var editable = ScreenSelection.EditablePoints(screens, selected?.DisplayName == _display ? selected.ScreenId : null).ToArray();
+        var allPoints = editable.SelectMany(screen => PointEditing.Points(screen.Points).Select((p, point) => (screen, point, p))).ToArray();
         var radius = PointEditing.HitRadius(ClientSize.Width, ClientSize.Height, _options.PointHitDiameterPercent);
         var hits = allPoints.Select((item, index) => (item, index)).Where(t =>
         {
@@ -259,10 +309,19 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         else
         {
             _pointCycle.Pick([]);
+            var edges = editable.Select((screen, index) => (screen, index, edge: PolygonGeometry.ClosestEdge(screen.Points, x, y, ClientSize.Width, ClientSize.Height)))
+                .Where(item => item.edge.Distance <= 8 * DeviceDpi / 96.0).ToArray();
+            var pickedEdge = _edgeDragCycle.Pick(edges.Select(item => item.index).ToArray());
+            if (pickedEdge >= 0)
+            {
+                var edge = edges.Single(item => item.index == pickedEdge); var dragging = Surface(edge.screen.Id);
+                _mouseHeld = _calibration?.BeginEdgeDrag(dragging, edge.edge.Edge, x, y) == true;
+                _dragScreen = _mouseHeld ? dragging : null; Capture = _mouseHeld; return;
+            }
             if (selected?.DisplayName == _display && ScreenDefinition(selected.ScreenId) is { } selectedDefinition &&
                 ScreenNameLabel.Bounds(selected.ScreenName, selectedDefinition.Points, ClientSize.Width, ClientSize.Height).Contains(e.Location))
             {
-                if (selectedDefinition.IsVisualization || !ScreenSelection.Contains(selectedDefinition.Points, x, y))
+                if (selectedDefinition.IsVisualization || !(selectedDefinition.IsLed ? LedGeometry.Contains(selectedDefinition,x,y,ClientSize.Width,ClientSize.Height) : ScreenSelection.Contains(selectedDefinition.Points, x, y)))
                 {
                     BeginNameEdit(selected);
                     return;
@@ -273,7 +332,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
                 Capture = _mouseHeld;
                 return;
             }
-            chosen = _screenCycle.Pick(screens.Select((screen, index) => (screen, index)).Where(item => ScreenSelection.Contains(item.screen.Points, x, y)).Select(item => item.index).ToArray());
+            chosen = _screenCycle.Pick(screens.Select((screen, index) => (screen, index)).Where(item => item.screen.IsVisualization || (item.screen.IsLed ? LedGeometry.Contains(item.screen,x,y,ClientSize.Width,ClientSize.Height) : ScreenSelection.Contains(item.screen.Points, x, y))).Select(item => item.index).ToArray());
             if (chosen < 0)
                 _calibration?.SelectScreen(null);
             else
@@ -292,9 +351,10 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         var x = (double)e.X / Math.Max(1, ClientSize.Width - 1);
         var y = (double)e.Y / Math.Max(1, ClientSize.Height - 1);
         // Edge insertion has a small pixel tolerance independent of the larger point grab area.
-        var candidates = _options.ScreensFor(_display).Select((screen, index) => (screen, index,
+        var selected = _calibration?.SelectedScreen;
+        var candidates = ScreenSelection.EditablePoints(_options.ScreensFor(_display), selected?.DisplayName == _display ? selected.ScreenId : null).Select((screen, index) => (screen, index,
             edge: PolygonGeometry.ClosestEdge(screen.Points, x, y, ClientSize.Width, ClientSize.Height)))
-            .Where(item => item.screen.IsMat && item.edge.Distance <= 8 &&
+            .Where(item => item.screen.IsPolygon && item.edge.Distance <= 8 &&
                 !PointEditing.Points(item.screen.Points).Any(p => Math.Sqrt(Math.Pow((p.X - item.edge.Point.X) * (ClientSize.Width - 1), 2) +
                     Math.Pow((p.Y - item.edge.Point.Y) * (ClientSize.Height - 1), 2)) < 2)).ToArray();
         var chosen = _edgeCycle.Pick(candidates.Select(item => item.index).ToArray());
@@ -339,8 +399,10 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     }
     private void BrowseMediaName(int direction)
     {
-        if (_nameEditor is null || _editingScreen is null || BrowseRenameRequested is null || _nameDirections.Count >= 32) return;
-        _nameDirections.Enqueue(direction);
+        var surface = _editingScreen ?? _calibration?.SelectedScreen as ScreenSurface;
+        if (!_options.ConfigurationMode || surface is null || surface.DisplayName != _display ||
+            ScreenDefinition(surface.ScreenId)?.IsVideo != true || BrowseRenameRequested is null || _nameDirections.Count >= 32) return;
+        _nameDirections.Enqueue((surface, _nameEditor, direction));
         if (!_browsingName) _tasks.Run(BrowseMediaNamesAsync, "Browse screen media names");
     }
     private async Task BrowseMediaNamesAsync(CancellationToken token)
@@ -348,26 +410,30 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _browsingName = true;
         try
         {
-            while (_nameEditor is { } editor && _editingScreen is { } surface && _nameDirections.TryDequeue(out var direction))
+            while (_nameDirections.TryDequeue(out var change))
             {
                 token.ThrowIfCancellationRequested();
+                var (surface, editor, direction) = change;
+                // Discard queued keys if selection, editing context or configuration mode changed.
+                if (!_options.ConfigurationMode || !ReferenceEquals(editor, _nameEditor) ||
+                    (editor is not null ? _editingScreen != surface :
+                        _calibration?.SelectedScreen != surface || _calibration.HasSelectedPoint(surface))) continue;
                 var definition = ScreenDefinition(surface.ScreenId);
-                if (definition is null || !definition.IsVideo) break;
-                var others = _options.ScreensFor(_display).Where(s => s.Id != surface.ScreenId).ToArray();
-                var names = _mediaCatalog.Names().Where(name => !others.Any(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(s.DefaultName, name, StringComparison.OrdinalIgnoreCase))).ToArray();
+                if (definition is null || !definition.IsVideo) continue;
+                var names = _mediaCatalog.Names();
                 var defaultName = ScreenOptions.DefaultFor(definition, _options.ScreensFor(_display));
                 var next = ScreenMediaNameCycle.Next(defaultName, _mediaCatalog.BrowseName(definition) ?? definition.Name, names, direction);
-                if (next == definition.Name) continue;
-                _pendingBrowseName = next;
-                editor.ReadOnly = true;
+                if (next == (_mediaCatalog.BrowseName(definition) ?? definition.Name)) continue;
+                if (editor is not null) { _pendingBrowseName = ScreenOptions.AvailableMediaName(next, _options.ScreensFor(_display).Where(s => s.Id != definition.Id)); editor.ReadOnly = true; }
                 var renamed = await BrowseRenameRequested!(surface, definition.Name, next);
-                if (!ReferenceEquals(editor, _nameEditor)) break;
-                _pendingBrowseName = null;
-                _originalName = ScreenDefinition(surface.ScreenId)?.Name ?? definition.Name;
-                editor.Text = _originalName;
-                editor.SelectAll();
-                editor.ReadOnly = false;
+                if (editor is not null && ReferenceEquals(editor, _nameEditor))
+                {
+                    _pendingBrowseName = null;
+                    _originalName = ScreenDefinition(surface.ScreenId)?.Name ?? definition.Name;
+                    editor.Text = _originalName;
+                    editor.SelectAll();
+                    editor.ReadOnly = false;
+                }
                 if (!renamed) { _nameDirections.Clear(); break; }
             }
         }
@@ -437,12 +503,24 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         }
     }
     private IPointSurface KeySurface() => _calibration?.SelectedScreen is ScreenSurface selected && selected.DisplayName == _display ? selected : Surfaces.FirstOrDefault() ?? (IPointSurface)this;
+    private bool HandleScreenKey(Forms.Keys key)
+    {
+        if (_nameEditor is not null) return false;
+        if (_options.ConfigurationMode && key is Forms.Keys.Left or Forms.Keys.Right &&
+            _calibration?.SelectedScreen is ScreenSurface selected && selected.DisplayName == _display &&
+            !_calibration.HasSelectedPoint(selected) && ScreenDefinition(selected.ScreenId)?.IsVideo == true)
+        {
+            BrowseMediaName(key == Forms.Keys.Left ? -1 : 1);
+            return true;
+        }
+        return _calibration?.Key(KeySurface(), key) == true;
+    }
     protected override bool ProcessCmdKey(ref Forms.Message msg, Forms.Keys keyData) =>
-        (_nameEditor is null && _calibration?.Key(KeySurface(), keyData) == true) || base.ProcessCmdKey(ref msg, keyData);
+        HandleScreenKey(keyData) || base.ProcessCmdKey(ref msg, keyData);
     protected override void WndProc(ref Forms.Message m)
     {
         // These Forms windows run on a WPF dispatcher, without the WinForms pre-translation loop.
-        if (_nameEditor is null && m.Msg == 0x100 && _calibration?.Key(KeySurface(), (Forms.Keys)(int)m.WParam | ModifierKeys) == true)
+        if (m.Msg == 0x100 && HandleScreenKey((Forms.Keys)(int)m.WParam | ModifierKeys))
         {
             m.Result = 0;
             return;
@@ -475,6 +553,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _closing = true;
         FinishNameEdit(false);
         Hide();
+        if(_ledTools is not null) { await _ledTools.ShutdownAsync(); _ledTools=null; }
         ReleaseCalibrationCapture();
         _guard?.Dispose();
         await _tasks.DisposeAsync();
@@ -491,6 +570,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         FinishNameEdit(false);
         _tasks.Cancel();
         Hide();
+        if(_ledTools is not null) { _ledTools.Renderer.Dispose(); _ledTools.Close(); _ledTools.Dispose(); _ledTools=null; }
         _guard?.Dispose();
         _renderer?.Dispose();
         _renderer = null;

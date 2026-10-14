@@ -1,5 +1,24 @@
 param([string]$Source = $PSScriptRoot, [switch]$Plan, [switch]$ConfigureMachine, [string]$ResultFile, [string[]]$ControllerHostnames = @())
 $ErrorActionPreference = 'Stop'
+function New-SaftStartMenuShortcut([string]$SourceDirectory, [string]$ApplicationName, [string]$RestartCommand, [string]$IconPath) {
+    $programs = [Environment]::GetFolderPath('Programs')
+    if ([string]::IsNullOrWhiteSpace($programs)) { throw 'The current user Start Menu Programs folder is unavailable.' }
+    $folder = Join-Path $programs 'Saft Technologies'
+    [void][IO.Directory]::CreateDirectory($folder)
+    $restartCommandPath = Join-Path $SourceDirectory $RestartCommand
+    if (!(Test-Path -LiteralPath $restartCommandPath -PathType Leaf)) { throw ('Missing restart command: '+$restartCommandPath) }
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut((Join-Path $folder ($ApplicationName+'.lnk')))
+    $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $shortcut.Arguments = '/c ""'+$restartCommandPath+'""'
+    $shortcut.WorkingDirectory = $SourceDirectory
+    $shortcut.Description = 'Refresh and start '+$ApplicationName+' from the current OneDrive build.'
+    $shortcut.WindowStyle = 7
+    if (Test-Path -LiteralPath $IconPath -PathType Leaf) { $shortcut.IconLocation = $IconPath+',0' }
+    $shortcut.Save()
+    Write-Host ('Start Menu shortcut: '+(Join-Path $folder ($ApplicationName+'.lnk')))
+}
+
 try {
     if ($ConfigureMachine) {
         $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -7,9 +26,16 @@ try {
         $name = 'HomeTechnologies.ExperienceX.UDP'
         if (Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue) {
             Set-NetFirewallRule -Name $name -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet
-            Get-NetFirewallRule -Name $name | Get-NetFirewallPortFilter | Set-NetFirewallPortFilter -Protocol UDP -LocalPort 54242,54243
+            Get-NetFirewallRule -Name $name | Get-NetFirewallPortFilter | Set-NetFirewallPortFilter -Protocol UDP -LocalPort 54242,54243,5353
         } else {
-            New-NetFirewallRule -Name $name -DisplayName 'Home Technologies Experience UDP events and commands' -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet -Protocol UDP -LocalPort 54242,54243 | Out-Null
+            New-NetFirewallRule -Name $name -DisplayName 'Home Technologies Experience UDP events, commands and WLED discovery' -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet -Protocol UDP -LocalPort 54242,54243,5353 | Out-Null
+        }
+        $inventoryRule = 'HomeTechnologies.ExperienceX.Inventory'
+        if (Get-NetFirewallRule -Name $inventoryRule -ErrorAction SilentlyContinue) {
+            Set-NetFirewallRule -Name $inventoryRule -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet
+            Get-NetFirewallRule -Name $inventoryRule | Get-NetFirewallPortFilter | Set-NetFirewallPortFilter -Protocol TCP -LocalPort 54245
+        } else {
+            New-NetFirewallRule -Name $inventoryRule -DisplayName 'Home Technologies Experience Live inventory' -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet -Protocol TCP -LocalPort 54245 | Out-Null
         }
         Set-Content -LiteralPath $ResultFile -Value 'OK'
         exit 0
@@ -17,7 +43,7 @@ try {
     $sourcePath = [IO.Path]::GetFullPath($Source)
     $restart = Join-Path $sourcePath 'Restart-Experience.ps1'
     if ($Plan) {
-        [pscustomobject]@{Source=$sourcePath;Restart=$restart;MediaUser='SaftThings';CredentialStorage='Windows Credential Manager (current user)';FirewallProfile='Private';FirewallScope='LocalSubnet';UdpPorts=@(54242,54243)} | ConvertTo-Json
+        [pscustomobject]@{Source=$sourcePath;Restart=$restart;MediaUser='SaftThings';CredentialStorage='Windows Credential Manager (current user)';FirewallProfile='Private';FirewallScope='LocalSubnet';UdpPorts=@(54242,54243,5353);TcpPorts=@(54245)} | ConvertTo-Json
         exit 0
     }
     if (!(Test-Path -LiteralPath $restart -PathType Leaf)) { throw 'Missing Restart-Experience.ps1. Wait for the complete build to sync.' }
@@ -88,6 +114,7 @@ namespace HomeTechnologies {
     }
     & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $restart -SourceDirectory $sourcePath
     if ($LASTEXITCODE -ne 0) { throw 'Experience restart failed. Review the error above.' }
+    New-SaftStartMenuShortcut -SourceDirectory $sourcePath -ApplicationName 'Experience' -RestartCommand 'Restart-Experience.cmd' -IconPath (Join-Path $sourcePath 'ExperienceX.exe')
     Write-Host 'Experience installation complete. Use Restart-Experience.cmd for future updates.'
     exit 0
 } catch {

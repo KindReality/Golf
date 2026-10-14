@@ -48,7 +48,7 @@ internal sealed class SceneVideoLoops(string scene)
                 PhotoBooth.Diagnostics.Telemetry.SetRequestContext(id, new()
                 {
                     Source = playback.Options.EffectiveDeviceName, Device = playback.Device, Scene = scene,
-                    Playlist = playback.Context?.Playlist, Item = playback.Context?.Item, Experience = "video", Value = playback.Value
+                    Playlist = playback.Context?.Playlist, Item = playback.Context?.Item, IsAmbient = playback.Context?.IsAmbient == true, Experience = "video", Value = playback.Value
                 });
                 // Cleanup is a new action, independent of a canceled transition or an exhausted ancestry chain.
                 await dispatcher.SendAsync(stop, playback.Options, BroadcastChain.Root(playback.Options.EffectiveDeviceName), id, token).ConfigureAwait(false);

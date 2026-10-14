@@ -11,7 +11,7 @@ internal static class CommandContextChecks
         Directory.CreateDirectory(root);
         try
         {
-            var context = new CommandContext { Scene = "idle", Playlist = "media-loop", Item = "Eye" };
+            var context = new CommandContext { Scene = "idle", Playlist = "media-loop", Item = "Eye", IsAmbient = true };
             var chain = BroadcastChain.Root("controller");
             var bytes = BroadcastEnvelope.Create(new() { DeviceName = "controller" }, "command", "*",
                 new { experience = "video", value = "Eye.mp4", screen = "*", mute = true }, "context-check", chain, context);
@@ -43,7 +43,7 @@ internal static class CommandContextChecks
                 {
                     var details = entry.RootElement.GetProperty("Context");
                     Check(details.GetProperty("Value").GetString() == "Eye.mp4" && details.GetProperty("Scene").GetString() == "idle" &&
-                        details.GetProperty("Playlist").GetString() == "media-loop" && details.GetProperty("Item").GetString() == "Eye", "A lifecycle log lost media/scene/playlist/item context.");
+                        details.GetProperty("Playlist").GetString() == "media-loop" && details.GetProperty("Item").GetString() == "Eye" && details.GetProperty("IsAmbient").GetBoolean(), "A lifecycle log lost media/scene/playlist/item/ambient context.");
                     if (entry.RootElement.GetProperty("Event").GetString() != "UdpRequestReceived")
                         Check(details.GetProperty("Path").GetString() == localPath, "Playback/failure log lost its local file path.");
                 }

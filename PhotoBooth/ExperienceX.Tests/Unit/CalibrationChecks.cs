@@ -130,7 +130,7 @@ internal static class CalibrationChecks
             editor.ConfigurationChanged(current);
             if (left.Preview is not null || editor.Begin(left, 0.25, 0))
                 throw new Exception("Disabling configurationMode did not cancel/disable editing.");
-            if (editor.Key(left, Forms.Keys.R) || editor.Key(left, Forms.Keys.Z))
+            if (editor.Key(left, Forms.Keys.R) || editor.Key(left, Forms.Keys.Z) || editor.Key(left, Forms.Keys.Control | Forms.Keys.Z))
                 throw new Exception("Calibration letters remained active with configuration mode disabled.");
             root["DisplayScreens"]!["DISPLAY1"]![0]!["Points"]!["Vertices"]![0]!["X"] = 0.2;
             root["DisplayScreens"]!["DISPLAY1"]![0]!["Points"]!["Vertices"]![1]!["X"] = 0.9;

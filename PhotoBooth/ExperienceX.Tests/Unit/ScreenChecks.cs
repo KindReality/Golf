@@ -30,7 +30,8 @@ internal static class ScreenChecks
             var root = JsonNode.Parse(File.ReadAllText(path))!;
             Check(root["MonitorAliases"] is null && root["MonitorBackgrounds"] is null && root["DisplayKeystones"] is null && root["Custom"]!.GetValue<int>() == 17, "Migration left legacy fields or lost custom fields.");
             var second = await store.AddScreenAsync("DISPLAY1");
-            Check(second.Name == "screen2" && second.Points.TopLeft == new ScreenPoint(.25, .25) && second.Points.BottomRight == new ScreenPoint(.75, .75), "Second screen was not centered at 50% width/height.");
+            Check(second.Name == "screen2" && second.Points == new PointOptions(), "Second screen did not fill the display.");
+            Check(ScreenOptions.New([new(), second]).Points == new PointOptions(), "Subsequent screens did not fill the display.");
             await store.RenameScreenAsync("DISPLAY1", second.Id, "screen2", "News");
             options = ExperienceOptions.Parse(File.ReadAllText(path));
             Check(options.ScreensFor("DISPLAY1")[1].Id == second.Id && options.ScreensFor("DISPLAY1")[1].Name == "News", "Rename changed identity or order.");
@@ -64,14 +65,15 @@ internal static class ScreenChecks
             }
             catch (PointEditConflictException) { }
             Check(JsonNode.Parse(File.ReadAllText(path))!["Custom"]!.GetValue<int>() == 17, "Screen deletion lost unrelated configuration.");
-            var moved = PointEditing.Translate(second.Points, .1, -.1);
+            var editable = new PointOptions { Enabled = true, TopLeft = new(.25, .25), TopRight = new(.75, .25), BottomLeft = new(.25, .75), BottomRight = new(.75, .75) };
+            var moved = PointEditing.Translate(editable, .1, -.1);
             moved.Validate();
             Check(moved.TopLeft == new ScreenPoint(.35, .15) && moved.BottomRight == new ScreenPoint(.85, .65), "Body drag changed screen size or failed to translate all corners.");
-            var clamped = PointEditing.Translate(second.Points, 2, -2);
+            var clamped = PointEditing.Translate(editable, 2, -2);
             clamped.Validate();
             Check(clamped.TopLeft == new ScreenPoint(.5, 0) && clamped.BottomRight == new ScreenPoint(1, .5), "Body drag did not stop at display edges.");
             Check(PointEditing.Translate(first.Points, 1, 1) == first.Points, "Full-size screen moved outside its display.");
-            var bounds = second.Points;
+            var bounds = editable;
             Check(ScreenSelection.Contains(bounds, .5, .5) && !ScreenSelection.Contains(bounds, .1, .5), "Screen hit geometry failed.");
             Check(ScreenSelection.Target(new ExperienceRequest { Screen = "Projector/News" }) == ("Projector", "News"), "Combined target parsing failed.");
             var routing = new ExperienceOptions

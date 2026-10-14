@@ -27,6 +27,33 @@ internal static class PolygonGeometry
         return (edge, point, best);
     }
     // Ear clipping runs only when points change. Rendering uses cached GPU triangles.
+    public static ScreenPoint[] OutsideTriangles(PointOptions shape)
+    {
+        shape.ValidatePolygon();
+        var triangles = new List<ScreenPoint>();
+        var rows = shape.Vertices.Select(p => p.Y).Append(0).Append(1).Distinct().Order().ToArray();
+        for (var row = 0; row < rows.Length - 1; row++)
+        {
+            var top = rows[row]; var bottom = rows[row + 1]; var middle = (top + bottom) / 2;
+            var crossings = Enumerable.Range(0, shape.Vertices.Count).Select(i => (A: shape.Vertices[i], B: shape.Vertices[(i + 1) % shape.Vertices.Count]))
+                .Where(e => middle > Math.Min(e.A.Y, e.B.Y) && middle < Math.Max(e.A.Y, e.B.Y))
+                .Select(e => (Top: X(e.A, e.B, top), Bottom: X(e.A, e.B, bottom), Middle: X(e.A, e.B, middle))).OrderBy(e => e.Middle).ToArray();
+            double leftTop = 0, leftBottom = 0;
+            for (var crossing = 0; crossing <= crossings.Length; crossing += 2)
+            {
+                var rightTop = crossing < crossings.Length ? crossings[crossing].Top : 1;
+                var rightBottom = crossing < crossings.Length ? crossings[crossing].Bottom : 1;
+                var a = new ScreenPoint(leftTop, top); var b = new ScreenPoint(rightTop, top);
+                var c = new ScreenPoint(rightBottom, bottom); var d = new ScreenPoint(leftBottom, bottom);
+                if (Math.Abs(Cross(a, b, c)) > 1e-14) triangles.AddRange([a, b, c]);
+                if (Math.Abs(Cross(a, c, d)) > 1e-14) triangles.AddRange([a, c, d]);
+                if (crossing + 1 < crossings.Length) { leftTop = crossings[crossing + 1].Top; leftBottom = crossings[crossing + 1].Bottom; }
+            }
+        }
+        return triangles.ToArray();
+        static double X(ScreenPoint a, ScreenPoint b, double y) => Math.Clamp(a.X + (b.X - a.X) * (y - a.Y) / (b.Y - a.Y), 0, 1);
+    }
+
     public static ScreenPoint[] Triangles(PointOptions shape)
     {
         shape.ValidatePolygon();

@@ -2,6 +2,7 @@ namespace ExperienceX;
 
 public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
 {
+    public int InventoryPort { get; init; } = 54245;
     public int ConfigurationVersion { get; init; } = ConfigurationSchema.CurrentVersion;
     public string? DefaultDisplayName
     {
@@ -14,6 +15,7 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
         get; init;
     }
     public Dictionary<string, string[]> VirtualAudioDevices { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, AudioDeviceOptions> AudioDevices { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     // Additional downstream delay not reported by WASAPI (TV DSP, wireless receivers, etc.).
     public Dictionary<string, double> AudioDeviceLatencyMilliseconds { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public bool DeveloperMode
@@ -48,10 +50,13 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
     public void Validate()
     {
         ValidateNetwork();
+        if (InventoryPort is < 1 or > 65535) throw new ArgumentException("InventoryPort must be between 1 and 65535.");
         if (Visualization is null) throw new ArgumentException("Visualization must be an object.");
+        Visualization.Validate();
         if (MediaDiscovery is null) throw new ArgumentException("MediaDiscovery must be an object.");
         MediaDiscovery.Validate();
         AudioDeviceSelection.ValidateConfiguration(VirtualAudioDevices, AudioDeviceLatencyMilliseconds);
+        AudioDeviceOptions.Validate(AudioDevices);
         if (ConfigurationVersion != ConfigurationSchema.CurrentVersion)
             throw new ArgumentException("ConfigurationVersion must match the supported schema version.");
         if (!double.IsFinite(RequestDeduplicationSeconds) || RequestDeduplicationSeconds is < 0 or > 3600)
@@ -80,20 +85,29 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
                 if (screen is null || string.IsNullOrWhiteSpace(screen.Id) || screen.Id.Length > 128 || !ids.Add(screen.Id) || !names.Add(screen.Name))
                     throw new ArgumentException("Screens require unique IDs and names within their display.");
                 ScreenOptions.ValidateName(screen.Name);
+                PhotoBooth.Networking.RoleList.Parse(screen.Roles);
+                if (screen.MediaFile is not null)
+                {
+                    ScreenOptions.ValidateMediaFile(screen.MediaFile);
+                    if (!screen.IsVideo) throw new ArgumentException("MediaFile bindings belong only to video/image screens.");
+                }
                 if (screen.DefaultName is not null) ScreenOptions.ValidateName(screen.DefaultName);
-                if (screen.Type is not ("video" or "mat" or "visualization"))
-                    throw new ArgumentException("Screen type must be video, mat or visualization.");
-                if (screen.SizingMode is not ("fit" or "stretch"))
-                    throw new ArgumentException("Screen SizingMode must be fit or stretch.");
+                if (screen.Type is not ("video" or "mat" or "visualization" or "fastled"))
+                    throw new ArgumentException("Screen type must be video, mat, visualization or fastled.");
+                if (screen.IsNegative && !screen.IsMat)
+                    throw new ArgumentException("Only mat screens support IsNegative.");
                 if (!double.IsFinite(screen.Brightness) || screen.Brightness is < 0 or > 100)
                     throw new ArgumentException("Screen Brightness must be a percentage from 0 to 100.");
                 if (screen.Points is null)
                     throw new ArgumentException("Each screen requires points.");
-                if (screen.IsVisualization && (!screen.Points.Vertices.SequenceEqual(new PointOptions().Vertices) || screen.Perspective is not null))
-                    throw new ArgumentException("Visualization screens fill their display and cannot have a perspective.");
+                if (screen.IsVisualization && screen.Perspective is not null)
+                    throw new ArgumentException("Visualization screens cannot have a source perspective.");
                 screen.BlackKey?.Validate();
                 screen.Perspective?.Validate();
-                if (screen.IsMat) screen.Points.ValidatePolygon();
+                if (screen.IsLed != (screen.Perspective?.IsLed == true))
+                    throw new ArgumentException("LED perspectives belong only to fastled screens; each LED screen needs a perspective.");
+                if (screen.IsLed) LedGeometry.Validate(screen.Points, screen.IsLedArray);
+                else if (screen.IsPolygon) screen.Points.ValidatePolygon();
                 else screen.Points.Validate();
             }
         }

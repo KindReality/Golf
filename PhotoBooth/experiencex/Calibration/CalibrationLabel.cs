@@ -16,10 +16,10 @@ internal static class CalibrationLabel
         for (int i = 0; i < points.Length; i++)
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"Point {i + 1}   X {points[i].X:0.0000}   Y {points[i].Y:0.0000}   ({points[i].X * (width - 1):0}, {points[i].Y * (height - 1):0} px)"));
         lines.Add("Tab: select   Arrows: 1px   Shift: 10px");
-        lines.Add("Enter: save   Esc: cancel   Z: undo   R: reset");
-        lines.Add("Drag inside: move screen   Delete: remove screen");
-        lines.Add("T: chroma key   B: background, then B/W: black/white");
-        lines.Add("C: exit configuration   X: close");
+        lines.Add("Enter: save   Esc: cancel   Ctrl+Z: undo   R: reset");
+        lines.Add("Drag: move   Delete: remove   [: bottom   ]: top");
+        lines.Add("F: create perspective   T: chroma key   B: background");
+        lines.Add("Ctrl+Shift+Alt+C: exit   C: Controller   X: close");
         return string.Join('\n', lines);
     }
     public static (byte[] Pixels, int Width, int Height) Create(string text)

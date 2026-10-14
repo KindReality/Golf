@@ -55,9 +55,34 @@ internal static class PointSnappingChecks
                 current.PointsFor("DISPLAY1", "target").TopLeft == current.PointsFor("DISPLAY1", "third").TopLeft,
                 "All linked coordinates are persisted together");
             Check(source.Flashes == 1 && target.Flashes == 1 && third.Flashes == 1, "Each changed screen receives one save confirmation");
-            await editor.UndoAsync(target);
+            editor.SelectScreen(target);
+            Check(editor.Key(target, Forms.Keys.OemOpenBrackets), "[ moves the selected screen to the bottom");
+            var layerDeadline = DateTime.UtcNow.AddSeconds(3);
+            while (current.ScreensFor("DISPLAY1")[0].Id != "target")
+            {
+                if (DateTime.UtcNow > layerDeadline) throw new TimeoutException("[ did not persist the selected layer.");
+                await Task.Delay(10);
+            }
+            Check(editor.Key(target, Forms.Keys.Control | Forms.Keys.Z), "Ctrl+Z invokes movement undo");
+            var undoDeadline = DateTime.UtcNow.AddSeconds(3);
+            while (current.PointsFor("DISPLAY1", "source") != sourcePoints)
+            {
+                if (DateTime.UtcNow > undoDeadline) throw new TimeoutException("Ctrl+Z did not restore the linked movement.");
+                await Task.Delay(10);
+            }
             Check(current.PointsFor("DISPLAY1", "source") == sourcePoints && current.PointsFor("DISPLAY1", "target") == targetPoints &&
                 current.PointsFor("DISPLAY1", "third") == thirdPoints, "Undo from any affected screen restores the entire transaction");
+            Check(current.ScreensFor("DISPLAY1")[0].Id == "target", "Movement undo preserves layer order");
+            editor.Begin(source, .4, .1, 1);
+            editor.Move(source, .49, .1);
+            Check(editor.Key(source, Forms.Keys.Control | Forms.Keys.Z), "Ctrl+Z handles an active snapped movement");
+            var draftDeadline = DateTime.UtcNow.AddSeconds(3);
+            while (source.Preview is not null || target.Preview is not null)
+            {
+                if (DateTime.UtcNow > draftDeadline) throw new TimeoutException("Ctrl+Z did not cancel the complete snapped movement.");
+                await Task.Delay(10);
+            }
+            Check(current.PointsFor("DISPLAY1", "source") == sourcePoints && current.PointsFor("DISPLAY1", "target") == targetPoints, "Draft undo did not alter persisted geometry");
 
             editor.Begin(source, .4, .1, 1);
             editor.Move(source, .49, .1);

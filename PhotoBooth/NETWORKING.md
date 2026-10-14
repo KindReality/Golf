@@ -23,10 +23,12 @@ An event is observed/logged, never interpreted as a playback command just becaus
 Controller adds optional execution metadata to its playlist commands and events:
 
 ```json
-"context": { "scene": "idle", "playlist": "media-loop", "item": "Eye" }
+"context": { "scene": "idle", "playlist": "media-loop", "item": "Eye", "isAmbient": true }
 ```
 
-The playlist/item identify the step that actually sent the command, including nested playlists. Scene activation, deactivation, ambient and manual runs retain their owning scene. Other producers may omit `context`; names, when provided, must contain 1–128 characters without control characters. Context describes execution and does not change routing or playback. Retries retain the same body and request ID.
+The playlist/item identify the step that actually sent the command, including nested playlists. Scene activation, deactivation, ambient and manual runs retain their owning scene. `isAmbient` is true for ambient items and their nested commands; regular commands use false. Missing context or a missing flag defaults to normal priority. On Experience, normal video interrupts ambient video throughout the device; ambient video is skipped while normal video is active, including pending starts and fade-outs. Audio is unaffected by this rule. Context never changes routing. Names, when provided, must contain 1–128 characters without control characters. Retries retain the same body and request ID. Identical looping video requests with new IDs continue existing playback on each matching screen; the latest ID owns its subsequent stop.
+
+Video/audio playback also accepts a comma-separated `roles` target instead of direct `screen`, `displayName`, `audioDevice` or `audioDevices` selectors. `device: "*"` broadcasts role playback to every Experience computer; a named device restricts it to that recipient. Each Experience locally selects outputs of the appropriate media type with any matching role, ignoring case and duplicate names. There is one playback per matching output, with no default fallback for unmatched roles. Discovery inventories include configured screen and speaker roles. Role requests retain ordinary deduplication, local-media requirements, video priority, looping and audio mixing behavior; they do not add acknowledgments.
 
 Controller and ExperienceX JSON logs include a root `Context` object on entries with a known request ID: source/target, experience, media filename (`Value`), scene, playlist, item and correlation ID. ExperienceX adds the resolved local `Path` once media is found, so playback confirmation, fade, completion and failure entries remain traceable without looking up a separate receive entry. Telemetry retains context for the most recent 4096 requests with bounded memory. The root `RequestId` identifies the same command in both applications.
 

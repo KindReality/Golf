@@ -4,6 +4,50 @@ internal static class TestSuites
 {
     public static async Task RunAsync(string[] arguments)
     {
+        if (arguments.SequenceEqual(["--mask-edges"])) { await VisualizationMaskEdgeChecks.Run(); await VisualizationConfigurationChecks.Run(); await MatHardwareChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--screen-layers"])) { await ScreenLayerChecks.Run(); await MatHardwareChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--roles"]))
+        {
+            await RoleConfigurationChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--roles-hardware"]))
+        {
+            await RolePlaybackHardwareChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--video-priority"]))
+        {
+            VideoPriorityChecks.Run();
+            await VideoPriorityHardwareChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--audio"]))
+        {
+            AudioVolumeChecks.Run();
+            CoordinatedAudioChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--audio-hardware"]))
+        {
+            await CoordinatedAudioHardwareChecks.RunAsync();
+            return;
+        }
+        if(arguments.SequenceEqual(["--led-unit"])) { await LedChecks.Run(); return; }
+        if(arguments.SequenceEqual(["--led"])) { await LedChecks.Run(); await LedHardwareChecks.Run(); await LedEditingChecks.Run(); return; }
+        if(arguments.SequenceEqual(["--led-editing"])) { await LedEditingChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--gforce-control"]))
+        {
+            await VisualizationCommandChecks.Run();
+            await GForceControlChecks.Run();
+            await GForceControlHardwareChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--gforce-control-protocol"]))
+        {
+            await GForceControlChecks.Run();
+            return;
+        }
         if (arguments.SequenceEqual(["--snapping-hardware"]))
         {
             await PointSnappingHardwareChecks.Run();
@@ -37,6 +81,8 @@ internal static class TestSuites
             await GForceFullscreenChecks.Run();
             return;
         }
+        if (arguments.SequenceEqual(["--shortcuts"])) { await ConfigurationHotkeyChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--live-integration"])) { await LocalControllerExperienceChecks.Run(liveOnly:true); return; }
         if (arguments.SequenceEqual(["--local-focus"]))
         {
             await LocalControllerExperienceChecks.Run(true);
@@ -76,9 +122,10 @@ internal static class TestSuites
             await ScreenMediaBindingHardwareChecks.Run();
             return;
         }
-        if (arguments.SequenceEqual(["--sizing"]))
+        if (arguments.SequenceEqual(["--perspective-create-hardware"])) { await PerspectiveCreationHardwareChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--perspective-crop"]))
         {
-            await ScreenSizingChecks.Run();
+            await ScreenPerspectiveCropChecks.Run();
             await ConfigurationHotkeyChecks.Run();
             GpuShaderChecks.Run();
             await ScreenEditingWorkflowChecks.Run();
@@ -94,6 +141,7 @@ internal static class TestSuites
             await CommandContextChecks.Run();
             return;
         }
+        if (arguments.SequenceEqual(["--background-visualization"])) { BackgroundSelectionChecks.Run(); await BackgroundPersistenceChecks.Run(); await BackgroundVisualizationChecks.Run(); return; }
         if (arguments.SequenceEqual(["--configuration"]))
         {
             await MachineConfigurationChecks.Run();
@@ -133,7 +181,7 @@ internal static class TestSuites
         if (arguments.SequenceEqual(["--screen-transparency"]))
         {
             await ScreenTransparencyChecks.Run();
-            await ScreenSizingChecks.Run();
+            await ScreenPerspectiveCropChecks.Run();
             await MediaDiscoveryChecks.Run();
             await ScreenChromaKeyHardwareChecks.Run();
             return;
@@ -141,6 +189,11 @@ internal static class TestSuites
         if (arguments.SequenceEqual(["--screen-workflow"]))
         {
             await ScreenEditingWorkflowChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--screen-dialog"]))
+        {
+            await VideoScreenDialogChecks.Run();
             return;
         }
         if (arguments.SequenceEqual(["--mats"]))
@@ -188,6 +241,9 @@ internal static class TestSuites
         bool unit = !arguments.Contains("--hardware") || arguments.Contains("--all");
         if (unit)
         {
+            await LedChecks.Run();
+            await VisualizationCommandChecks.Run();
+            await GForceControlChecks.Run();
             await VisualizationConfigurationChecks.Run();
             await PerspectiveChecks.Run();
             ScreenMediaBindingChecks.Run();
@@ -202,7 +258,7 @@ internal static class TestSuites
             await BackgroundPersistenceChecks.Run();
             BackgroundSelectionChecks.Run();
             await ScreenTransparencyChecks.Run();
-            await ScreenSizingChecks.Run();
+            await ScreenPerspectiveCropChecks.Run();
             AudioVolumeChecks.Run();
             await ScreenBrightnessChecks.Run();
             CoordinatedAudioChecks.Run();

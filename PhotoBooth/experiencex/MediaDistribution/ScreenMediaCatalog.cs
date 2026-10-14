@@ -43,6 +43,8 @@ internal sealed class ScreenMediaCatalog
     public ScreenMediaBinding? Match(ScreenOptions screen)
     {
         if (!screen.IsVideo) return null;
+        if (screen.MediaFile is not null)
+            return _files.TryGetValue(screen.MediaFile, out var bound) ? bound : new(null, Error: $"Bound media '{screen.MediaFile}' is unavailable locally.");
         // An explicit extension disambiguates files that share a basename.
         if (_files.TryGetValue(screen.Name, out var exact)) return exact;
         if (!_names.TryGetValue(screen.Name, out var matches)) return null;

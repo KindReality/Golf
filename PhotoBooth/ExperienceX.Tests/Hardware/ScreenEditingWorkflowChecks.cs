@@ -37,6 +37,7 @@ internal static class ScreenEditingWorkflowChecks
                         MediaDiscovery = new() { Enabled = false },
                         DefaultDisplayName = primary, UdpCommandsPort = commandsPort, UdpEventsPort = eventsPort,
                         ControllerDefinitions = new() { [definitions.ControllerId] = definitions },
+                        AudioDevices = new() { ["workflow-roles"] = new() { Name = "Workflow roles", Roles = "Front,Scary" } },
                         DisplayScreens = displays.ToDictionary(d => d, d => d == other && d != primary ? new List<ScreenOptions> { new() } : []),
                         DisplayBackgrounds = displays.ToDictionary(d => d, _ => new DisplayBackgroundOptions { IsTransparent = true })
                     };
@@ -67,8 +68,12 @@ internal static class ScreenEditingWorkflowChecks
                         using var accept = new Forms.Timer { Interval = 20 };
                         accept.Tick += (_, _) =>
                         {
-                            var picker = Forms.Application.OpenForms.OfType<PerspectivePicker>().FirstOrDefault();
+                            var picker = Forms.Application.OpenForms.OfType<VideoScreenDialog>().FirstOrDefault();
                             if (picker is null) return;
+                            if (Read().ScreensFor(primary).Count == 0)
+                                foreach (var list in Descendants(picker).OfType<Forms.CheckedListBox>())
+                                    for (var index = 0; index < list.Items.Count; index++)
+                                        if (list.Items[index] is string role && role is "Front" or "Scary") list.SetItemChecked(index, true);
                             picker.DialogResult = Forms.DialogResult.OK;
                             picker.Close();
                         };
@@ -84,12 +89,14 @@ internal static class ScreenEditingWorkflowChecks
                     var editingWindow = host.DisplayWindows.Single(w => w.DisplayName == primary);
                     editingWindow.Activate();
                     editingWindow.Focus();
+                    await GForceFullscreenChecks.FocusForTest(editingWindow.Handle);
                     await Until(() => PhotoBooth.Windows.ConfigurationShortcut.ApplicationFocused);
                     await Task.Delay(150); // Focus-scoped shortcut registration refreshes every 100 ms.
                     AddVideo();
                     await Until(() => Read().ScreensFor(primary).Count == 1 && host.SelectedScreen?.DisplayName == primary);
                     var first = Read().ScreensFor(primary).Single();
                     Check(first.Name == "screen1" && first.Points == new PointOptions(), "A/V did not create a full-size first screen on the default display.");
+                    Check(RoleList.Parse(first.Roles).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(["Front", "Scary"]), "Unified creation did not persist both selected roles.");
                     void PickPerspective(int index, Forms.DialogResult result)
                     {
                         using var accept = new Forms.Timer { Interval = 20 };
@@ -112,22 +119,28 @@ internal static class ScreenEditingWorkflowChecks
                     Check(Read().ScreensFor(primary).Single().Points == first.Points, "Selecting a source perspective changed destination points.");
                     PickPerspective(0, Forms.DialogResult.OK);
                     await Until(() => Read().ScreensFor(primary).Single().Perspective is null);
+                    var edgeStart = Read().ScreensFor(primary).Single().Points;
+                    var middleX = editingWindow.ClientSize.Width / 2;
+                    SendMessage(editingWindow.Handle, 0x201, 1, (nint)middleX);
+                    SendMessage(editingWindow.Handle, 0x200, 1, (nint)((40 << 16) | middleX));
+                    SendMessage(editingWindow.Handle, 0x202, 0, (nint)((40 << 16) | middleX));
+                    await Until(() => Read().ScreensFor(primary).Single().Points.TopLeft.Y > .02);
+                    var edgeAfter = Read().ScreensFor(primary).Single().Points;
+                    Check(Math.Abs(edgeAfter.TopLeft.Y - edgeAfter.TopRight.Y) < 1e-9 && edgeAfter.BottomLeft == edgeStart.BottomLeft && edgeAfter.BottomRight == edgeStart.BottomRight, "Dragging a video edge did not translate both endpoints while preserving its angle.");
+                    await Until(() => editingWindow.ScreenDefinition(first.Id)!.Points == edgeAfter && !host.CalibrationBusy);
+                    SendMessage(editingWindow.Handle, 0x100, 0x5A, 0);
+                    await Until(() => Read().ScreensFor(primary).Single().Points == edgeStart);
+                    Console.WriteLine("Passed native edge selection, paired-point movement, persistence and undo.");
                     Console.WriteLine("Passed actual perspective picker selection, cancellation and restoration to Full without changing destination points.");
                     await GForceFullscreenChecks.FocusForTest(editingWindow.Handle);
                     await Task.Delay(150); // Focus-scoped letters register after the modal picker closes.
-                    SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.SizingId, (nint)(0x53 << 16));
-                    await Until(() => Read().ScreensFor(primary).Single().SizingMode == "stretch" &&
-                        host.DisplayWindows.Single(w => w.DisplayName == primary).ScreenDefinition(first.Id)?.SizingMode == "stretch");
-                    await Task.Delay(150); // Let the first toggle finish renderer confirmation before another key.
-                    SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.SizingId, (nint)(0x53 << 16));
-                    await Until(() => Read().ScreensFor(primary).Single().SizingMode == "fit");
                     var target = host.DisplayWindows.Single(w => w.DisplayName == other);
                     // Select a screen away from its editable center label.
                     Click(target, (int)(target.ClientSize.Width * .65), (int)(target.ClientSize.Height * .65));
                     AddVideo();
                     await Until(() => Read().ScreensFor(other).Count == 2 && host.SelectedScreen?.DisplayName == other && host.SelectedScreen?.ScreenName == "screen2");
                     var created = Read().ScreensFor(other)[1];
-                    Check(created.Name == "screen2" && created.Points.TopLeft == new ScreenPoint(.25, .25) && created.Points.BottomRight == new ScreenPoint(.75, .75), "A/V did not create a centered half-size screen on the selected screen's display.");
+                    Check(created.Name == "screen2" && created.Points == new PointOptions(), "A/V did not create a full-display screen on the selected screen's display.");
                     if (other != primary) Check(Read().ScreensFor(primary).Count == 1, "Creating on another display also added a screen to the default display.");
                     await Until(() => target.ScreenDefinition(created.Id) is not null);
                     async Task Edit(string name, int key)
@@ -156,6 +169,12 @@ internal static class ScreenEditingWorkflowChecks
                     Check(Read().ScreensFor(other)[1].Id == created.Id && File.Exists(path + ".bak"), "Renaming lost screen identity or atomic backup.");
                     var dragged = Read().ScreensFor(other)[2];
                     await Until(() => target.ScreenDefinition(dragged.Id) is not null);
+                    Check(dragged.Points == new PointOptions(), "Third screen did not fill the display.");
+                    // Resize before testing body movement: a full-display screen has no room to move.
+                    var resized = new PointOptions { Enabled = true, TopLeft = new(.25, .25), TopRight = new(.75, .25), BottomLeft = new(.25, .75), BottomRight = new(.75, .75) };
+                    await new PointConfigurationStore(path).SaveAsync(other, dragged.Points, resized, dragged.Id);
+                    dragged = dragged with { Points = resized };
+                    await Until(() => target.ScreenDefinition(dragged.Id)!.Points == resized);
                     var x = (int)(target.ClientSize.Width * .65);
                     var y = (int)(target.ClientSize.Height * .65);
                     // Press cycles overlapping screen bodies; release only until the intended screen is selected.
@@ -206,7 +225,7 @@ internal static class ScreenEditingWorkflowChecks
                     Check(Read().ScreensFor(other).Count == 2, "Delete while editing text removed a screen.");
                     SendMessage(nameEditor.Handle, 0x100, 27, 0);
                     SendMessage(target.Handle, 0x100, 0x2E, 0);
-                    await Until(() => Read().ScreensFor(other).Count == 1 && host.SelectedScreen is null);
+                    await Until(() => Read().ScreensFor(other).Count == 1 && host.SelectedScreen is null && !host.CalibrationBusy);
                     Click(target, (int)(target.ClientSize.Width * .4), (int)(target.ClientSize.Height * .4));
                     SendMessage(target.Handle, 0x100, 0x2E, 0);
                     await Until(() => Read().ScreensFor(other).Count == 0 && host.SelectedScreen is null);
@@ -215,11 +234,16 @@ internal static class ScreenEditingWorkflowChecks
                     var beforeMat = Read().ScreensFor(primary).Count;
                     SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.AddId, (nint)(0x41 << 16));
                     SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.MatId, (nint)(0x4D << 16));
-                    await Until(() => Read().ScreensFor(primary).Count == beforeMat + 1 && host.SelectedScreen is not null);
+                    SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.MatId, (nint)(0x4D << 16));
+                    await Until(() => Read().ScreensFor(primary).Count == beforeMat + 1 && Read().ScreensFor(primary).Last().IsNegative && host.SelectedScreen is not null);
                     var mask = Read().ScreensFor(primary).Last();
-                    Check(mask.IsMat && host.SelectedScreen?.ScreenId == mask.Id, "A/M did not create/select a mat on the default display.");
+                    Check(mask.IsMat && host.SelectedScreen?.ScreenId == mask.Id, "Rapid A/M/M did not create/select a negative mat on the default display.");
                     var matWindow = host.DisplayWindows.Single(w => w.DisplayName == primary);
-                    await Until(() => matWindow.ScreenDefinition(mask.Id) is not null);
+                    await Until(() => matWindow.ScreenDefinition(mask.Id)?.IsNegative == true);
+                    SendMessage(host.HotkeyWindowHandle, 0x312, ApplicationHotkeys.MatId, (nint)(0x4D << 16));
+                    await Until(() => matWindow.ScreenDefinition(mask.Id)?.IsNegative == false && !Read().ScreensFor(primary).Last().IsNegative);
+                    Check(Read().PointsFor(primary, mask.Id) == mask.Points && Read().ScreensFor(primary).Count == beforeMat + 1, "M changed the mat geometry or created another screen instead of toggling.");
+                    Console.WriteLine("Passed rapid A/M/M creation and selected-mat normal/negative toggle.");
                     await Task.Delay(150);
                     var mx = (int)((mask.Points.TopLeft.X + mask.Points.TopRight.X) / 2 * (matWindow.ClientSize.Width - 1));
                     var my = (int)(mask.Points.TopLeft.Y * (matWindow.ClientSize.Height - 1));
@@ -263,5 +287,6 @@ internal static class ScreenEditingWorkflowChecks
         Console.WriteLine("Passed full host A/V creation, renaming, round-robin body drag/release persistence, Delete selection/text guards, and deletion of the final screen using temporary configuration.");
         Console.WriteLine("Passed A/M mat creation, native edge double-click insertion, dragging the added point into a concavity, persisted undo and mat deletion.");
     }
+    private static IEnumerable<Forms.Control> Descendants(Forms.Control parent) => parent.Controls.Cast<Forms.Control>().SelectMany(c => new[] { c }.Concat(Descendants(c)));
     [DllImport("user32.dll")] private static extern nint SendMessage(nint hwnd, uint message, nint wParam, nint lParam);
 }

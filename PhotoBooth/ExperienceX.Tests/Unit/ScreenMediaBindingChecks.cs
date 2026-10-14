@@ -23,6 +23,7 @@ internal static class ScreenMediaBindingChecks
             var original = catalog.Match(screen)!;
             Check(original.Path == eye && !original.IsImage, "Video basename matching must be case insensitive.");
             Check(catalog.Match(screen with { Name = "Eye.mp4" }) == original, "Explicit filenames must select the same video.");
+            Check(catalog.Match(screen with { Name = "Eye-2", MediaFile = "Eye.mp4" }) == original && catalog.BrowseName(screen with { Name = "Eye-2", MediaFile = "Eye.mp4" }) == "Eye", "An independently named duplicate must bind and browse the same video.");
             Check(catalog.Match(screen with { Name = "Ghost.v1" }) is not null, "Dots within a basename must be retained.");
             Check(catalog.Match(screen with { Name = "Sound" }) is null && catalog.Match(screen with { Name = "Nested" }) is null,
                 "Audio, downloads and nested files must not bind video screens.");

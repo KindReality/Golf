@@ -21,7 +21,7 @@ internal sealed class RoutedAudioProvider : ISampleProvider, IWaveProvider
             throw new ArgumentOutOfRangeException(nameof(volume), "Volume must be a percentage from 0 to 100.");
         if (channel is <= 0 || channel > outputChannels)
             throw new ArgumentOutOfRangeException(nameof(channel));
-        if (!channel.HasValue && source.WaveFormat.Channels > outputChannels)
+        if (!channel.HasValue && outputChannels != 1 && source.WaveFormat.Channels > outputChannels)
             throw new ArgumentException("Source layout exceeds the output layout; select a channel explicitly.");
         _source = source;
         _channel = channel;

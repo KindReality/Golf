@@ -54,7 +54,7 @@ internal static class GForceFullscreenChecks
                     var options=new ExperienceOptions{DeveloperMode=false,ConfigurationMode=false,MediaDiscovery=new(){Enabled=false},UdpCommandsPort=commands,UdpEventsPort=events,TransitionInSeconds=.1,
                         DisplayBackgrounds=Forms.Screen.AllScreens.ToDictionary(d=>d.DeviceName,_=>new DisplayBackgroundOptions{IsTransparent=true}),
                         DisplayScreens=Forms.Screen.AllScreens.ToDictionary(d=>d.DeviceName,d=>d.Primary?new List<ScreenOptions>{
-                            new(){Id="media",Name="overlay-probe",BlackKey=new(){Enabled=chromaKey},Points=new(){Enabled=true,TopLeft=new(.08,.16),TopRight=new(.55,.16),BottomLeft=new(.08,.75),BottomRight=new(.55,.75)},SizingMode="stretch"},
+                            new(){Id="media",Name="overlay-probe",BlackKey=new(){Enabled=chromaKey},Points=new(){Enabled=true,TopLeft=new(.08,.16),TopRight=new(.55,.16),BottomLeft=new(.08,.75),BottomRight=new(.55,.75)}},
                             new(){Id="mat",Name="blackout-probe",Type="mat",Points=new(){Enabled=true,TopLeft=new(.68,.15),TopRight=new(.9,.15),BottomLeft=new(.68,.7),BottomRight=new(.9,.7)}}}:new List<ScreenOptions>())};
                     var path=Path.Combine(run,"appsettings.json");File.WriteAllText(path,JsonSerializer.Serialize(options));
                     await using(var host=new ExperienceHost(dispatcher,path))

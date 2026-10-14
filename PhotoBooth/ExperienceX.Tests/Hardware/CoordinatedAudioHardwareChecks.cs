@@ -5,7 +5,8 @@ internal static class CoordinatedAudioHardwareChecks
 {
     public static async Task RunAsync()
     {
-        var devices = AudioManager.ReadInventory().Devices.Take(3).ToArray();
+        var inventory = AudioManager.ReadInventory();
+        var devices = AudioDeviceSelection.Resolve(new() { AudioDevice = "*" }, new(), inventory.Devices, inventory.DefaultId).Devices;
         if (devices.Length < 2)
             throw new Exception("Two audio endpoints are required for coordinated audio hardware checks.");
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".wav");

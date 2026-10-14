@@ -13,6 +13,9 @@ internal sealed class ControllerDefinitionsClient(Dispatcher dispatcher, Func<Co
     private readonly Dictionary<string, Announcement> _latest = new();
     private readonly Dictionary<string, (string Revision, ControllerSharedDefinitions Definitions)> _loaded = new();
     private readonly HashSet<string> _active = [];
+    private readonly Dictionary<string,long> _seen = new();
+    public ControllerSharedDefinitions[] AvailableControllers => _loaded.Values.Select(v=>v.Definitions).Where(d=>_seen.TryGetValue(d.ControllerId,out var seen) && Environment.TickCount64-seen<30000).OrderBy(d=>d.ControllerName,StringComparer.OrdinalIgnoreCase).ToArray();
+    public PerspectiveSelection? FindPerspective(string controllerId,string perspectiveId) => _loaded.TryGetValue(controllerId,out var loaded) && loaded.Definitions.Perspectives.FirstOrDefault(p=>p.Id==perspectiveId) is { } p ? loaded.Definitions.Select(p) : null;
     private readonly AsyncTaskScope _tasks = new("Controller definitions");
     private readonly HttpClient _http = new(transport ?? new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false }) { Timeout = TimeSpan.FromSeconds(8) };
     public IReadOnlyList<PerspectiveSelection> Perspectives => _loaded.Values.SelectMany(c => c.Definitions.Perspectives.Select(c.Definitions.Select))
@@ -39,6 +42,7 @@ internal sealed class ControllerDefinitionsClient(Dispatcher dispatcher, Func<Co
             if (!Guid.TryParse(id, out _) || revision is null || revision.Length != 64 || !revision.All(Uri.IsHexDigit) || port is < 1 or > 65535)
                 throw new ArgumentException("Invalid controller announcement identity, revision or HTTP port.");
             ControllerDiscovery.MediaShare(host);
+            _seen[id]=Environment.TickCount64;
             _latest[id] = new(host, port, revision, message.SenderAddress ?? host);
             if (_loaded.TryGetValue(id, out var loaded) && loaded.Revision == revision || !_active.Add(id))
                 return;

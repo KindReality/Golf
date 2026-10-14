@@ -11,6 +11,7 @@ internal sealed class VideoPlaybackTimeline
     private double _fadeAt, _fadeDuration, _fadeFrom;
     private bool _fading;
     private bool _loop, _stopping, _reportFade;
+    internal bool Stopping => _stopping;
     public bool Started
     {
         get; private set;

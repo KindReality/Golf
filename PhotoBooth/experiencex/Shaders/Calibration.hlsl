@@ -48,9 +48,24 @@ float4 PSMain(Vertex input) : SV_Target {
             if(p.x<a.x+(p.y-a.y)*(b.x-a.x)/(b.y-a.y)) inside=!inside;
         }
     }
+    if(grid.x == -2) {
+        float2 a=PointAt(0).xy*(dimensions-1),b=PointAt(1).xy*(dimensions-1);
+        float2 direction=normalize(b-a),normal=float2(-direction.y,direction.x);
+        float along=dot(p-a,direction),across=dot(p-a,normal),len=length(b-a),halfWidth=row0.x*0.5;
+        inside=along>=0 && along<=len && abs(across)<=halfWidth;
+        if(along>=0 && along<=len) distance=min(distance,abs(abs(across)-halfWidth));
+        if(abs(across)<=halfWidth) distance=min(distance,min(abs(along),abs(along-len)));
+    }
     float lineAlpha=(0.5*exp(-distance*distance/1.5)+0.13*exp(-distance*distance/24))*screen.w;
     float3 azure=float3(0.05,0.55,1);
     float4 color=float4(azure*lineAlpha,lineAlpha);
+    if(grid.x == -1 && screen.w > 0) {
+        float2 handle=row0.xy*(dimensions-1),anchor=row0.zw*(dimensions-1);
+        float stem=0.4*exp(-pow(DistanceToLine(p,handle,anchor),2)/2);
+        float ring=0.75*exp(-pow(length(p-handle)-9,2)/3);
+        float alpha=max(stem,ring)*screen.w;
+        color=Over(color,float4(azure*alpha,alpha));
+    }
     float3 position=float3(input.uv,1);
     float divisor=dot(row2.xyz,position);
     float2 uv=float2(dot(row0.xyz,position),dot(row1.xyz,position))/max(divisor,0.000001);

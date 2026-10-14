@@ -40,6 +40,17 @@ internal static class ScreenMediaNameCycleChecks
             var restarted = ExperienceOptions.Parse(new PointConfigurationStore(path).EnsureDisplays(["TEST"]));
             Check(restarted.ScreensFor("TEST")[0].DefaultName == "screen1" && restarted.ScreensFor("TEST")[0].Name == "zebra",
                 "Restart lost the saved zero position or current media name.");
+            await store.RenameScreenAsync("TEST", "second", "screen2", "zebra", "zebra.mp4");
+            var repeated = ExperienceOptions.Parse(File.ReadAllText(path)).ScreensFor("TEST").Single(s=>s.Id=="second");
+            Check(repeated.Name == "zebra-2" && repeated.MediaFile == "zebra.mp4" && catalog.Match(repeated)?.Path?.EndsWith("zebra.mp4") == true,
+                "Repeated media must receive a unique screen name with the original file binding.");
+            await store.RenameScreenAsync("TEST", "second", "zebra-2", "zebra-2");
+            Check(ExperienceOptions.Parse(File.ReadAllText(path)).ScreensFor("TEST").Single(s=>s.Id=="second").MediaFile == "zebra.mp4", "Unchanged name submission discarded its duplicate binding.");
+            await store.RenameScreenAsync("TEST", "second", "zebra-2", "screen2");
+            Check(ExperienceOptions.Parse(File.ReadAllText(path)).ScreensFor("TEST").Single(s=>s.Id=="second").MediaFile is null, "Returning to the default screen name must release its explicit media binding.");
+            Check(ScreenOptions.AvailableMediaName(new string('a',80), [new(){Name=new string('a',80)}]).Length == 80, "Generated suffix exceeded the screen name limit.");
+            foreach (var invalid in new[]{"../Eye.mp4", @"C:\Eye.mp4", "Eye.mp4/Other"})
+                try { ScreenOptions.ValidateMediaFile(invalid); throw new Exception("Unsafe media binding filename accepted."); } catch(ArgumentException) { }
             var added = await store.AddScreenAsync("TEST");
             Check(added.Name == "screen4" && added.DefaultName == "screen4", "New screens reused another screen's default name.");
             try

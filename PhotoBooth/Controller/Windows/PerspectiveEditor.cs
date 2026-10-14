@@ -7,6 +7,8 @@ namespace Controller.Windows;
 internal sealed class PerspectiveEditor : Form
 {
     private readonly ControllerHost _host;
+    private readonly Action? _switchExperience;
+    private readonly Action<PerspectiveDefinition?, Action<PerspectiveDefinition>>? _openLed;
     private readonly PerspectivePreview _preview = new();
     private readonly ElementHost _canvas = new() { Dock = DockStyle.Fill };
     private readonly FlowLayoutPanel _media = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false };
@@ -19,26 +21,30 @@ internal sealed class PerspectiveEditor : Form
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 150 };
     private PerspectiveDefinition[] _values;
     private PerspectiveDefinition[]? _undo;
+    private sealed record MovementUndo(string Id, PerspectiveRectangle Before, PerspectiveRectangle After);
+    private MovementUndo? _movementUndo;
+    private Task _saveTask = Task.CompletedTask;
+    internal PerspectivePreview Preview => _preview;
     private PerspectiveDefinition[]? _awaiting;
     private DateTime _awaitUntil;
     private string? _selected;
     private bool _updating, _saving, _add, _seeking;
     private bool Typing => _name.ContainsFocus || _coordinates.Any(c => c.ContainsFocus);
     private sealed record Choice(PerspectiveDefinition Value) { public override string ToString() => Value.Name; }
-    public PerspectiveEditor(ControllerHost host)
+    public PerspectiveEditor(ControllerHost host, Action<PerspectiveDefinition?, Action<PerspectiveDefinition>>? openLed = null, Action? switchExperience = null)
     {
-        _host = host; _values = host.Options.Perspectives;
+        _switchExperience = switchExperience; _openLed = openLed; _host = host; _values = host.Options.Perspectives;
         Text = "Controller • Perspectives"; Font = new("Segoe UI", 10); BackColor = DarkTheme.Background; ForeColor = DarkTheme.Text;
         ClientSize = new(1120, 780); MinimumSize = new(980, 660); StartPosition = FormStartPosition.CenterParent;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1, RowCount = 5, BackColor = BackColor };
         layout.RowStyles.Add(new(SizeType.Absolute, 85)); layout.RowStyles.Add(new(SizeType.Absolute, 42));
         layout.RowStyles.Add(new(SizeType.Percent, 100)); layout.RowStyles.Add(new(SizeType.Absolute, 45)); layout.RowStyles.Add(new(SizeType.Absolute, 34));
         layout.Controls.Add(_media, 0, 0);
-        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
         toolbar.Controls.Add(_perspectives);
         Button Button(string text, Action clicked) { var b = new Button { Text = text, AutoSize = true }; DarkTheme.Button(b); b.Click += (_, _) => clicked(); toolbar.Controls.Add(b); return b; }
-        Button("Add perspective", Add); Button("Rename", () => _name.Focus()); Button("Delete", Delete); Button("Reset", Reset); Button("Undo", Undo);
-        Button("Exit configuration", () => Exit()); layout.Controls.Add(toolbar, 0, 1);
+        Button("Add perspective", Add); Button("LED settings", EditLed); Button("Rename", () => _name.Focus()); Button("Delete", Delete); Button("Reset", Reset); Button("Undo", Undo);
+         layout.Controls.Add(toolbar, 0, 1);
         _preview.Shortcut = HandleShortcut;
         _canvas.Child = _preview; layout.Controls.Add(_canvas, 0, 2);
         var fields = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
@@ -52,7 +58,7 @@ internal sealed class PerspectiveEditor : Form
         _name.BackColor = DarkTheme.Background; _name.ForeColor = DarkTheme.Text;
         foreach (var c in _coordinates) { c.BackColor = BackColor; c.ForeColor = ForeColor; c.KeyDown += FieldKey; }
         _name.KeyDown += FieldKey;
-        _perspectives.SelectedIndexChanged += (_, _) => { if (!_updating && _perspectives.SelectedItem is Choice c) { _selected = c.Value.Id; _preview.Select(_selected); UpdateFields(); _canvas.Focus(); } };
+        _perspectives.SelectedIndexChanged += (_, _) => { if (!_updating && _perspectives.SelectedItem is Choice c) { _selected = c.Value.Id; Render(); _canvas.Focus(); } };
         _preview.Selected += id => { _selected = id; UpdateFields(); };
         _preview.RenameRequested += () => { _name.Focus(); _name.SelectAll(); };
         _preview.Completed += (_, next) => Save(_values.Select(p => p.Id == next.Id ? next : p).ToArray());
@@ -87,13 +93,13 @@ internal sealed class PerspectiveEditor : Form
             else _awaiting = null;
         }
         if (!_saving && !_host.Options.Perspectives.SequenceEqual(_values))
-        { _values = _host.Options.Perspectives; _undo = null; Render(); _preview.Flash(true); _status.Text = "Perspectives updated"; }
+        { _values = _host.Options.Perspectives; _undo = null; _movementUndo = null; Render(); _preview.Flash(true); _status.Text = "Perspectives updated"; }
         if (!_seeking && _preview.Duration > 0) _seek.Value = Math.Clamp((int)(_preview.Position / _preview.Duration * 1000), 0, 1000);
     }
     private void Render()
     {
         if (!_values.Any(p => p.Id == _selected)) _selected = _values.FirstOrDefault()?.Id;
-        _preview.SetPerspectives(_values, _selected); UpdateFields();
+        _preview.SetPerspectives(_values.Any(p=>p.Id==_selected && p.IsLed) ? [] : _values.Where(p => !p.IsLed).ToArray(), _selected); UpdateFields();
     }
     private void UpdateFields()
     {
@@ -103,7 +109,7 @@ internal sealed class PerspectiveEditor : Form
         _perspectives.SelectedIndex = Array.FindIndex(_values, p => p.Id == _selected);
         _name.Enabled = value is not null; _name.Text = value?.Name ?? "";
         var r = value?.Rectangle ?? new(); var coords = new[] { r.X, r.Y, r.Width, r.Height };
-        for (int i = 0; i < 4; i++) { _coordinates[i].Enabled = value is not null; _coordinates[i].Value = (decimal)Math.Clamp(coords[i], 0, 100); }
+        for (int i = 0; i < 4; i++) { _coordinates[i].Enabled = value is not null && !value.IsLed; _coordinates[i].Value = (decimal)Math.Clamp(coords[i], 0, 100); }
         _updating = false;
     }
     private void FieldKey(object? sender, KeyEventArgs e)
@@ -116,7 +122,11 @@ internal sealed class PerspectiveEditor : Form
         var p = _values.FirstOrDefault(p => p.Id == _selected); if (p is null) return;
         Save(_values.Select(v => v.Id != p.Id ? v : v with { Name = _name.Text.Trim(), Rectangle = new() { X = (double)_coordinates[0].Value, Y = (double)_coordinates[1].Value, Width = (double)_coordinates[2].Value, Height = (double)_coordinates[3].Value } }).ToArray());
     }
-    private async void Save(PerspectiveDefinition[] next, bool undo = false)
+    private void Save(PerspectiveDefinition[] next, bool undo = false)
+    {
+        if (!_saving) _saveTask = SaveAsync(next, undo);
+    }
+    private async Task SaveAsync(PerspectiveDefinition[] next, bool undo)
     {
         if (_saving) return; _saving = true; _preview.IsEnabled = false;
         try
@@ -125,9 +135,17 @@ internal sealed class PerspectiveEditor : Form
             var previous = _values; await _host.SavePerspectivesAsync(previous, next);
             if (IsDisposed) return;
             if (!undo) _undo = previous;
+            if (undo) { _undo = null; _movementUndo = null; }
+            else
+            {
+                var movements = previous.Join(next, before => before.Id, after => after.Id, (before, after) => new MovementUndo(before.Id, before.Rectangle, after.Rectangle))
+                    .Where(change => change.Before != change.After).ToArray();
+                if (movements.Length == 1) _movementUndo = movements[0];
+                if (_movementUndo is { } movement && !next.Any(value => value.Id == movement.Id)) _movementUndo = null;
+            }
             _values = next; _awaiting = next; _awaitUntil = DateTime.UtcNow.AddSeconds(3); Render(); _preview.Flash(true); _status.Text = "Saved • announced immediately";
         }
-        catch (Exception ex) { if (!IsDisposed) { _values = _host.Options.Perspectives; _undo = null; Render(); _preview.Flash(false); _status.Text = ex.Message; } _host.Log.Error("PerspectiveEditFailed", ex); }
+        catch (Exception ex) { if (!IsDisposed) { _values = _host.Options.Perspectives; _undo = null; _movementUndo = null; Render(); _preview.Flash(false); _status.Text = ex.Message; } _host.Log.Error("PerspectiveEditFailed", ex); }
         finally { _saving = false; _preview.IsEnabled = true; }
     }
     private void Add()
@@ -136,13 +154,48 @@ internal sealed class PerspectiveEditor : Form
         var p = new PerspectiveDefinition { Name = "perspective" + n, Rectangle = _values.Length == 0 ? new() : new() { X = 25, Y = 25, Width = 50, Height = 50 } };
         _selected = p.Id; Save([.. _values, p]); _canvas.Focus();
     }
+    private void EditLed() => EditLed(false);
+    private void EditLed(bool create)
+    {
+        var original = create ? null : _values.FirstOrDefault(p => p.Id == _selected && p.IsLed);
+        if (_openLed is not null) { _openLed(original, result => ApplyLed(original, result)); return; }
+        using var editor = new LedPerspectiveEditor(original);
+        if (editor.ShowDialog(this) != DialogResult.OK || editor.Result is not { } result) return;
+        ApplyLed(original, result);
+    }
+    private void ApplyLed(PerspectiveDefinition? original, PerspectiveDefinition result)
+    {
+        _selected = result.Id;
+        Save(original is null ? [.. _values, result] : _values.Select(p => p.Id == result.Id ? result : p).ToArray());
+    }
     private void Delete() { if (_selected is not null) Save(_values.Where(p => p.Id != _selected).ToArray()); }
     private void Reset() { if (_selected is not null) Save(_values.Select(p => p.Id == _selected ? p with { Rectangle = new() } : p).ToArray()); }
-    private void Undo() { if (_preview.Editing) { _preview.CancelEdit(); return; } if (_undo is { } undo) { _undo = null; Save(undo, true); } }
-    private async void Exit() { try { await _host.SetConfigurationModeAsync(false); Close(); } catch (Exception ex) { _status.Text = ex.Message; } }
+    private void Undo() { if (_saving) return; if (_preview.Editing) { _preview.CancelEdit(); return; } if (_undo is { } undo) { _undo = null; Save(undo, true); } }
+    private void UndoMovement()
+    {
+        if (_saving) return;
+        if (_preview.Editing) { _preview.CancelEdit(); return; }
+        if (_movementUndo is not { } movement || !_values.Any(value => value.Id == movement.Id && value.Rectangle == movement.After)) return;
+        Save(_values.Select(value => value.Id == movement.Id ? value with { Rectangle = movement.Before } : value).ToArray(), true);
+    }
+    private async void MoveLayer(bool front)
+    {
+        if (_saving || _selected is not { } selected) return;
+        _preview.FinishKeyboardEdit();
+        await _saveTask;
+        if (IsDisposed || !_host.Options.ConfigurationMode || _selected != selected) return;
+        var index = Array.FindIndex(_values, value => value.Id == selected);
+        if (index < 0 || index == (front ? _values.Length - 1 : 0)) return;
+        var next = _values.ToList(); var value = next[index]; next.RemoveAt(index);
+        next.Insert(front ? next.Count : 0, value);
+        Save(next.ToArray());
+    }
     protected override bool ProcessCmdKey(ref Message m, Keys key) => HandleShortcut(key) || base.ProcessCmdKey(ref m, key);
     private bool HandleShortcut(Keys key)
     {
+        if (!_host.Options.ConfigurationMode) return false;
+        if (key == (Keys.Control | Keys.Z) && !Typing) { UndoMovement(); return true; }
+        if (!Typing && key is Keys.OemOpenBrackets or Keys.OemCloseBrackets) { MoveLayer(key == Keys.OemCloseBrackets); return true; }
         if (_perspectives.ContainsFocus) return false;
         if (Typing)
         {
@@ -150,6 +203,7 @@ internal sealed class PerspectiveEditor : Form
             if (key == Keys.Escape) { UpdateFields(); _canvas.Focus(); return true; }
             return false;
         }
+        if (key == Keys.E && _switchExperience is not null) { _switchExperience(); return true; }
         if (_canvas.ContainsFocus || _preview.IsKeyboardFocusWithin)
         {
             if (key is Keys.Tab or (Keys.Shift | Keys.Tab)) { _preview.NextPoint((key & Keys.Shift) != 0); return true; }
@@ -158,9 +212,10 @@ internal sealed class PerspectiveEditor : Form
             { _preview.Nudge(code == Keys.Left ? -1 : code == Keys.Right ? 1 : 0, code == Keys.Up ? -1 : code == Keys.Down ? 1 : 0, (key & Keys.Shift) != 0 ? 10 : 1); return true; }
             if (key == Keys.Enter) { _preview.FinishKeyboardEdit(); return true; }
         }
-        if (key == Keys.C) { Exit(); return true; }
-        if (key == Keys.A) { _add = true; _status.Text = "Add • P: perspective"; return true; }
+
+        if (key == Keys.A) { _add = true; _status.Text = "Add • P: media perspective • L: LED perspective"; return true; }
         if (key == Keys.P && _add) { _add = false; Add(); return true; }
+        if (key == Keys.L && _add) { _add = false; EditLed(true); return true; }
         _add = false;
         if (key == Keys.N) { _name.Focus(); _name.SelectAll(); return true; }
         if (key == Keys.Delete) { Delete(); return true; }

@@ -60,6 +60,11 @@ internal sealed record ControllerOptions : BroadcastOptions
             Unique(playlist.Items.Select(i => i.Name), $"item in {playlist.Name}");
             foreach (var item in playlist.Items)
             {
+                var itemRoles = RoleList.Parse(item.Roles);
+                if (!Same(item.BroadcastMode, "Broadcast") && !Same(item.BroadcastMode, "Random"))
+                    throw new ArgumentException($"BroadcastMode must be Broadcast or Random: {playlist.Name}/{item.Name}.");
+                if (itemRoles.Length == 0 && (Same(item.BroadcastMode, "Random") || item.IncludeSubwoofer))
+                    throw new ArgumentException($"Random targeting and IncludeSubwoofer require a nonempty Roles list: {playlist.Name}/{item.Name}.");
                 if (item.DelayMilliseconds is < 0 or > 86400000 || item.CooldownMilliseconds is < 0 or > 86400000 || item.Commands is null || item.Commands.Any(c => c is null) || item.Commands.Length is 0 or > 1000) throw new ArgumentException($"Invalid timing/commands: {playlist.Name}/{item.Name}.");
                 if (playlist.Type == "ambient")
                 {
@@ -76,7 +81,12 @@ internal sealed record ControllerOptions : BroadcastOptions
                     }
                     if (command.Transport is not ("udp" or "arduino") || command.Type is not ("command" or "event") || command.Payload.ValueKind != JsonValueKind.Object) throw new ArgumentException($"Invalid command: {playlist.Name}/{item.Name}.");
                     if (command.Transport == "arduino" && (command.Type != "command" || !Arduinos.Any(a => Same(a.Name, command.Device)))) throw new ArgumentException($"Unknown Arduino target: {command.Device}.");
-                    BroadcastEnvelope.Create(this, command.Type, command.Device!, command.Payload);
+                    // Check every possible random destination rather than treating the entire list as one packet.
+                    foreach (var roles in Same(item.BroadcastMode, "Random") ? itemRoles : [item.Roles])
+                    {
+                        var routed = PlaylistRoleTarget.Apply(command, roles, item.IncludeSubwoofer);
+                        BroadcastEnvelope.Create(this, routed.Type, routed.Device!, routed.Payload);
+                    }
                     if (command.Type == "event") RequireInput(command.Payload);
                 }
             }

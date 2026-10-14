@@ -17,6 +17,14 @@ internal sealed class ControllerHost : IAsyncDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private ControllerOptions _options;
     private readonly ControllerAnnouncements _announcements;
+    public ExperienceRegistry Experiences { get; }
+    public Task DiscoverExperiencesAsync() => UdpBroadcastSender.SendAsync(ExperienceDiscovery.Request(Options), Options, _shutdown.Token);
+    public async Task SendLiveAsync(byte[] bytes)
+    {
+        var message = BroadcastEnvelope.Parse(bytes);
+        await UdpBroadcastSender.SendAsync(bytes, Options, _shutdown.Token);
+        Log.Info("LivePlaybackSent", $"Live {ControllerOptions.Text(message.Body, "experience")}: {ControllerOptions.Text(message.Body, "value")} to {message.Device}", new { message.Device, message.Body }, message.RequestId);
+    }
     public ActivityLog Log { get; } = new();
     public PlaylistEngine Engine { get; }
     public SceneManager Scenes { get; }
@@ -41,6 +49,7 @@ internal sealed class ControllerHost : IAsyncDisposable
         var environment = BuildEnvironment.Load(Path.Combine(AppContext.BaseDirectory, "appsettings.environment.json"));
         _configuration = new(path, environment, Log, ApplyAsync, templateDirectory);
         _options = _configuration.Initial;
+        Experiences = new(Log);
         _announcements = new(() => Options, Log);
         _arduinos = new(Log, ReceiveSerialAsync);
         Engine = new(_options, new CommandDispatcher(_arduinos, ReceiveUdpAsync, _shutdown.Token), Log);
@@ -81,6 +90,8 @@ internal sealed class ControllerHost : IAsyncDisposable
     {
         if (token.IsCancellationRequested || !message.Targets(Options.EffectiveDeviceName) || message.IsExpired(DateTimeOffset.UtcNow)) return;
         if (!_received.Accept(message.Source.ToUpperInvariant(), message.RequestId, Options.RequestDeduplicationSeconds)) return;
+        if (message.Event == ExperienceDiscovery.Event) { Experiences.Receive(message); return; }
+        if (ExperienceDiscovery.IsRequest(message)) return;
         Telemetry.SetRequestContext(message.RequestId, new()
         {
             Source = message.Source,
@@ -88,6 +99,8 @@ internal sealed class ControllerHost : IAsyncDisposable
             Scene = message.Context?.Scene,
             Playlist = message.Context?.Playlist,
             Item = message.Context?.Item,
+            IsAmbient = message.Context?.IsAmbient == true,
+            Roles = ControllerOptions.Text(message.Body, "roles"),
             Experience = ControllerOptions.Text(message.Body, "experience"),
             Value = ControllerOptions.Text(message.Body, "value"),
             CorrelationId = ControllerOptions.Text(message.Body, "correlationId")
@@ -107,12 +120,20 @@ internal sealed class ControllerHost : IAsyncDisposable
         else
         {
             var command = ControllerOptions.Text(message.Body, "command");
+            if (command == "perspective.create")
+            {
+                var request=PerspectiveCreateRequest.Parse(message.Body);
+                if(request.ControllerId!=Options.ControllerId)return;
+                var saved=await _configuration.CreatePerspectiveAsync(request).ConfigureAwait(false);
+                Log.Info("PerspectiveCreatedFromExperience", $"{message.Source}: saved {saved.Name}", new { message.Source, saved.Id, saved.Name, saved.Rectangle }, message.RequestId);
+                return;
+            }
             if (command is "scene" or "playlist")
             {
                 var name = ControllerOptions.Text(message.Body, "value") ?? throw new ArgumentException("Controller commands require value (a scene or playlist name).");
                 var chain = BroadcastChain.From(message);
                 if (command == "scene") Scenes.Request(name, chain);
-                else Engine.Run(name, chain: chain, owner: $"Network: {message.Source}");
+                else Engine.Run(name, chain: chain, owner: $"Network: {message.Source}", isAmbient: message.Context?.IsAmbient == true);
             }
             else Log.Info("CommandObserved", $"Command observed from {message.Source}", new { message.Source, message.Device }, message.RequestId);
         }
@@ -137,6 +158,7 @@ internal sealed class ControllerHost : IAsyncDisposable
         await _configuration.DisposeAsync().ConfigureAwait(false);
         await _announcements.DisposeAsync().ConfigureAwait(false);
         await _listener.DisposeAsync().ConfigureAwait(false);
+        await Experiences.DisposeAsync().ConfigureAwait(false);
         _shutdown.Cancel();
         await Scenes.DisposeAsync().ConfigureAwait(false);
         await Engine.DisposeAsync().ConfigureAwait(false);

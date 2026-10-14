@@ -8,28 +8,38 @@ internal sealed class ConfigurationShortcut : Forms.NativeWindow, IDisposable
 {
     private const int HotkeyId = 0x5343;
     private readonly uint _enable = RegisterWindowMessage("HomeTechnologies.EnableConfiguration.v1");
+    private readonly uint _focus = RegisterWindowMessage("HomeTechnologies.FocusApplication.v1");
+    private readonly Func<bool> _configured;
+    private readonly Action<bool>? _stateReceived;
+    private readonly Action? _focusReceived;
     private readonly Forms.Timer _retry = new() { Interval = 1000 };
-    private readonly Action _received;
-    private readonly string _application;
     private bool _registered, _disposed;
     internal bool OwnsShortcut => _registered && !_disposed;
-    public ConfigurationShortcut(string application, Action received)
+    public ConfigurationShortcut(string application, Func<bool> configured, Action<bool> received, Action focus)
     {
-        _received = received;
-        _application = application;
+        _configured = configured; _stateReceived = received; _focusReceived = focus;
         CreateHandle(new Forms.CreateParams { Caption = "HomeTechnologies.Configuration." + application });
         _retry.Tick += (_, _) => TryRegister();
         TryRegister(); _retry.Start();
     }
-    private void TryRegister() { if (!_disposed && !_registered) _registered = RegisterHotKey(Handle, HotkeyId, 0x4007, 0x43); }
-    public void EnableBoth()
+    public void ToggleBoth() => SetBoth(!_configured());
+    public void SetBoth(bool enabled)
     {
-        var controller = FindWindow(null, "HomeTechnologies.Configuration.Controller");
-        var granted=false;
-        if (controller != 0) { GetWindowThreadProcessId(controller, out var pid); granted=AllowSetForegroundWindow(pid); }
-        PhotoBooth.Diagnostics.Telemetry.Info("SharedConfigurationRequested",new{Application=_application,ControllerFound=controller!=0,ForegroundGrant=granted,ForegroundProcessId});
-        PostMessage(new nint(0xffff), _enable, 0, 0);
+        if (enabled) Grant("Controller");
+        PostMessage(new nint(0xffff), _enable, enabled ? 1 : 2, 0);
     }
+    private static nint Grant(string application)
+    {
+        var target = FindWindow(null, "HomeTechnologies.Configuration." + application);
+        if (target != 0) { GetWindowThreadProcessId(target, out var pid); AllowSetForegroundWindow(pid); }
+        return target;
+    }
+    public bool SwitchTo(string application)
+    {
+        var target = Grant(application);
+        return target != 0 && PostMessage(target, _focus, 0, 0);
+    }
+    private void TryRegister() { if (!_disposed && !_registered) _registered = RegisterHotKey(Handle, HotkeyId, 0x4007, 0x43); }
     public static bool ControllerRunning => FindWindow(null, "HomeTechnologies.Configuration.Controller") != 0;
     public static bool ControllerFocused
     {
@@ -49,8 +59,9 @@ internal sealed class ConfigurationShortcut : Forms.NativeWindow, IDisposable
     public static uint ForegroundProcessId { get { GetWindowThreadProcessId(GetForegroundWindow(),out var pid);return pid; } }
     protected override void WndProc(ref Forms.Message m)
     {
-        if (!_disposed && m.Msg == 0x312 && m.WParam == HotkeyId) { EnableBoth(); return; }
-        if (!_disposed && (uint)m.Msg == _enable) { _received(); return; }
+        if (!_disposed && m.Msg == 0x312 && m.WParam == HotkeyId) { ToggleBoth(); return; }
+        if (!_disposed && (uint)m.Msg == _enable) { _stateReceived?.Invoke(m.WParam != 2); return; }
+        if (!_disposed && (uint)m.Msg == _focus) { _focusReceived?.Invoke(); return; }
         base.WndProc(ref m);
     }
     public void Dispose()

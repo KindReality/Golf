@@ -42,14 +42,26 @@ internal static class MatChecks
                 root["DisplayScreens"]!["TEST"]![0]!["Keystone"] is null && root["DisplayScreens"]!["TEST"]![0]!["Points"]!["Vertices"]!.AsArray().Count == 4,
                 "Existing video coordinates were lost or kept obsolete point names during migration.");
             var mat = await store.AddScreenAsync("TEST", type: "mat");
-            Check(mat.IsMat && mat.Points.TopLeft == new ScreenPoint(.25, .25), "Mat creation did not share normal naming/initial geometry.");
+            Check(mat.IsMat && !mat.IsNegative && mat.Points == new PointOptions(), "New mat did not fill the display in normal mode.");
             await store.SaveAsync("TEST", mat.Points, concave, mat.Id);
             options = ExperienceOptions.Parse(store.EnsureDisplays(["TEST"]));
             Check(options.PointsFor("TEST", mat.Id) == concave && JsonNode.Parse(File.ReadAllText(path))!["Custom"]!.GetValue<int>() == 23, "Mat persistence/startup lost added points or unrelated settings.");
+            await store.ToggleMatNegativeAsync("TEST", mat.Id);
+            var reloaded = ExperienceOptions.Parse(new PointConfigurationStore(path).EnsureDisplays(["TEST"]));
+            Check(reloaded.ScreensFor("TEST").Single(s => s.Id == mat.Id).IsNegative && reloaded.PointsFor("TEST", mat.Id) == concave &&
+                reloaded.ScreensFor("TEST").Select(s => s.Id).SequenceEqual(options.ScreensFor("TEST").Select(s => s.Id)),
+                "Negative mat did not retain its geometry, identity, order and mode after restart.");
+            await store.ToggleMatNegativeAsync("TEST", mat.Id);
+            Check(!ExperienceOptions.Parse(File.ReadAllText(path)).ScreensFor("TEST").Single(s => s.Id == mat.Id).IsNegative, "Second toggle did not restore normal mode.");
+            try { await store.ToggleMatNegativeAsync("TEST", "video"); throw new Exception("Video accepted a mat toggle."); } catch (InvalidOperationException) { }
+            await store.SetConfigurationModeAsync(false);
+            try { await store.ToggleMatNegativeAsync("TEST", mat.Id); throw new Exception("Mat toggled outside configuration mode."); } catch (InvalidOperationException) { }
+            await store.SetConfigurationModeAsync(true);
+            try { (options with { DisplayScreens = new() { ["TEST"] = [new() { Type = "video", IsNegative = true }] } }).Validate(); throw new Exception("Non-mat negative configuration accepted."); } catch (ArgumentException) { }
             try { await store.SaveAsync("TEST", options.PointsFor("TEST", "video"), concave, "video"); throw new Exception("A video screen accepted polygon points."); }
             catch (ArgumentException) { }
         }
         finally { Directory.Delete(folder, true); }
-        Console.WriteLine("Passed point migration, mat creation/persistence, concave selection/triangulation, edge projection, whole-polygon bounds, crossing rejection and 40-point geometry.");
+        Console.WriteLine("Passed normal/negative mat persistence and guards, point migration, concave selection/triangulation, edge projection, whole-polygon bounds, crossing rejection and 40-point geometry.");
     }
 }

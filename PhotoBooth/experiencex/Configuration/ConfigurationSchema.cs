@@ -70,6 +70,7 @@ internal static class ConfigurationSchema
             foreach (var screens in displayScreens.Select(p => p.Value).OfType<JsonArray>())
                 foreach (var screen in screens.OfType<JsonObject>())
                 {
+                    changed |= screen.Remove("SizingMode");
                     if (screen.TryGetPropertyValue("Keystone", out var keystone))
                     {
                         if (!screen.ContainsKey("Points")) screen["Points"] = keystone?.DeepClone();

@@ -1,5 +1,7 @@
 using System.Drawing;
 using System.IO;
+using System.Net.Sockets;
+using System.ComponentModel;
 using PhotoBooth.Diagnostics;
 using Forms = System.Windows.Forms;
 
@@ -18,8 +20,19 @@ internal sealed class VisualizationManager : IAsyncDisposable
         public bool Requested;
         public nint Fullscreen;
         public Task? Stopping;
+        public CancellationTokenSource? Lifetime;
+        public GForceControlClient? Client;
+        public VisualizationControls? Controls;
+        public VisualizationOptions? Applied;
+        public VisualizationOptions? Rejected;
+        public Task? Configuring;
+        public Exception? ControlFailure;
+        public bool Polling;
+        public string? ActiveRequestId;
+        public readonly SemaphoreSlim Operations = new(1);
     }
     private readonly Dictionary<string, Instance> _instances = new(StringComparer.OrdinalIgnoreCase);
+    private readonly AsyncTaskScope _tasks = new("Visualizations");
     internal int[] ProcessIds => _instances.Values.Where(i => i.Owner is not null).Select(i => i.Owner!.Process.Id).ToArray();
 
     internal static string Executable(VisualizationOptions options)
@@ -76,6 +89,11 @@ internal sealed class VisualizationManager : IAsyncDisposable
                     state.Started = now;
                     state.Requested = false;
                     state.Fullscreen = 0;
+                    state.Lifetime = new();
+                    state.ControlFailure = null;
+                    state.Applied = null;
+                    state.Rejected = null;
+                    Configure(window.DisplayName, state, options.Visualization);
                     Telemetry.Info("VisualizationStarting", new
                     {
                         window.DisplayName,
@@ -88,6 +106,15 @@ internal sealed class VisualizationManager : IAsyncDisposable
                 var process = state.Owner.Process;
                 if (process.HasExited)
                     throw new InvalidOperationException($"G-Force exited with code {process.ExitCode}.");
+                if (state.ControlFailure is { } failure) throw new InvalidOperationException("G-Force control failed.", failure);
+                if (state.Configuring is null or { IsCompleted: true } && state.Applied != options.Visualization && state.Rejected != options.Visualization)
+                    Configure(window.DisplayName, state, options.Visualization);
+                if (state.Configuring is { IsCompleted: false }) continue;
+                if (!state.Polling)
+                {
+                    state.Polling = true;
+                    _tasks.Run(_ => PollControlAsync(window.DisplayName, state), "Enforce visualization automatic changes off");
+                }
                 var fullscreen = GForceWindow.Find(process.Id, GForceWindow.FullscreenClass);
                 if (fullscreen != 0)
                 {
@@ -114,8 +141,8 @@ internal sealed class VisualizationManager : IAsyncDisposable
                 }
                 if (state.Fullscreen != 0)
                     throw new InvalidOperationException("G-Force left fullscreen mode.");
-                if (now - state.Started > TimeSpan.FromSeconds(15))
-                    throw new TimeoutException("G-Force fullscreen did not become ready within 15 seconds.");
+                if (now - state.Started > TimeSpan.FromSeconds(30))
+                    throw new TimeoutException("G-Force controls/fullscreen did not become ready within 30 seconds.");
                 var normal = GForceWindow.Find(process.Id, GForceWindow.MainClass, includeHidden: true);
                 if (normal == 0)
                     continue;
@@ -126,16 +153,7 @@ internal sealed class VisualizationManager : IAsyncDisposable
                 if (!state.Requested && now - state.Started >= TimeSpan.FromSeconds(4))
                 {
                     state.Requested = true;
-                    var delivered = GForceWindow.EnterFullscreen(normal);
-                    Telemetry.Info("VisualizationFullscreenRequested", new
-                    {
-                        window.DisplayName,
-                        ProcessId = process.Id,
-                        NormalBounds = GForceWindow.Bounds(normal),
-                        Delivered = delivered
-                    });
-                    if (!delivered)
-                        throw new InvalidOperationException("G-Force fullscreen request failed.");
+                    _tasks.Run(_ => RequestFullscreenAsync(window.DisplayName, state), "Request owned G-Force fullscreen");
                 }
             }
             catch (Exception ex)
@@ -164,6 +182,11 @@ internal sealed class VisualizationManager : IAsyncDisposable
             return;
         instance.Owner = null;
         instance.Fullscreen = 0;
+        instance.Lifetime?.Cancel();
+        instance.Client?.Dispose();
+        instance.Client = null;
+        instance.Controls = null;
+        instance.Applied = null;
         GForceWindow.Hide(owner.Process.Id);
         Telemetry.Info("VisualizationStopping", new
         {
@@ -171,21 +194,121 @@ internal sealed class VisualizationManager : IAsyncDisposable
             ProcessId = owner.Process.Id,
             Reason = reason
         });
-        instance.Stopping = StopOwnedAsync(owner, display);
+        instance.Stopping = StopOwnedAsync(owner, display, instance.Configuring, instance.Lifetime);
     }
-    private static async Task StopOwnedAsync(VisualizationProcess owner, string display)
+    private static async Task StopOwnedAsync(VisualizationProcess owner, string display, Task? configuring, CancellationTokenSource? lifetime)
     {
         try
         {
+            if (configuring is not null) await configuring;
             await owner.StopAsync();
         }
         catch (Exception ex) { owner.Dispose(); Telemetry.Error("VisualizationStopFailed", ex, new { DisplayName = display }); }
+        finally { lifetime?.Dispose(); }
+    }
+    private void Configure(string display, Instance instance, VisualizationOptions options)
+    {
+        var task = ApplyControlAsync(display, instance, options, instance.Lifetime!.Token);
+        instance.Configuring = task;
+        _tasks.Run(_ => task, "Apply visualization configuration");
+    }
+    private static async Task ApplyControlAsync(string display, Instance instance, VisualizationOptions options, CancellationToken token)
+    {
+        bool acquired = false;
+        try
+        {
+            await instance.Operations.WaitAsync(token); acquired = true;
+            var processId = instance.Owner!.Process.Id;
+            if (instance.Client is null)
+            {
+                var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+                while (true)
+                {
+                    token.ThrowIfCancellationRequested();
+                    try { instance.Client = await GForceControlClient.ConnectAsync(processId, token); break; }
+                    catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or SocketException && DateTimeOffset.UtcNow < deadline)
+                    { await Task.Delay(100, token); }
+                }
+                instance.Client.ConsoleMessage += message => Telemetry.Info("VisualizationConsoleMessage", new { DisplayName = display, ProcessId = processId, Message = message }, instance.ActiveRequestId);
+                instance.Controls = new(instance.Client);
+                Telemetry.Info("VisualizationControlConnected", new { DisplayName = display, ProcessId = processId });
+            }
+            await instance.Controls!.ApplyAsync(options, token);
+            token.ThrowIfCancellationRequested();
+            instance.Applied = options;
+            instance.Rejected = null;
+            Telemetry.Info("VisualizationDefaultsApplied", new { DisplayName = display, ProcessId = processId, Defaults = options, Selections = instance.Controls.Selections, AutomaticChanges = false });
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (ArgumentException ex) when (instance.Applied is not null)
+        {
+            instance.Rejected = options;
+            Telemetry.Warning("VisualizationDefaultsRejected", new { DisplayName = display, Reason = ex.Message, RetainedDefaults = instance.Applied });
+        }
+        catch (Exception ex) { instance.ControlFailure = ex; Telemetry.Error("VisualizationDefaultsFailed", ex, new { DisplayName = display }); }
+        finally { if (acquired) instance.Operations.Release(); }
+    }
+    private static async Task PollControlAsync(string display, Instance instance)
+    {
+        var token = instance.Lifetime!.Token;
+        bool acquired = false;
+        try
+        {
+            await instance.Operations.WaitAsync(token); acquired = true;
+            if (instance.Client is not null && await instance.Client.EnsureAutomaticChangesOffAsync(token))
+                Telemetry.Info("VisualizationAutomaticChangesDisabled", new { DisplayName = display });
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex) { instance.ControlFailure = ex; }
+        finally { if (acquired) instance.Operations.Release(); instance.Polling = false; }
+    }
+    private static async Task RequestFullscreenAsync(string display, Instance instance)
+    {
+        var token = instance.Lifetime!.Token;
+        bool acquired = false;
+        try
+        {
+            await instance.Operations.WaitAsync(token); acquired = true;
+            if (instance.Client is null || !await instance.Client.EnterFullscreenAsync(token))
+                throw new InvalidOperationException("G-Force did not confirm fullscreen mode.");
+            Telemetry.Info("VisualizationFullscreenRequested", new { DisplayName = display, ProcessId = instance.Owner!.Process.Id, Transport = "LocalTCP", Delivered = true });
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex) { instance.ControlFailure = ex; }
+        finally { if (acquired) instance.Operations.Release(); }
+    }
+    internal async Task ExecuteAsync(ExperienceRequest request, ExperienceOptions options, CancellationToken cancellation)
+    {
+        var outputs = ScreenSelection.VisualizationOutputs(request, options, Forms.Screen.AllScreens.Select(s => s.DeviceName).ToArray(), Forms.Screen.PrimaryScreen?.DeviceName);
+        if (outputs.Count == 0) throw new InvalidOperationException("No visualization screen matches the requested display/screen.");
+        foreach (var output in outputs)
+        {
+            if (!_instances.TryGetValue(output.Display, out var instance) || instance.Owner is null || instance.Lifetime is null)
+                throw new InvalidOperationException("The requested visualization is unavailable or recovering.");
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellation, instance.Lifetime.Token);
+            var token = lifetime.Token;
+            if (instance.Configuring is { } configuring) await configuring.WaitAsync(token);
+            await instance.Operations.WaitAsync(token);
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                if (request.Expired?.Invoke() == true) throw new InvalidOperationException("Visualization command expired while waiting for readiness.");
+                if (instance.Controls is null || instance.ControlFailure is not null) throw new InvalidOperationException("Visualization controls are not ready.");
+                instance.ActiveRequestId = request.RequestId;
+                await instance.Controls.ExecuteAsync(request, instance.Applied ?? options.Visualization, token);
+                Telemetry.Info("VisualizationCommandApplied", new { DisplayName = output.Display, ScreenName = output.Screen.Name, request.Command, request.VisualType, request.Value, request.TransitionSeconds, request.DelaySeconds, request.DurationSeconds, Selections = instance.Controls.Selections }, request.RequestId);
+            }
+            catch (Exception ex) when (ex is IOException or SocketException or TimeoutException or ObjectDisposedException)
+            { instance.ControlFailure = ex; throw; }
+            finally { instance.ActiveRequestId = null; instance.Operations.Release(); }
+        }
     }
     public async ValueTask DisposeAsync()
     {
         foreach (var entry in _instances)
             Stop(entry.Key, entry.Value, "ApplicationShutdown");
         await Task.WhenAll(_instances.Values.Where(i => i.Stopping is not null).Select(i => i.Stopping!));
+        await _tasks.DisposeAsync();
         _instances.Clear();
     }
 }

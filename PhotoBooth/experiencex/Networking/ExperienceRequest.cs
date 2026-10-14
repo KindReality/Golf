@@ -5,17 +5,24 @@ namespace ExperienceX;
 public sealed record ExperienceRequest
 {
     public PhotoBooth.Networking.CommandContext? Context { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] public bool IsAmbient => Context?.IsAmbient == true;
+    [System.Text.Json.Serialization.JsonIgnore] internal VideoPriorityLease? VideoPriority { get; init; }
     public string? CorrelationId { get; init; }
     [System.Text.Json.Serialization.JsonIgnore] public string? TargetDevice { get; init; }
     internal PhotoBooth.Diagnostics.RequestLogContext LogContext(string? path = null) => new()
     {
         Source = Source, Device = TargetDevice, Experience = Experience, Value = Value,
-        Scene = Context?.Scene, Playlist = Context?.Playlist, Item = Context?.Item, Path = path, CorrelationId = CorrelationId
+        Scene = Context?.Scene, Playlist = Context?.Playlist, Item = Context?.Item, IsAmbient = IsAmbient, Roles = Roles, Path = path, CorrelationId = CorrelationId
     };
     public string Experience { get; init; } = "";
     public string Value { get; init; } = "";
     public bool Loop { get; init; }
     public string? Command { get; init; }
+    public string? VisualType { get; init; }
+    public double? TransitionSeconds { get; init; }
+    public double? DelaySeconds { get; init; }
+    public double? DurationSeconds { get; init; }
+    internal Func<bool>? Expired { get; init; }
     public string? PlaybackRequestId { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsStop => string.Equals(Command, "stop", StringComparison.OrdinalIgnoreCase);
@@ -41,6 +48,8 @@ public sealed record ExperienceRequest
     {
         get; init;
     }
+    public string? Roles { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] public bool HasRoles => PhotoBooth.Networking.RoleList.Parse(Roles).Length > 0;
     public string[]? AudioDevices
     {
         get; init;
@@ -76,6 +85,16 @@ public sealed record ExperienceRequest
     private static ExperienceRequest Validate(ExperienceRequest request)
     {
         request.Context?.Validate();
+        PhotoBooth.Networking.RoleList.Parse(request.Roles);
+        if (request.HasRoles && (request.IsStop || !string.IsNullOrWhiteSpace(request.Screen) || !string.IsNullOrWhiteSpace(request.DisplayName) ||
+            !string.IsNullOrWhiteSpace(request.AudioDevice) || request.AudioDevices is not null))
+            throw new ArgumentException("Role playback targets cannot include direct screen/display/audio targets or stop commands.");
+        if (string.Equals(request.Experience, "visualization", StringComparison.OrdinalIgnoreCase))
+        {
+            if (request.HasRoles) throw new ArgumentException("Role playback supports video and audio experiences.");
+            VisualizationCommand.Validate(request);
+            return request with { RequestId = RequestIdentity(request.RequestId) };
+        }
         if (!string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(request.Experience, "audio", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Only video and audio experiences are supported.");
@@ -97,10 +116,10 @@ public sealed record ExperienceRequest
             throw new ArgumentException("Supply either audioDevice or a nonempty audioDevices array of up to 32 names/IDs.");
         if (!double.IsFinite(request.VolumePercent) || request.VolumePercent is < 0 or > 100)
             throw new ArgumentException("Volume must be a percentage from 0 to 100.");
-        var id = string.IsNullOrWhiteSpace(request.RequestId) ? Guid.NewGuid().ToString("N") : request.RequestId;
         return request with
         {
-            RequestId = id[..Math.Min(id.Length, 128)]
+            RequestId = RequestIdentity(request.RequestId)
         };
     }
+    private static string RequestIdentity(string? id) => string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id[..Math.Min(id.Length, 128)];
 }

@@ -6,6 +6,25 @@ param(
     [string]$ResultFile
 )
 $ErrorActionPreference = 'Stop'
+function New-SaftStartMenuShortcut([string]$SourceDirectory, [string]$ApplicationName, [string]$RestartCommand, [string]$IconPath) {
+    $programs = [Environment]::GetFolderPath('Programs')
+    if ([string]::IsNullOrWhiteSpace($programs)) { throw 'The current user Start Menu Programs folder is unavailable.' }
+    $folder = Join-Path $programs 'Saft Technologies'
+    [void][IO.Directory]::CreateDirectory($folder)
+    $restartCommandPath = Join-Path $SourceDirectory $RestartCommand
+    if (!(Test-Path -LiteralPath $restartCommandPath -PathType Leaf)) { throw ('Missing restart command: '+$restartCommandPath) }
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut((Join-Path $folder ($ApplicationName+'.lnk')))
+    $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $shortcut.Arguments = '/c ""'+$restartCommandPath+'""'
+    $shortcut.WorkingDirectory = $SourceDirectory
+    $shortcut.Description = 'Refresh and start '+$ApplicationName+' from the current OneDrive build.'
+    $shortcut.WindowStyle = 7
+    if (Test-Path -LiteralPath $IconPath -PathType Leaf) { $shortcut.IconLocation = $IconPath+',0' }
+    $shortcut.Save()
+    Write-Host ('Start Menu shortcut: '+(Join-Path $folder ($ApplicationName+'.lnk')))
+}
+
 function Initialize-MediaAccount([string]$ResolvedMedia) {
     $mediaUserName = 'SaftThings'
     $mediaPassword = ConvertTo-SecureString '10375Saft' -AsPlainText -Force
@@ -53,7 +72,7 @@ try {
         Grant-SmbShareAccess -Name media -AccountName ($env:COMPUTERNAME+'\'+$mediaUserName) -AccessRight Change -Force | Out-Null
         Write-Host ('Media account ready: '+$env:COMPUTERNAME+'\'+$mediaUserName)
         foreach ($firewall in @(
-            @{Name='HomeTechnologies.Controller.UDP';Display='Home Technologies UDP events and commands';Protocol='UDP';Ports=@('54242','54243')},
+            @{Name='HomeTechnologies.Controller.UDP';Display='Home Technologies UDP events, commands and WLED discovery';Protocol='UDP';Ports=@('54242','54243','5353')},
             @{Name='HomeTechnologies.Controller.Definitions';Display='Home Technologies shared definitions';Protocol='TCP';Ports=@('54244')},
             @{Name='HomeTechnologies.Controller.Media';Display='Home Technologies media share';Protocol='TCP';Ports=@('445')}
         )) {
@@ -63,12 +82,6 @@ try {
             } else {
                 New-NetFirewallRule -Name $firewall.Name -DisplayName $firewall.Display -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet -Protocol $firewall.Protocol -LocalPort $firewall.Ports | Out-Null
             }
-        }
-        $definitionUrl = 'http://+:54244/'
-        $reservation = & netsh.exe http show urlacl url=$definitionUrl
-        if ($reservation -notmatch 'S-1-5-32-545|BU|Users') {
-            & netsh.exe http add urlacl url=$definitionUrl 'sddl=D:(A;;GX;;;BU)' | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Could not reserve the shared definitions HTTP endpoint.' }
         }
         Set-Content -LiteralPath $ResultFile -Value 'OK'
         exit 0
@@ -102,6 +115,7 @@ try {
     & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $restart -SourceDirectory $sourcePath
     if ($LASTEXITCODE -ne 0) { throw 'Controller restart failed. Review the error above.' }
     Write-Host ('Media share: \\'+$env:COMPUTERNAME+'\media (read/write, subject to NTFS permissions).')
+    New-SaftStartMenuShortcut -SourceDirectory $sourcePath -ApplicationName 'Controller' -RestartCommand 'Restart-Controller.cmd' -IconPath (Join-Path $sourcePath 'Controller.exe')
     Write-Host 'Controller installation complete. Use Restart-Controller.cmd for future updates.'
     exit 0
 } catch {

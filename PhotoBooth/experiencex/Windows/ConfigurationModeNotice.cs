@@ -33,6 +33,8 @@ internal sealed class ConfigurationModeNotice : Forms.Form
         ClientSize = new(430, 60);
         Controls.Add(_label);
         _hide.Tick += (_, _) => { _hide.Stop(); Hide(); };
+        // Configuration status must not become LED source content either.
+        LedCalibrationWindow.SetWindowDisplayAffinity(Handle,0x11);
     }
     public void Display(string message, bool error = false, bool persistent = false, string? display = null)
     {

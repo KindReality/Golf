@@ -14,6 +14,20 @@ internal static class CoordinatedAudioChecks
             AudioDeviceLatencyMilliseconds = new() { ["Rear"] = 20, ["id-b"] = 30 }
         };
         options.Validate();
+        var all = ExperienceRequest.Parse(Encoding.UTF8.GetBytes("{\"experience\":\"audio\",\"value\":\"sound.wav\",\"audioDevice\":\"*\"}"));
+        if (!AudioDeviceSelection.Resolve(all, options, devices, "id-b").Devices.SequenceEqual(devices) ||
+            !AudioDeviceSelection.Resolve(new() { AudioDevices = ["id-a", " * ", "Side"] }, options, devices, null).Devices.SequenceEqual(devices) ||
+            !AudioDeviceSelection.Resolve(new(), options with { DefaultAudioDevice = "*" }, devices, null).Devices.SequenceEqual(devices))
+            throw new Exception("All-output requests/defaults did not expand or deduplicate active endpoints.");
+        var disconnected = AudioDeviceSelection.Resolve(all, options, [], null);
+        if (disconnected.Devices.Length != 0 || disconnected.Unavailable.Length != 1 ||
+            AudioDeviceSelection.Resolve(all, options, devices.Take(2).ToArray(), null).Devices.Length != 2)
+            throw new Exception("Wildcard did not use the current hardware inventory or report no outputs.");
+        Reject(() => AudioDeviceSelection.Resolve(all, options, Enumerable.Range(0, 33).Select(n => new AudioOutput("id"+n, "Device"+n, 2)).ToArray(), null));
+        Reject(() => (options with { VirtualAudioDevices = new() { ["*"] = ["id-a"] } }).Validate());
+        float[] mono = [0];
+        AudioSamples.Route([.2f, .6f], mono, null);
+        if (Math.Abs(mono[0] - .4f) > .000001) throw new Exception("Stereo audio did not downmix for a mono output.");
         var selected = AudioDeviceSelection.Resolve(new()
         {
             AudioDevices = ["room", "id-a", "Side"]

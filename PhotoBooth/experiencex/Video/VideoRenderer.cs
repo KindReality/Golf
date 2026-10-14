@@ -17,6 +17,8 @@ internal sealed class VideoRenderer : IDisposable
     private readonly RendererMailbox _commands = new(1024);
     private readonly AutoResetEvent _wake = new(false);
     private readonly GraphicsResources _graphics;
+    private readonly bool _toolsOnly;
+    private bool _toolsVisible = true;
     private readonly List<DisplayScreenTrack> _tracks = [];
     private readonly VideoStopHistory _stops = new();
     private ExperienceOptions _options;
@@ -39,9 +41,10 @@ internal sealed class VideoRenderer : IDisposable
     }
 
     public VideoRenderer(nint hwnd, int width, int height, ExperienceOptions options, string display,
-        Action hideAfterFailure, Action? beforePresent = null, ScreenMediaCatalog? mediaCatalog = null)
+        Action hideAfterFailure, Action? beforePresent = null, ScreenMediaCatalog? mediaCatalog = null, bool toolsOnly = false)
     {
         _display = display;
+        _toolsOnly = toolsOnly;
         _options = options;
         _mediaCatalog = mediaCatalog ?? ScreenMediaCatalog.Empty;
         _hideAfterFailure = hideAfterFailure;
@@ -70,6 +73,7 @@ internal sealed class VideoRenderer : IDisposable
     }
     private DisplayScreenTrack? Track(string? id) => id is null ? _tracks.FirstOrDefault() : _tracks.FirstOrDefault(t => t.Screen.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
     public void Configure(ExperienceOptions options) => Enqueue("Configure", () => { _options = options; Reconcile(); _needsRedraw = true; });
+    internal void ShowTools(bool value) => Enqueue("Tools", () => { _toolsVisible=value; _needsRedraw=true; });
     private void Reconcile()
     {
         var screens = _options.ScreensFor(_display);
@@ -89,7 +93,7 @@ internal sealed class VideoRenderer : IDisposable
                 _tracks.Add(track); // Register ownership immediately, including partial reconciliation failures.
             }
             track.Configure(screen, _options);
-            track.ApplyMediaBinding(_mediaCatalog.Match(screen), _displayAvailable);
+            if (!_toolsOnly) track.ApplyMediaBinding(_mediaCatalog.Match(screen), _displayAvailable);
             ordered.Add(track);
         }
         _tracks.Clear();
@@ -99,13 +103,13 @@ internal sealed class VideoRenderer : IDisposable
     {
         _mediaCatalog = catalog;
         foreach (var track in _tracks)
-            track.ApplyMediaBinding(catalog.Match(track.Screen), _displayAvailable);
+            if (!_toolsOnly) track.ApplyMediaBinding(catalog.Match(track.Screen), _displayAvailable);
     });
     public void SetDisplayAvailable(bool available) => Enqueue("Availability", () =>
     {
         _displayAvailable = available;
         foreach (var track in _tracks)
-            if (available) track.ApplyMediaBinding(_mediaCatalog.Match(track.Screen), true);
+            if (available && !_toolsOnly) track.ApplyMediaBinding(_mediaCatalog.Match(track.Screen), true);
             else track.Complete("DisplayUnavailable");
         _needsRedraw = true;
     });
@@ -119,17 +123,33 @@ internal sealed class VideoRenderer : IDisposable
     public void PreviewPoints(PointOptions? value, string? id = null) => Enqueue("Preview:" + id, () => { Track(id)?.Preview(value); _needsRedraw = true; });
     public void FlashCalibration(int point, bool success, string? id = null) => Enqueue("Flash:" + id, () => { Track(id)?.FlashPoint(point, success); _needsRedraw = true; });
     public void FlashCalibrationPoints(int mask, bool success, string? id = null) => Enqueue("Flash:" + id, () => { Track(id)?.Flash(mask, success); _needsRedraw = true; });
-    public void Play(string path, ExperienceRequest request) => Enqueue("Playback:" + request.ScreenId, () =>
+    public void Play(string path, ExperienceRequest request)
     {
-        if (_stops.Contains(request.Source, request.RequestId)) return;
-        var track = (request.ScreenId is null ? _tracks.FirstOrDefault(t => t.Screen.IsVideo) : Track(request.ScreenId)) ?? throw new ArgumentException("The requested screen is no longer configured.");
-        if (track.NameLocked) { track.ReportIgnoredCommand(request); return; }
         try
         {
-            track.Open(path, request);
+            Enqueue("Playback:" + request.ScreenId, () =>
+            {
+                DisplayScreenTrack? track = null;
+                var accepted = false;
+                try
+                {
+                    if (request.VideoPriority?.IsInterrupted == true || _stops.Contains(request.Source, request.RequestId)) return;
+                    track = (request.ScreenId is null ? _tracks.FirstOrDefault(t => t.Screen.IsVideo) : Track(request.ScreenId)) ?? throw new ArgumentException("The requested screen is no longer configured.");
+                    if (track.NameLocked) { track.ReportIgnoredCommand(request); return; }
+                    request.VideoPriority?.WakeWhenInterrupted(() => { try { _wake.Set(); } catch (ObjectDisposedException) { } });
+                    track.Open(path, request);
+                    accepted = true;
+                }
+                catch { track?.Complete("Error"); throw; }
+                finally { if (!accepted) request.VideoPriority?.Dispose(); }
+            }, () =>
+            {
+                request.VideoPriority?.Dispose();
+                Telemetry.Info("VideoRequestSuperseded", new { DisplayName = _display, request.ScreenName }, request.RequestId);
+            });
         }
-        catch { track.Complete("Error"); throw; }
-    }, () => Telemetry.Info("VideoRequestSuperseded", new { DisplayName = _display, request.ScreenName }, request.RequestId));
+        catch { request.VideoPriority?.Dispose(); throw; }
+    }
     public void Stop(string reason) => Enqueue("Stop", () => { foreach (var track in _tracks) track.Complete(reason); });
     public void StopPlayback(string? source, string playbackRequestId) => Enqueue("Cancel:" + source + ":" + playbackRequestId, () =>
     {
@@ -188,7 +208,9 @@ internal sealed class VideoRenderer : IDisposable
                     }
                 if (_shutdown)
                     break;
-                var animating = _tracks.Any(t => t.Animating);
+                foreach (var track in _tracks)
+                    if (track.StopInterrupted()) _needsRedraw = true;
+                var animating = _tracks.Any(t => _toolsVisible ? t.Animating : t.ContentAnimating);
                 var playing = _tracks.Any(t => t.IsVideoOpen);
                 if (!playing && !animating)
                 {
@@ -260,21 +282,27 @@ internal sealed class VideoRenderer : IDisposable
         if (!_framePermit && !_graphics.Latency!.WaitOne(2000))
             throw new TimeoutException("DXGI did not make a presentation buffer available.");
         _framePermit = false;
-        _graphics.BeginFrame(DisplayBackground.For(_display, _options));
-        foreach (var track in _tracks)
+        _graphics.BeginFrame(_toolsOnly ? new Vortice.Mathematics.Color4(0,0,0,0) : DisplayBackground.For(_display, _options));
+        // Video and mats share the persisted back-to-front order. G-Force is an external window beneath this surface.
+        // Its owned inverse mat is always the bottom internal layer, even after an external config reorder.
+        if (!_toolsOnly) foreach (var track in _tracks.Where(t => t.Screen.IsVisualization)) track.DrawMat();
+        foreach (var track in _tracks.Where(t => !_toolsOnly && !t.Screen.IsVisualization))
+        {
             track.DrawVideo();
-        // Masks are always above content, independent of configuration/selection order.
-        foreach (var track in _tracks)
             track.DrawMat();
+        }
         // Tools are drawn after all content, so overlapping video cannot obscure editing handles.
-        foreach (var track in _tracks.Where(t => !t.SelectedScreen)) track.DrawOverlay();
-        foreach (var track in _tracks.Where(t => t.SelectedScreen)) track.DrawOverlay();
+        if (_toolsVisible)
+        {
+            foreach (var track in _tracks.Where(t => !t.SelectedScreen)) track.DrawOverlay();
+            foreach (var track in _tracks.Where(t => t.SelectedScreen)) track.DrawOverlay();
+        }
         _beforePresent?.Invoke();
         _graphics.SwapChain.Present(1, PresentFlags.None).CheckError();
         foreach (var track in _tracks)
             track.Presented();
         _needsRedraw = false;
-        _wasAnimating = _tracks.Any(t => t.Animating);
+        _wasAnimating = _tracks.Any(t => _toolsVisible ? t.Animating : t.ContentAnimating);
     }
     private void Cleanup(IDisposable resource)
     {

@@ -9,12 +9,12 @@ public static class AudioSamples
         if (input.Length == 0 || output.Length == 0)
             throw new ArgumentException("Audio requires channels.");
         output.Clear();
-        if (channel.HasValue)
+        if (channel.HasValue || output.Length == 1)
         {
             float sum = 0;
             foreach (var sample in input)
                 sum += sample;
-            output[channel.Value - 1] = sum / input.Length;
+            output[(channel ?? 1) - 1] = sum / input.Length;
         }
         else if (input.Length == 1 && output.Length >= 2)
         {

@@ -22,16 +22,25 @@ public sealed record PerspectiveDefinition
     public string Id { get; init; } = Guid.NewGuid().ToString("N");
     public string Name { get; init; } = "perspective1";
     public PerspectiveRectangle Rectangle { get; init; } = new();
+    public string Type { get; init; } = "media";
+    public LedPerspective? Led { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] public bool IsLed => Type is "pixelArray" or "pixelMatrix";
     public void Validate()
     {
         if (!Guid.TryParse(Id, out _) || string.IsNullOrWhiteSpace(Name) || Name != Name.Trim() || Name.Length > 80 || Name.Any(char.IsControl) || Rectangle is null)
             throw new ArgumentException("Perspectives require a permanent GUID, a name of 1–80 characters and a rectangle.");
         Rectangle.Validate();
+        if (Type is not ("media" or "pixelArray" or "pixelMatrix") || IsLed != (Led is not null))
+            throw new ArgumentException("Perspective type must be media, pixelArray or pixelMatrix; LED types require LED settings.");
+        Led?.Validate(Type);
     }
 }
 
 public sealed record PerspectiveSelection
 {
+    public string Type { get; init; } = "media";
+    public LedPerspective? Led { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] public bool IsLed => Type is "pixelArray" or "pixelMatrix";
     public string ControllerId { get; init; } = "";
     public string PerspectiveId { get; init; } = "";
     public string ControllerName { get; init; } = "";
@@ -43,6 +52,9 @@ public sealed record PerspectiveSelection
         if (!Guid.TryParse(ControllerId, out _) || !Guid.TryParse(PerspectiveId, out _) || Rectangle is null)
             throw new ArgumentException("A selected perspective requires controller and perspective GUIDs and its last known rectangle.");
         Rectangle.Validate();
+        if (Type is not ("media" or "pixelArray" or "pixelMatrix") || IsLed != (Led is not null))
+            throw new ArgumentException("Perspective selection type and LED settings do not match.");
+        Led?.Validate(Type);
     }
     public override string ToString() => $"{ControllerName} / {Name}" + (Available ? "" : " (unavailable)");
 }
@@ -78,5 +90,5 @@ public sealed record ControllerSharedDefinitions
         return bytes;
     }
     public static string Revision(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
-    public PerspectiveSelection Select(PerspectiveDefinition p) => new() { ControllerId = ControllerId, PerspectiveId = p.Id, ControllerName = ControllerName, Name = p.Name, Rectangle = p.Rectangle };
+    public PerspectiveSelection Select(PerspectiveDefinition p) => new() { ControllerId = ControllerId, PerspectiveId = p.Id, ControllerName = ControllerName, Name = p.Name, Rectangle = p.Rectangle, Type = p.Type, Led = p.Led };
 }

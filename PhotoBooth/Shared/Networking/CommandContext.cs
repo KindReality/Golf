@@ -6,6 +6,7 @@ public sealed record CommandContext
     public string? Scene { get; init; }
     public string? Playlist { get; init; }
     public string? Item { get; init; }
+    public bool IsAmbient { get; init; }
 
     public void Validate()
     {
