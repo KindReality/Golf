@@ -82,7 +82,8 @@ internal sealed class ControllerMediaDiscovery(Func<ExperienceOptions> options, 
             }
             finally { _copyGate.Release(); }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Telemetry.Warning("ControllerMediaSyncFailed", new { Hostname = hostname, share, Reason = ex.Message }); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { complete=false; Telemetry.Warning("ControllerMediaSyncFailed", new { Hostname = hostname, share, Reason = ex.Message }); }
         finally { if (!complete) hosts.TryRemove(hostname, out _); }
     }
     public async ValueTask DisposeAsync()

@@ -62,7 +62,10 @@ public sealed record ExperienceInventory
         {
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var file in files)
-                if (!Text(file, 255) || file is "." or ".." || file.IndexOfAny(['/', '\\', ':']) >= 0 || !names.Add(file)) throw new ArgumentException("Invalid inventory media filename.");
+            {
+                var relative = PhotoBooth.Media.MediaLibrary.Normalize(file);
+                if (!names.Add(relative)) throw new ArgumentException("Duplicate inventory media path.");
+            }
         }
     }
     private static bool Text(string? value, int maximum) => !string.IsNullOrWhiteSpace(value) && value == value.Trim() && value.Length <= maximum && !value.Any(char.IsControl);

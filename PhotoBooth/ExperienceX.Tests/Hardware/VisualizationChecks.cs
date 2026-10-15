@@ -142,8 +142,14 @@ internal static class VisualizationChecks
                     {
                         using var graphics = Graphics.FromImage(image); graphics.CopyFromScreen(b.Location, Point.Empty, b.Size);
                         image.Save(Path.Combine(folder, "overlay.png"), ImageFormat.Png);
-                        var black = image.GetPixel((int)(b.Width * .8), (int)(b.Height * .4));
-                        Check(black.R < 3 && black.G < 3 && black.B < 3, "The mat remains opaque black above G-Force");
+                        var visible = 0;
+                        for (var y = (int)(b.Height*.25); y < (int)(b.Height*.6); y += 8)
+                            for (var x = (int)(b.Width*.73); x < (int)(b.Width*.85); x += 8)
+                            {
+                                var color = image.GetPixel(x,y);
+                                if (color.R > 20 || color.G > 20 || color.B > 20) visible++;
+                            }
+                        Check(visible > 20, "A media mat reveals live G-Force behind the masked video");
                     }
                     if (displays.Length > 1)
                     {

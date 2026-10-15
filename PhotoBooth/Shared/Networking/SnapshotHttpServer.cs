@@ -21,7 +21,7 @@ internal sealed class SnapshotHttpServer(string path = "/inventory") : IAsyncDis
     public void Bind(int port)
     {
         if (_listener is not null && Port == port) return;
-        var listener = new TcpListener(IPAddress.Any, port); listener.Start(16);
+        var listener = new TcpListener(LocalTestNetwork.ListenAddress, port); listener.Start(16);
         _listener?.Stop(); _listener = listener; Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         Track(AcceptAsync(listener));
     }

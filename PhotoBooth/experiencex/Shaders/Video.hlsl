@@ -3,6 +3,8 @@ cbuffer Settings : register(b0) {
     float4 effects; // opacity, threshold, softness, black key enabled
     float4 aspect; // reserved XY, use source alpha, brightness multiplier
     float4 crop; // source origin XY and size WH, normalized 0–1
+    float4 rotation; // inverse rotation 2x2, adjusted for screen pixel proportions
+    float4 sourceBounds; // perspective min XY / max XY; rotated empty areas stay transparent
 };
 Texture2D video : register(t0);
 SamplerState linearClamp : register(s0);
@@ -17,7 +19,10 @@ float4 PSMain(Vertex input) : SV_Target {
     if (abs(divisor) < 0.000001) return 0;
     float2 uv = float2(dot(row0.xyz,p),dot(row1.xyz,p))/divisor;
     if (any(uv<0) || any(uv>1)) return 0;
+    float2 offset = uv - 0.5;
+    uv = float2(dot(rotation.xy,offset),dot(rotation.zw,offset)) + 0.5;
     uv = crop.xy + uv*crop.zw;
+    if (any(uv < sourceBounds.xy) || any(uv > sourceBounds.zw)) return 0;
     float4 color = video.Sample(linearClamp,uv);
     float3 rgb = color.rgb;
     if (aspect.z > 0.5) rgb = color.a > 0 ? rgb/color.a : 0;

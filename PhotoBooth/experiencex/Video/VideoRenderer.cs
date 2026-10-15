@@ -18,9 +18,10 @@ internal sealed class VideoRenderer : IDisposable
     private readonly AutoResetEvent _wake = new(false);
     private readonly GraphicsResources _graphics;
     private readonly bool _toolsOnly;
-    private bool _toolsVisible = true;
+    private bool _toolsVisible = true, _helpSuppressed;
     private readonly List<DisplayScreenTrack> _tracks = [];
     private readonly VideoStopHistory _stops = new();
+    private readonly Dictionary<string,string?> _mediaCaptions = new();
     private ExperienceOptions _options;
     private ScreenMediaCatalog _mediaCatalog;
     private bool _displayAvailable = true;
@@ -74,6 +75,12 @@ internal sealed class VideoRenderer : IDisposable
     private DisplayScreenTrack? Track(string? id) => id is null ? _tracks.FirstOrDefault() : _tracks.FirstOrDefault(t => t.Screen.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
     public void Configure(ExperienceOptions options) => Enqueue("Configure", () => { _options = options; Reconcile(); _needsRedraw = true; });
     internal void ShowTools(bool value) => Enqueue("Tools", () => { _toolsVisible=value; _needsRedraw=true; });
+    internal void SuppressHelp(bool value) => Enqueue("HelpVisibility", () =>
+    {
+        _helpSuppressed = value;
+        foreach (var track in _tracks) track.SuppressHelp(value);
+        _needsRedraw = true;
+    });
     private void Reconcile()
     {
         var screens = _options.ScreensFor(_display);
@@ -82,6 +89,7 @@ internal sealed class VideoRenderer : IDisposable
             removed.Complete("ScreenRemoved");
             _tracks.Remove(removed);
             removed.Dispose();
+            _mediaCaptions.Remove(removed.Screen.Id);
         }
         var ordered = new List<DisplayScreenTrack>();
         foreach (var screen in screens)
@@ -93,6 +101,8 @@ internal sealed class VideoRenderer : IDisposable
                 _tracks.Add(track); // Register ownership immediately, including partial reconciliation failures.
             }
             track.Configure(screen, _options);
+            track.SuppressHelp(_helpSuppressed);
+            track.SetMediaCaption(_mediaCaptions.GetValueOrDefault(screen.Id));
             if (!_toolsOnly) track.ApplyMediaBinding(_mediaCatalog.Match(screen), _displayAvailable);
             ordered.Add(track);
         }
@@ -115,12 +125,19 @@ internal sealed class VideoRenderer : IDisposable
     });
     public void ShowCalibration(int selected, string? id = null, bool selectedScreen = true) => Enqueue("Visibility:" + id, () => { Track(id)?.Show(selected, selectedScreen); _needsRedraw = true; });
     public void FadeCalibration(string? id = null) => Enqueue("Visibility:" + id, () => { Track(id)?.Fade(); _needsRedraw = true; });
+    public void ShowJoinTarget(int point, string? id = null) => Enqueue("JoinTarget:" + id, () => { Track(id)?.ShowJoinTarget(point); _needsRedraw = true; });
     public void PreviewPointGroup(IReadOnlyDictionary<string, PointOptions?> values) => Enqueue("PreviewGroup", () =>
     {
         foreach (var entry in values) Track(entry.Key)?.Preview(entry.Value);
         _needsRedraw = true;
     });
     public void PreviewPoints(PointOptions? value, string? id = null) => Enqueue("Preview:" + id, () => { Track(id)?.Preview(value); _needsRedraw = true; });
+    internal void PreviewFraming(string id, VideoFramingOptions? value) => Enqueue("Framing:" + id, () => { Track(id)?.PreviewFraming(value); _needsRedraw = true; });
+    internal void SetMediaCaption(string id, string? caption) => Enqueue("MediaCaption:"+id,()=>
+    {
+        if(_mediaCaptions.TryGetValue(id,out var previous)&&previous==caption)return;
+        _mediaCaptions[id]=caption; Track(id)?.SetMediaCaption(caption); _needsRedraw=true;
+    });
     public void FlashCalibration(int point, bool success, string? id = null) => Enqueue("Flash:" + id, () => { Track(id)?.FlashPoint(point, success); _needsRedraw = true; });
     public void FlashCalibrationPoints(int mask, bool success, string? id = null) => Enqueue("Flash:" + id, () => { Track(id)?.Flash(mask, success); _needsRedraw = true; });
     public void Play(string path, ExperienceRequest request)
@@ -285,12 +302,15 @@ internal sealed class VideoRenderer : IDisposable
         _graphics.BeginFrame(_toolsOnly ? new Vortice.Mathematics.Color4(0,0,0,0) : DisplayBackground.For(_display, _options));
         // Video and mats share the persisted back-to-front order. G-Force is an external window beneath this surface.
         // Its owned inverse mat is always the bottom internal layer, even after an external config reorder.
-        if (!_toolsOnly) foreach (var track in _tracks.Where(t => t.Screen.IsVisualization)) track.DrawMat();
+        if (!_toolsOnly) foreach (var track in _tracks.Where(t => t.Screen.IsVisualization)) track.DrawMask();
+        var cutouts = !_toolsOnly && _tracks.Any(t => t.Screen.IsMat);
+        if (cutouts) _graphics.BeginScreenLayers();
         foreach (var track in _tracks.Where(t => !_toolsOnly && !t.Screen.IsVisualization))
         {
             track.DrawVideo();
-            track.DrawMat();
+            track.DrawMask();
         }
+        if (cutouts) _graphics.FinishScreenLayers();
         // Tools are drawn after all content, so overlapping video cannot obscure editing handles.
         if (_toolsVisible)
         {

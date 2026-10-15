@@ -1,4 +1,4 @@
-param([string]$Source = $PSScriptRoot, [switch]$Plan, [switch]$ConfigureMachine, [string]$ResultFile, [string[]]$ControllerHostnames = @())
+param([string]$Source = $PSScriptRoot, [switch]$Plan, [switch]$ConfigureMachine, [string]$ResultFile, [string[]]$ControllerHostnames = @(), [string]$RuntimePath, [switch]$RepairMachine)
 $ErrorActionPreference = 'Stop'
 function New-SaftStartMenuShortcut([string]$SourceDirectory, [string]$ApplicationName, [string]$RestartCommand, [string]$IconPath) {
     $programs = [Environment]::GetFolderPath('Programs')
@@ -20,30 +20,20 @@ function New-SaftStartMenuShortcut([string]$SourceDirectory, [string]$Applicatio
 }
 
 try {
+    $sourcePath = [IO.Path]::GetFullPath($Source)
+    $networkSetup=Join-Path $sourcePath 'NetworkAccess.ps1'
+    if (!(Test-Path -LiteralPath $networkSetup)) { $networkSetup=Join-Path $PSScriptRoot '..\Shared\Networking\NetworkAccess.ps1' }
+    . $networkSetup
     if ($ConfigureMachine) {
         $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
         if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Firewall setup requires administrator permissions.' }
-        $name = 'HomeTechnologies.ExperienceX.UDP'
-        if (Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue) {
-            Set-NetFirewallRule -Name $name -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet
-            Get-NetFirewallRule -Name $name | Get-NetFirewallPortFilter | Set-NetFirewallPortFilter -Protocol UDP -LocalPort 54242,54243,5353
-        } else {
-            New-NetFirewallRule -Name $name -DisplayName 'Home Technologies Experience UDP events, commands and WLED discovery' -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet -Protocol UDP -LocalPort 54242,54243,5353 | Out-Null
-        }
-        $inventoryRule = 'HomeTechnologies.ExperienceX.Inventory'
-        if (Get-NetFirewallRule -Name $inventoryRule -ErrorAction SilentlyContinue) {
-            Set-NetFirewallRule -Name $inventoryRule -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet
-            Get-NetFirewallRule -Name $inventoryRule | Get-NetFirewallPortFilter | Set-NetFirewallPortFilter -Protocol TCP -LocalPort 54245
-        } else {
-            New-NetFirewallRule -Name $inventoryRule -DisplayName 'Home Technologies Experience Live inventory' -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet -Protocol TCP -LocalPort 54245 | Out-Null
-        }
+        Set-SaftNetworkAccess 'ExperienceX' $RuntimePath
         Set-Content -LiteralPath $ResultFile -Value 'OK'
         exit 0
     }
-    $sourcePath = [IO.Path]::GetFullPath($Source)
     $restart = Join-Path $sourcePath 'Restart-Experience.ps1'
     if ($Plan) {
-        [pscustomobject]@{Source=$sourcePath;Restart=$restart;MediaUser='SaftThings';CredentialStorage='Windows Credential Manager (current user)';FirewallProfile='Private';FirewallScope='LocalSubnet';UdpPorts=@(54242,54243,5353);TcpPorts=@(54245)} | ConvertTo-Json
+        [pscustomobject]@{Source=$sourcePath;Restart=$restart;MediaUser='SaftThings';CredentialStorage='Windows Credential Manager (current user)';FirewallProfile='Private, Public';FirewallScope='LocalSubnet';UdpPorts=@(54242,54243,5353);TcpPorts=@(54245)} | ConvertTo-Json
         exit 0
     }
     if (!(Test-Path -LiteralPath $restart -PathType Leaf)) { throw 'Missing Restart-Experience.ps1. Wait for the complete build to sync.' }
@@ -63,14 +53,16 @@ try {
     }
     $result = Join-Path ([IO.Path]::GetTempPath()) ('Experience-install-'+[Guid]::NewGuid().ToString('N')+'.txt')
     $setup = Join-Path $sourcePath 'Install-Experience.ps1'
-    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$setup+'" -ConfigureMachine -ResultFile "'+$result+'"'
-    try {
-        Write-Host 'Setting up Experience network access. Accept the administrator prompt.'
-        $admin = Start-Process -FilePath $powershell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
-        if ($admin.ExitCode -ne 0 -or !(Test-Path -LiteralPath $result) -or (Get-Content -LiteralPath $result -Raw).Trim() -ne 'OK') {
-            throw 'Firewall setup was canceled or failed; Experience was not restarted.'
-        }
-    } finally { if (Test-Path -LiteralPath $result) { Remove-Item -LiteralPath $result -Force } }
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$setup+'" -ConfigureMachine -ResultFile "'+$result+'" -RuntimePath "'+(Join-Path ([IO.Path]::GetTempPath()) 'Experience\ExperienceX.exe')+'"'
+    if ($RepairMachine -or !(Test-SaftNetworkAccess 'ExperienceX' (Join-Path ([IO.Path]::GetTempPath()) 'Experience\ExperienceX.exe'))) {
+        try {
+            Write-Host 'Setting up Experience network access. Accept the administrator prompt.'
+            $admin = Start-Process -FilePath $powershell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+            if ($admin.ExitCode -ne 0 -or !(Test-Path -LiteralPath $result) -or (Get-Content -LiteralPath $result -Raw).Trim() -ne 'OK') {
+                throw 'Firewall setup was canceled or failed; Experience was not restarted.'
+            }
+        } finally { if (Test-Path -LiteralPath $result) { Remove-Item -LiteralPath $result -Force } }
+    } else { Write-Host 'Network setup is already current; no administrator prompt is needed.' }
     # Save for the current user, outside OneDrive and outside the elevated firewall process.
     # Native CredWrite keeps the password out of child-process command lines.
     if (!('HomeTechnologies.MediaCredentialStore' -as [type])) {

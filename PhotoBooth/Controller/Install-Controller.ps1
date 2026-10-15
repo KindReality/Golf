@@ -3,7 +3,9 @@ param(
     [switch]$Plan,
     [switch]$ConfigureMachine,
     [string]$MediaPath,
-    [string]$ResultFile
+    [string]$ResultFile,
+    [string]$RuntimePath,
+    [switch]$RepairMachine
 )
 $ErrorActionPreference = 'Stop'
 function New-SaftStartMenuShortcut([string]$SourceDirectory, [string]$ApplicationName, [string]$RestartCommand, [string]$IconPath) {
@@ -51,7 +53,29 @@ function Initialize-MediaAccount([string]$ResolvedMedia) {
     return $mediaUserName
 }
 
+function Test-ControllerMachineSetup([string]$LocalMedia, [string]$Executable) {
+    if (!(Test-SaftNetworkAccess 'Controller' $Executable)) { return $false }
+    try {
+        $share=Get-SmbShare -Name media -ErrorAction Stop
+        $user=Get-LocalUser -Name SaftThings -ErrorAction Stop
+        if (![IO.Path]::GetFullPath($share.Path).Equals([IO.Path]::GetFullPath($LocalMedia),[StringComparison]::OrdinalIgnoreCase) -or
+            !$user.Enabled -or $user.PasswordExpires -or (Get-Service LanmanServer).Status -ne 'Running') { return $false }
+        $admins=Get-LocalGroup -SID 'S-1-5-32-544'
+        if (@(Get-LocalGroupMember $admins | ForEach-Object {$_.SID.Value}) -contains $user.SID.Value) { return $false }
+        $permissions=Get-Acl -LiteralPath $LocalMedia
+        $allow=@($permissions.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | Where-Object {
+            $_.IdentityReference.Value -eq $user.SID.Value -and $_.AccessControlType -eq 'Allow' -and
+            ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -eq [Security.AccessControl.FileSystemRights]::Modify })
+        $shareAccess=@(Get-SmbShareAccess -Name media -ErrorAction Stop | Where-Object {
+            $_.AccountName -ieq ($env:COMPUTERNAME+'\SaftThings') -and $_.AccessControlType -eq 'Allow' -and $_.AccessRight -in @('Change','Full') })
+        return $allow.Count -gt 0 -and $shareAccess.Count -gt 0
+    } catch { return $false }
+}
 try {
+    $sourcePath = [IO.Path]::GetFullPath($Source)
+    $networkSetup=Join-Path $sourcePath 'NetworkAccess.ps1'
+    if (!(Test-Path -LiteralPath $networkSetup)) { $networkSetup=Join-Path $PSScriptRoot '..\Shared\Networking\NetworkAccess.ps1' }
+    . $networkSetup
     if ($ConfigureMachine) {
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -71,29 +95,17 @@ try {
         else { Grant-SmbShareAccess -Name media -AccountName $everyone -AccessRight Change -Force | Out-Null }
         Grant-SmbShareAccess -Name media -AccountName ($env:COMPUTERNAME+'\'+$mediaUserName) -AccessRight Change -Force | Out-Null
         Write-Host ('Media account ready: '+$env:COMPUTERNAME+'\'+$mediaUserName)
-        foreach ($firewall in @(
-            @{Name='HomeTechnologies.Controller.UDP';Display='Home Technologies UDP events, commands and WLED discovery';Protocol='UDP';Ports=@('54242','54243','5353')},
-            @{Name='HomeTechnologies.Controller.Definitions';Display='Home Technologies shared definitions';Protocol='TCP';Ports=@('54244')},
-            @{Name='HomeTechnologies.Controller.Media';Display='Home Technologies media share';Protocol='TCP';Ports=@('445')}
-        )) {
-            if (Get-NetFirewallRule -Name $firewall.Name -ErrorAction SilentlyContinue) {
-                Set-NetFirewallRule -Name $firewall.Name -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet
-                Get-NetFirewallRule -Name $firewall.Name | Get-NetFirewallPortFilter | Set-NetFirewallPortFilter -Protocol $firewall.Protocol -LocalPort $firewall.Ports
-            } else {
-                New-NetFirewallRule -Name $firewall.Name -DisplayName $firewall.Display -Enabled True -Direction Inbound -Action Allow -Profile Private -RemoteAddress LocalSubnet -Protocol $firewall.Protocol -LocalPort $firewall.Ports | Out-Null
-            }
-        }
+        Set-SaftNetworkAccess 'Controller' $RuntimePath
         Set-Content -LiteralPath $ResultFile -Value 'OK'
         exit 0
     }
-    $sourcePath = [IO.Path]::GetFullPath($Source)
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw 'LOCALAPPDATA is unavailable.' }
     $controllerRoot = Join-Path $env:LOCALAPPDATA 'Home Technologies\Controller'
     $applicationPath = Join-Path $controllerRoot 'Application'
     $localMedia = Join-Path $controllerRoot 'Media'
     $restart = Join-Path $sourcePath 'Restart-Controller.ps1'
     if ($Plan) {
-        [pscustomobject]@{Source=$sourcePath;Application=$applicationPath;Media=$localMedia;Share=('\\'+$env:COMPUTERNAME+'\media');MediaUser='SaftThings';ShareAccess='Change';FirewallProfile='Private';FirewallScope='LocalSubnet';Restart=$restart} | ConvertTo-Json
+        [pscustomobject]@{Source=$sourcePath;Application=$applicationPath;Media=$localMedia;Share=('\\'+$env:COMPUTERNAME+'\media');MediaUser='SaftThings';ShareAccess='Change';FirewallProfile='Private, Public';FirewallScope='LocalSubnet';Restart=$restart} | ConvertTo-Json
         exit 0
     }
     if (!(Test-Path -LiteralPath $restart -PathType Leaf)) { throw 'Missing Restart-Controller.ps1. Wait for the complete build to sync.' }
@@ -103,15 +115,17 @@ try {
     [void][IO.Directory]::CreateDirectory($localMedia)
     $result = Join-Path ([IO.Path]::GetTempPath()) ('Controller-install-'+[Guid]::NewGuid().ToString('N')+'.txt')
     $setup = Join-Path $sourcePath 'Install-Controller.ps1'
-    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$setup+'" -ConfigureMachine -MediaPath "'+$localMedia+'" -ResultFile "'+$result+'"'
-    try {
-        Write-Host 'Setting up Controller media sharing and network access. Accept the administrator prompt.'
-        $admin = Start-Process -FilePath $powershell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
-        if ($admin.ExitCode -ne 0 -or !(Test-Path -LiteralPath $result) -or (Get-Content -LiteralPath $result -Raw).Trim() -ne 'OK') {
-            $detail = if (Test-Path -LiteralPath $result) { Get-Content -LiteralPath $result -Raw } else { 'Administrator setup was canceled or could not complete.' }
-            throw $detail
-        }
-    } finally { if (Test-Path -LiteralPath $result) { Remove-Item -LiteralPath $result -Force } }
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$setup+'" -ConfigureMachine -MediaPath "'+$localMedia+'" -ResultFile "'+$result+'" -RuntimePath "'+(Join-Path $applicationPath 'Controller.exe')+'"'
+    if ($RepairMachine -or !(Test-ControllerMachineSetup $localMedia (Join-Path $applicationPath 'Controller.exe'))) {
+        try {
+            Write-Host 'Setting up Controller media sharing and network access. Accept the administrator prompt.'
+            $admin = Start-Process -FilePath $powershell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+            if ($admin.ExitCode -ne 0 -or !(Test-Path -LiteralPath $result) -or (Get-Content -LiteralPath $result -Raw).Trim() -ne 'OK') {
+                $detail = if (Test-Path -LiteralPath $result) { Get-Content -LiteralPath $result -Raw } else { 'Administrator setup was canceled or could not complete.' }
+                throw $detail
+            }
+        } finally { if (Test-Path -LiteralPath $result) { Remove-Item -LiteralPath $result -Force } }
+    } else { Write-Host 'Machine setup is already current; no administrator prompt is needed.' }
     & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $restart -SourceDirectory $sourcePath
     if ($LASTEXITCODE -ne 0) { throw 'Controller restart failed. Review the error above.' }
     Write-Host ('Media share: \\'+$env:COMPUTERNAME+'\media (read/write, subject to NTFS permissions).')

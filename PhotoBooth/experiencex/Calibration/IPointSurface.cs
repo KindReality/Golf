@@ -20,6 +20,7 @@ internal interface IPointSurface
         get;
     }
     void ShowCalibration(int point);
+    void ShowJoinTarget(int point) { }
     void FadeCalibration();
     void FlashCalibration(int point, bool success);
     void FlashCalibrationPoints(int pointMask);

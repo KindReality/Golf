@@ -4,9 +4,12 @@ cbuffer Overlay : register(b0) {
     float4 grid; // grid enabled, label texture width/height, label enabled
     float4 row0,row1,row2;
     float4 label; // center in pixels, selected polygon opacity, point count
+    float4 join; // nearby eligible interaction index (-1 when absent)
+    float4 hint; // inline media instructions: top-left XY, width and height (zero when hidden)
 };
 Texture2D labelTexture : register(t0);
 StructuredBuffer<float4> polygonPoints : register(t1); // normalized XY, flash enabled, interaction index
+Texture2D hintTexture : register(t2);
 SamplerState labelSampler : register(s0);
 struct Vertex { float4 position : SV_Position; float2 uv : TEXCOORD0; };
 float4 Over(float4 back,float4 front) {return front+back*(1-front.a);}
@@ -71,7 +74,7 @@ float4 PSMain(Vertex input) : SV_Target {
     float2 uv=float2(dot(row0.xyz,position),dot(row1.xyz,position))/max(divisor,0.000001);
     if(label.z>0 && inside)
         color=Over(float4(azure*label.z,label.z),color);
-    if(grid.x>0) {
+    if(grid.x>0 && inside) {
         float3 position=float3(input.uv,1);
         float divisor=dot(row2.xyz,position);
         float2 uv=float2(dot(row0.xyz,position),dot(row1.xyz,position))/max(divisor,0.000001);
@@ -86,6 +89,8 @@ float4 PSMain(Vertex input) : SV_Target {
     float2 labelStart=label.xy-grid.yz*0.5;
     if(grid.w>0 && all(p>=labelStart) && all(p<labelStart+grid.yz))
         color=Over(color,labelTexture.SampleLevel(labelSampler,(p-labelStart)/grid.yz,0));
+    if(hint.w>0 && all(p>=hint.xy) && all(p<hint.xy+hint.zw))
+        color=Over(color,hintTexture.SampleLevel(labelSampler,(p-hint.xy)/hint.zw,0));
     [loop] for(int i=0;i<count;i++) {
         float4 vertexData=PointAt(i);
         float2 corner=vertexData.xy*(dimensions-1);
@@ -104,6 +109,18 @@ float4 PSMain(Vertex input) : SV_Target {
             float2 label=clamp(corner+float2(24,-22),float2(12,12),dimensions-12);
             float digit=Number(p-label,index+1)*screen.w*0.85;
             color=Over(color,float4(digit,digit,digit,digit));
+        }
+        if (index==(int)join.x && screen.w>0) {
+            float pulse=0.5+0.5*sin(screen.z*6);
+            float halo=(0.15+0.35*pulse)*exp(-dot(p-corner,p-corner)/(700+600*pulse))*screen.w;
+            color=Over(color,float4(lerp(azure,float3(1,1,1),0.35)*halo,halo));
+            float glyphScale=max(1,min(dimensions.x,dimensions.y)/720);
+            float2 at=clamp(corner+float2(0,-max(34,radius*2.2)),12*glyphScale,dimensions-12*glyphScale);
+            float2 q=(p-at)/glyphScale;
+            float glyph=max(Bar(q,float2(0,-6),float2(4,0.8)),Bar(q,float2(3,0),float2(0.8,5.5)));
+            glyph=max(glyph,Bar(q,float2(-0.5,6),float2(3.5,0.8)));
+            glyph=max(glyph,Bar(q,float2(-4,3.5),float2(0.8,2.5)))*screen.w*0.95;
+            color=Over(color,float4(glyph,glyph,glyph,glyph));
         }
         if (vertexData.z>0 && selection.z>=0 && selection.z<=1) {
             float flash=sin(selection.z*3.14159265)*exp(-dot(p-corner,p-corner)/2500)*0.85;

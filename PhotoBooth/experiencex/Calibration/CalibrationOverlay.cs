@@ -14,27 +14,36 @@ internal sealed class CalibrationOverlay : IDisposable
     private ID3D11BlendState _overlayBlend = null!;
     private ID3D11Texture2D? _labelTexture;
     private ID3D11ShaderResourceView? _labelView;
+    private ID3D11Texture2D? _hintTexture;
+    private ID3D11ShaderResourceView? _hintView;
+    private (int Width,int Height,string Type) _hintDisplay;
+    private int _hintWidth,_hintHeight;
     private string? _labelText;
     private double _labelUpdatedAt;
     private int _labelWidth, _labelHeight;
+    private int _labelOffset;
+    private string? _mediaCaption;
+    internal void SetMediaCaption(string? caption) => _mediaCaption=caption;
     public PointOptions? Preview
     {
         get; private set;
     }
     private int _selectedPoint = -1, _flashPointMask;
+    private int _joinPoint = -1;
     private int? _singleFlash;
     private ID3D11Buffer? _pointsBuffer;
     private ID3D11ShaderResourceView? _pointsView;
     private PointOptions? _pointsShape;
     private long _flashRevision, _pointsFlashRevision = -1;
-    private bool _selectedScreen;
+    private bool _selectedScreen, _helpSuppressed;
+    internal void SuppressHelp(bool value) => _helpSuppressed = value;
     private double _flashAt = -1;
     private bool _flashSuccess;
     private static double Now => Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
     [StructLayout(LayoutKind.Sequential)]
     private struct OverlayConstants
     {
-        public Vector4 Screen, Selection, Grid, Row0, Row1, Row2, Label;
+        public Vector4 Screen, Selection, Grid, Row0, Row1, Row2, Label, Join, Hint;
     }
     internal bool SelectedScreen => _selectedScreen;
     public bool Animating(ExperienceOptions options) => options.ConfigurationMode || (_flashAt >= 0 && Now - _flashAt < 0.28);
@@ -44,6 +53,7 @@ internal sealed class CalibrationOverlay : IDisposable
         if (!options.ConfigurationMode)
         {
             _selectedPoint = -1;
+            _joinPoint = -1;
             _selectedScreen = false;
             Preview = null;
         }
@@ -58,6 +68,7 @@ internal sealed class CalibrationOverlay : IDisposable
         _selectedPoint = -1;
     }
     public void SelectScreen(bool selected) => _selectedScreen = selected;
+    public void ShowJoinTarget(int point) => _joinPoint = point;
     public void SetPreview(PointOptions? preview) => Preview = preview;
     public void Flash(int mask, bool success)
     {
@@ -92,9 +103,9 @@ internal sealed class CalibrationOverlay : IDisposable
     public void Draw(GraphicsResources graphics, ExperienceOptions _options, string _display, PointTransformCache transforms, string? screenId = null)
     {
         var k = Preview ?? _options.PointsFor(_display, screenId);
-        var isVisualization = _options.ScreensFor(_display).FirstOrDefault(s => s.Id == screenId)?.IsVisualization == true;
-        var isMat = _options.ScreensFor(_display).FirstOrDefault(s => s.Id == screenId)?.IsMat == true;
         var definition = _options.ScreensFor(_display).FirstOrDefault(s => s.Id == screenId);
+        var isVisualization = definition?.IsVisualization == true;
+        var isMat = definition?.IsMat == true;
         var isLed = definition?.IsLed == true;
         UpdatePoints(graphics, k);
         var now = Now;
@@ -105,6 +116,8 @@ internal sealed class CalibrationOverlay : IDisposable
         var showTools = selectedScreen && _options.CalibrationGridEnabled && !isMat && !isVisualization && !isLed;
         if (selectedScreen)
             UpdateLabel(graphics, _options, _display, screenId, now);
+        bool showHint = !_helpSuppressed && selectedScreen && (definition?.IsVideo == true || isMat);
+        if (showHint) UpdateHint(graphics, definition!.Type);
         var inverse = isMat || isVisualization || isLed ? default : transforms.Get(k with
         {
             Enabled = true
@@ -115,10 +128,12 @@ internal sealed class CalibrationOverlay : IDisposable
             Screen = new(graphics.Width, graphics.Height, (float)(now % 1000), (float)opacity),
             Selection = new(_selectedPoint, _flashPointMask, (float)flash, _flashSuccess ? 1 : 0),
             Grid = new(showTools ? 1 : 0, _labelWidth, _labelHeight, selectedScreen ? 1 : 0),
-            Label = new(center.X, center.Y, selectedScreen ? .16f : _options.ConfigurationMode && !isMat && !isVisualization ? .04f : 0, k.Vertices.Count),
+            Label = new(center.X, center.Y+_labelOffset, selectedScreen ? .16f : _options.ConfigurationMode && !isMat && !isVisualization ? .04f : 0, k.Vertices.Count),
             Row0 = inverse.Item1,
             Row1 = inverse.Item2,
-            Row2 = inverse.Item3
+            Row2 = inverse.Item3,
+            Join = new(_options.ConfigurationMode && !_helpSuppressed ? _joinPoint : -1, 0, 0, 0),
+            Hint = showHint ? new((graphics.Width-_hintWidth)/2f,Math.Max(0,graphics.Height-_hintHeight-18),_hintWidth,_hintHeight) : default
         };
         if (isLed && definition?.IsLedArray == false && selectedScreen)
         {
@@ -139,6 +154,8 @@ internal sealed class CalibrationOverlay : IDisposable
         graphics.Context.PSSetShader(_overlayPs);
         graphics.Context.PSSetConstantBuffer(0, _overlayConstants);
         graphics.Context.PSSetShaderResource(1, _pointsView!);
+        if (showHint && _hintView is not null) graphics.Context.PSSetShaderResource(2,_hintView);
+        else graphics.Context.PSUnsetShaderResource(2);
         if (_labelView is not null)
             graphics.Context.PSSetShaderResource(0, _labelView);
         else
@@ -149,6 +166,7 @@ internal sealed class CalibrationOverlay : IDisposable
         graphics.Context.OMSetBlendState(null);
         graphics.Context.PSUnsetShaderResource(0);
         graphics.Context.PSUnsetShaderResource(1);
+        graphics.Context.PSUnsetShaderResource(2);
         // One final redraw after a save flash ends removes it without hiding the editing handles.
     }
     private void UpdatePoints(GraphicsResources graphics, PointOptions shape)
@@ -175,10 +193,11 @@ internal sealed class CalibrationOverlay : IDisposable
         if (_labelView is not null && now - _labelUpdatedAt < 0.1)
             return;
         var text = _options.ScreensFor(_display).FirstOrDefault(s => screenId is null || s.Id == screenId)?.Name ?? "screen1";
-        var cacheKey = $"{text}|{graphics.Width}|{graphics.Height}";
+        var cacheKey = $"{text}|{_mediaCaption}|{graphics.Width}|{graphics.Height}";
         if (cacheKey == _labelText)
             return;
-        var data = ScreenNameLabel.Create(text, graphics.Width, graphics.Height);
+        var data = ScreenNameLabel.Create(text, graphics.Width, graphics.Height,_mediaCaption);
+        _labelOffset=data.OffsetY;
         graphics.Context.PSUnsetShaderResource(0);
         _labelView?.Dispose();
         _labelTexture?.Dispose();
@@ -192,9 +211,19 @@ internal sealed class CalibrationOverlay : IDisposable
         _labelUpdatedAt = now;
     }
 
+    private unsafe void UpdateHint(GraphicsResources graphics, string type)
+    {
+        if (_hintView is not null && _hintDisplay == (graphics.Width,graphics.Height,type)) return;
+        var data=ScreenActionHint.Create(graphics.Width,graphics.Height,type);
+        graphics.Context.PSUnsetShaderResource(2); _hintView?.Dispose(); _hintTexture?.Dispose();
+        fixed(byte* pixels=data.Pixels)
+            _hintTexture=graphics.Device.CreateTexture2D(new Texture2DDescription(Format.B8G8R8A8_UNorm,(uint)data.Width,(uint)data.Height,1,1,BindFlags.ShaderResource),new SubresourceData((nint)pixels,(uint)(data.Width*4)));
+        _hintView=graphics.Device.CreateShaderResourceView(_hintTexture);
+        _hintDisplay=(graphics.Width,graphics.Height,type);_hintWidth=data.Width;_hintHeight=data.Height;
+    }
     public void Dispose()
     {
-        IDisposable?[] resources = [_overlayPs, _overlayConstants, _overlayBlend, _labelView, _labelTexture, _pointsView, _pointsBuffer];
+        IDisposable?[] resources = [_overlayPs, _overlayConstants, _overlayBlend, _labelView, _labelTexture, _hintView, _hintTexture, _pointsView, _pointsBuffer];
         foreach (var resource in resources)
             resource?.Dispose();
     }

@@ -13,6 +13,7 @@ public sealed record ScreenOptions
     public bool IsNegative { get; init; }
     public string Roles { get; init; } = "";
     public double Brightness { get; init; } = 100;
+    public VideoFramingOptions Framing { get; init; } = new();
     public PhotoBooth.Networking.PerspectiveSelection? Perspective { get; init; }
     public PointOptions Points { get; init; } = new();
     // Null uses the application defaults; an explicit value belongs only to this video screen.
@@ -26,9 +27,7 @@ public sealed record ScreenOptions
     }
     internal static void ValidateMediaFile(string file)
     {
-        if (string.IsNullOrWhiteSpace(file) || file != file.Trim() || file.Length > 255 || file is "." or ".." ||
-            file.Any(char.IsControl) || file.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0 || file.IndexOfAny(['/', '\\', ':']) >= 0)
-            throw new ArgumentException("MediaFile must be a local media filename without a directory.");
+        PhotoBooth.Media.MediaLibrary.Normalize(file, allowRoot:true);
     }
     internal static string AvailableMediaName(string requested, IEnumerable<ScreenOptions> others)
     {
@@ -45,7 +44,14 @@ public sealed record ScreenOptions
     [System.Text.Json.Serialization.JsonIgnore] public bool IsVideo => Type == "video";
     [System.Text.Json.Serialization.JsonIgnore] public bool IsVisualization => Type == "visualization";
     // Visualization points describe its owned inverse mat, not the external fullscreen window.
-    [System.Text.Json.Serialization.JsonIgnore] public bool IsPolygon => IsMat || IsVisualization;
+    [System.Text.Json.Serialization.JsonIgnore] public bool IsMask => IsMat || IsVisualization;
+    [System.Text.Json.Serialization.JsonIgnore] public bool SupportsPointInsertion => IsVideo || IsMask;
+    internal void ValidatePoints(PointOptions points)
+    {
+        if (IsLed) LedGeometry.Validate(points, IsLedArray);
+        else if (IsMask) points.ValidatePolygon();
+        else points.Validate();
+    }
     [System.Text.Json.Serialization.JsonIgnore] public bool IsLed => Type == "fastled";
     [System.Text.Json.Serialization.JsonIgnore] public bool IsLedArray => IsLed && Perspective?.Type == "pixelArray";
     internal static string AvailableDefaultName(IReadOnlyList<ScreenOptions> existing)
@@ -83,9 +89,15 @@ public sealed record ScreenOptions
             Name = name,
             DefaultName = name,
             Type = type,
-            Points = new()
+            Points = type == "mat" || type == "video" && existing.Any(s => s.IsVideo) ? CenteredPoints() : new()
         };
     }
+    internal static PointOptions CenteredPoints() => new()
+    {
+        Enabled = true,
+        TopLeft = new(1d / 3, 1d / 3), TopRight = new(2d / 3, 1d / 3),
+        BottomLeft = new(1d / 3, 2d / 3), BottomRight = new(2d / 3, 2d / 3)
+    };
     internal static int InsertionIndex(IReadOnlyList<ScreenOptions> existing, ScreenOptions added)
     {
         if (added.IsVisualization) return 0;

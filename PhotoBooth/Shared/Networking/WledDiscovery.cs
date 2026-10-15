@@ -13,6 +13,7 @@ public static class WledDiscovery
     private const string Service = "_wled._tcp.local";
     public static async Task<WledDevice[]> FindAsync(CancellationToken token = default)
     {
+        if (LocalTestNetwork.Address is not null) { token.ThrowIfCancellationRequested(); return []; }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(3));
         var catalog = new DnsCatalog();

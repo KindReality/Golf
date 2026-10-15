@@ -21,6 +21,7 @@ internal sealed record ControllerOptions : BroadcastOptions
     public string ControllerId { get; init; } = "";
     public int DefinitionsPort { get; init; } = 54244;
     public bool ConfigurationMode { get; init; }
+    public bool ExperienceSupervisionEnabled { get; init; } = true;
     public double PointHitDiameterPercent { get; init; } = 5;
     public PerspectiveDefinition[] Perspectives { get; init; } = [];
     public string? DefaultDisplayName { get; init; }

@@ -23,6 +23,7 @@ internal sealed class ScreenSurface(MainWindow owner, string id) : IPointSurface
         owner.ToolsRenderer?.ShowCalibration(point, id, _selected);
     }
     public void FadeCalibration() { owner.Renderer?.FadeCalibration(id); owner.ToolsRenderer?.FadeCalibration(id); }
+    public void ShowJoinTarget(int point) { owner.Renderer?.ShowJoinTarget(point, id); owner.ToolsRenderer?.ShowJoinTarget(point, id); }
     public void FlashCalibration(int point, bool success) { owner.Renderer?.FlashCalibration(point, success, id); owner.ToolsRenderer?.FlashCalibration(point, success, id); }
     public void FlashCalibrationPoints(int mask) { owner.Renderer?.FlashCalibrationPoints(mask, true, id); owner.ToolsRenderer?.FlashCalibrationPoints(mask, true, id); }
     public void PreviewPoints(PointOptions? value) { owner.Renderer?.PreviewPoints(value, id); owner.ToolsRenderer?.PreviewPoints(value,id); owner.PreviewLed(id,value); }

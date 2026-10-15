@@ -31,10 +31,18 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     private ID3D11Buffer _constants = null!;
     private ID3D11SamplerState _sampler = null!;
     private ID3D11BlendState _videoBlend = null!;
-    private ID3D11VertexShader _matVs = null!;
-    private ID3D11PixelShader _matPs = null!;
-    private ID3D11InputLayout _matLayout = null!;
-    private ID3D11RasterizerState _matRasterizer = null!;
+    private ID3D11BlendState _cutoutBlend = null!;
+    private ID3D11Texture2D? _screenLayers;
+    private ID3D11RenderTargetView? _screenLayersTarget;
+    private ID3D11ShaderResourceView? _screenLayersView;
+    private static readonly ExperienceOptions CompositeOptions = new();
+    private static readonly BlackKeyOptions CompositeKey = new() { Enabled = false };
+    private static readonly (Vector4, Vector4, Vector4) FullDisplay = VideoTransform.Inverse(new());
+    private ID3D11VertexShader _maskVs = null!;
+    private ID3D11VertexShader _polygonVideoVs = null!;
+    private ID3D11PixelShader _maskPs = null!;
+    private ID3D11InputLayout _polygonLayout = null!;
+    private ID3D11RasterizerState _polygonRasterizer = null!;
     private IMFDXGIDeviceManager _deviceManager = null!;
     private ID3D11Texture2D? _videoTexture;
     private ID3D11ShaderResourceView? _videoView;
@@ -53,7 +61,7 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     [StructLayout(LayoutKind.Sequential)]
     private struct Constants
     {
-        public Vector4 Row0, Row1, Row2, Effects, Aspect, Crop;
+        public Vector4 Row0, Row1, Row2, Effects, Aspect, Crop, Rotation, SourceBounds;
     }
     public void Initialize()
     {
@@ -95,11 +103,21 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         _constants = _device.CreateBuffer((uint)Marshal.SizeOf<Constants>(), BindFlags.ConstantBuffer);
         _sampler = _device.CreateSamplerState(new SamplerDescription(Filter.MinMagMipLinear, TextureAddressMode.Clamp));
         _videoBlend = CreateVideoBlendState(_device);
-        var matShader = Shader("MatVS.cso");
-        _matVs = _device.CreateVertexShader(matShader);
-        _matPs = _device.CreatePixelShader(Shader("MatPS.cso"));
-        _matLayout = _device.CreateInputLayout([new InputElementDescription("POSITION", 0, Format.R32G32_Float, 0, 0)], matShader);
-        _matRasterizer = _device.CreateRasterizerState(RasterizerDescription.CullNone);
+        var cutout = BlendDescription.Opaque;
+        cutout.RenderTarget[0] = new RenderTargetBlendDescription
+        {
+            BlendEnable = true,
+            SourceBlend = Blend.Zero, DestinationBlend = Blend.Zero, BlendOperation = BlendOperation.Add,
+            SourceBlendAlpha = Blend.Zero, DestinationBlendAlpha = Blend.Zero, BlendOperationAlpha = BlendOperation.Add,
+            RenderTargetWriteMask = ColorWriteEnable.All
+        };
+        _cutoutBlend = _device.CreateBlendState(cutout);
+        var maskShader = Shader("MaskVS.cso");
+        _maskVs = _device.CreateVertexShader(maskShader);
+        _polygonVideoVs = _device.CreateVertexShader(Shader("PolygonVS.cso"));
+        _maskPs = _device.CreatePixelShader(Shader("MaskPS.cso"));
+        _polygonLayout = _device.CreateInputLayout([new InputElementDescription("POSITION", 0, Format.R32G32_Float, 0, 0)], maskShader);
+        _polygonRasterizer = _device.CreateRasterizerState(RasterizerDescription.CullNone);
         _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
         _deviceManager.ResetDevice(_device).CheckError();
         CreateTarget();
@@ -134,6 +152,7 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         _width = width;
         _height = height;
         _context.UnsetRenderTargets();
+        ReleaseScreenLayers();
         _rtv?.Dispose();
         _rtv = null;
         _swapChain.ResizeBuffers(2, (uint)width, (uint)height, Format.B8G8R8A8_UNorm, SwapChainFlags.FrameLatencyWaitableObject).CheckError();
@@ -174,7 +193,36 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         _context.OMSetRenderTargets(_rtv!);
         _context.ClearRenderTargetView(_rtv!, background);
     }
-    public void DrawLayer(ID3D11ShaderResourceView? view, double opacity, ExperienceOptions options, (Vector4, Vector4, Vector4) transform, BlackKeyOptions? blackKey = null, bool sourceAlpha = false, double brightness = 100, PhotoBooth.Networking.PerspectiveRectangle? perspective = null)
+    // Mats erase only the ordered media layers. Background and the owned G-Force mask stay below this target.
+    internal void BeginScreenLayers()
+    {
+        AssertOwnerThread();
+        _context.PSUnsetShaderResource(0);
+        if (_screenLayers is null)
+        {
+            _screenLayers = _device.CreateTexture2D(new Texture2DDescription(Format.B8G8R8A8_UNorm,
+                (uint)_width, (uint)_height, 1, 1, BindFlags.RenderTarget | BindFlags.ShaderResource));
+            _screenLayersTarget = _device.CreateRenderTargetView(_screenLayers);
+            _screenLayersView = _device.CreateShaderResourceView(_screenLayers);
+        }
+        _context.OMSetRenderTargets(_screenLayersTarget!);
+        _context.ClearRenderTargetView(_screenLayersTarget!, new Color4(0, 0, 0, 0));
+    }
+    internal void FinishScreenLayers()
+    {
+        AssertOwnerThread();
+        _context.OMSetRenderTargets(_rtv!);
+        DrawLayer(_screenLayersView, 1, CompositeOptions, FullDisplay, CompositeKey, sourceAlpha: true);
+        _context.PSUnsetShaderResource(0);
+    }
+    private void ReleaseScreenLayers()
+    {
+        _context.PSUnsetShaderResource(0);
+        _screenLayersView?.Dispose(); _screenLayersView = null;
+        _screenLayersTarget?.Dispose(); _screenLayersTarget = null;
+        _screenLayers?.Dispose(); _screenLayers = null;
+    }
+    public void DrawLayer(ID3D11ShaderResourceView? view, double opacity, ExperienceOptions options, (Vector4, Vector4, Vector4) transform, BlackKeyOptions? blackKey = null, bool sourceAlpha = false, double brightness = 100, PhotoBooth.Networking.PerspectiveRectangle? perspective = null, VideoFramingOptions? framing = null, double screenAspect = 1, PolygonMesh? outline = null)
     {
         AssertOwnerThread();
 
@@ -183,7 +231,8 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         {
             var key = blackKey ?? options.BlackKey;
             var (r0, r1, r2) = transform;
-            var crop = perspective ?? new();
+            var bounds = perspective ?? new();
+            var crop = framing?.Crop(bounds) ?? bounds;
             var data = new Constants
             {
                 Row0 = r0,
@@ -191,34 +240,45 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
                 Row2 = r2,
                 Effects = new((float)opacity, (float)key.Threshold, (float)key.Softness, key.Enabled ? 1 : 0),
                 Aspect = new(1, 1, 0, 0),
-                Crop = new((float)(crop.X / 100), (float)(crop.Y / 100), (float)(crop.Width / 100), (float)(crop.Height / 100))
+                Crop = new((float)(crop.X / 100), (float)(crop.Y / 100), (float)(crop.Width / 100), (float)(crop.Height / 100)),
+                Rotation = framing?.SamplingRotation(screenAspect) ?? new(1, 0, 0, 1),
+                SourceBounds = new((float)(bounds.X / 100), (float)(bounds.Y / 100), (float)((bounds.X + bounds.Width) / 100), (float)((bounds.Y + bounds.Height) / 100))
             };
             data.Aspect.Z = sourceAlpha ? 1 : 0;
             data.Aspect.W = (float)(brightness / 100);
             _context.UpdateSubresource(in data, _constants);
             _context.RSSetViewport(0, 0, _width, _height);
             _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
-            _context.IASetInputLayout(null);
-            _context.VSSetShader(_vs);
+            _context.IASetInputLayout(outline is null ? null : _polygonLayout);
+            _context.VSSetShader(outline is null ? _vs : _polygonVideoVs);
             _context.PSSetShader(_ps);
             _context.PSSetConstantBuffer(0, _constants);
             _context.PSSetSampler(0, _sampler);
             _context.PSSetShaderResource(0, view);
-            _context.Draw(3, 0);
+            if (outline is null) _context.Draw(3, 0);
+            else
+            {
+                _context.RSSetState(_polygonRasterizer);
+                _context.IASetVertexBuffer(0,outline.Vertices!,8);
+                _context.Draw((uint)outline.Count,0);
+                _context.IASetVertexBuffer(0,null!,0);
+                _context.IASetInputLayout(null);
+                _context.RSSetState(null);
+            }
         }
     }
-    internal void DrawMat(ID3D11Buffer vertices, int count)
+    internal void DrawMask(ID3D11Buffer vertices, int count, bool cutout)
     {
         AssertOwnerThread();
         _context.PSUnsetShaderResource(0);
-        _context.OMSetBlendState(null);
-        _context.RSSetState(_matRasterizer);
+        _context.OMSetBlendState(cutout ? _cutoutBlend : null);
+        _context.RSSetState(_polygonRasterizer);
         _context.RSSetViewport(0, 0, _width, _height);
         _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
-        _context.IASetInputLayout(_matLayout);
+        _context.IASetInputLayout(_polygonLayout);
         _context.IASetVertexBuffer(0, vertices, 8);
-        _context.VSSetShader(_matVs);
-        _context.PSSetShader(_matPs);
+        _context.VSSetShader(_maskVs);
+        _context.PSSetShader(_maskPs);
         _context.Draw((uint)count, 0);
         _context.IASetVertexBuffer(0, null!, 0);
         _context.IASetInputLayout(null);
@@ -238,7 +298,7 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     public void Dispose()
     {
         AssertOwnerThread();
-        IDisposable?[] resources = [_videoView, _videoTexture, _rtv, _matRasterizer, _matLayout, _matPs, _matVs, _videoBlend, _sampler, _constants, _ps, _vs, _latency, _visual, _target, _composition, _swapChain, _deviceManager, _context, _device];
+        IDisposable?[] resources = [_screenLayersView, _screenLayersTarget, _screenLayers, _videoView, _videoTexture, _rtv, _polygonRasterizer, _polygonLayout, _maskPs, _maskVs, _polygonVideoVs, _cutoutBlend, _videoBlend, _sampler, _constants, _ps, _vs, _latency, _visual, _target, _composition, _swapChain, _deviceManager, _context, _device];
         foreach (var resource in resources)
             try
             {

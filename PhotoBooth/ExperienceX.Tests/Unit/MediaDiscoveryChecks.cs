@@ -17,11 +17,19 @@ internal static class MediaDiscoveryChecks
             await File.WriteAllTextAsync(Path.Combine(first, "ping.mp4"), "first-version");
             await File.WriteAllTextAsync(Path.Combine(first, "sound.wav"), "audio-version");
             await File.WriteAllTextAsync(Path.Combine(first, "nested", "excluded.mp4"), "nested");
+            Directory.CreateDirectory(Path.Combine(first,"Ghosts","Deep"));
+            Directory.CreateDirectory(Path.Combine(first,"Witches"));
+            await File.WriteAllTextAsync(Path.Combine(first,"Ghosts","Deep","Same.mp4"),"ghost-video");
+            await File.WriteAllTextAsync(Path.Combine(first,"Witches","Same.mp4"),"witch-video");
             await File.WriteAllTextAsync(Path.Combine(local, "local-only.mp4"), "retain");
             var cache = new ControllerMediaCache();
+            try { await cache.SynchronizeAsync("missing",Path.Combine(root,"missing-share"),local,default);throw new Exception("An unavailable Controller share was reported as an empty successful sync"); }
+            catch(DirectoryNotFoundException) { }
             await cache.SynchronizeAsync("host-one", first, local, default);
+            Check(File.ReadAllText(Path.Combine(local,"Ghosts","Deep","Same.mp4"))=="ghost-video"&&File.ReadAllText(Path.Combine(local,"Witches","Same.mp4"))=="witch-video",
+                "Nested categories keep duplicate filenames distinct in the local cache");
             Check(File.ReadAllText(Path.Combine(local, "ping.mp4")) == "first-version" && File.Exists(Path.Combine(local, "sound.wav")) &&
-                !File.Exists(Path.Combine(local, "excluded.mp4")) && File.ReadAllText(Path.Combine(local, "local-only.mp4")) == "retain", "Root files copy locally; subfolders and local extras are retained correctly");
+                File.Exists(Path.Combine(local, "nested", "excluded.mp4")) && !File.Exists(Path.Combine(local, "excluded.mp4")) && File.ReadAllText(Path.Combine(local, "local-only.mp4")) == "retain", "Media folders are preserved locally without flattening; local extras are retained");
             await File.WriteAllTextAsync(Path.Combine(second, "ping.mp4"), "other-controller");
             await File.WriteAllTextAsync(Path.Combine(second, "other.wav"), "other-media");
             await cache.SynchronizeAsync("host-two", second, local, default);
@@ -74,7 +82,7 @@ internal static class MediaDiscoveryChecks
             Check(sent.Count == 1, "Disabling media discovery cancels discovery without sending more requests");
         }
         finally { Directory.Delete(root, true); }
-        Console.WriteLine("Passed Controller unsolicited announcements, multiple hosts, root-only local caching, atomic replacement, conflicts, locked files, UNC validation and disable/shutdown.");
+        Console.WriteLine("Passed Controller unsolicited announcements, multiple hosts, hierarchical local caching, atomic replacement, conflicts, locked files, UNC validation and disable/shutdown.");
     }
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
     private static async Task Until(Func<bool> ready)

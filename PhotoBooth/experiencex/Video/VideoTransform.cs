@@ -6,6 +6,13 @@ internal static class VideoTransform
     // Invert the projective mapping: the pixel shader maps output pixels back into video UVs.
     public static (Vector4, Vector4, Vector4) Inverse(PointOptions k)
     {
+        var (a,b,c)=InverseQuad(k);
+        var extent=VideoOutlineGeometry.Extent(k,(a,b,c));
+        if (extent==(0d,0d,1d,1d)) return (a,b,c);
+        return ((a-c*(float)extent.X)/(float)extent.Width,(b-c*(float)extent.Y)/(float)extent.Height,c);
+    }
+    internal static (Vector4, Vector4, Vector4) InverseQuad(PointOptions k)
+    {
         if (!k.Enabled)
             return (new(1, 0, 0, 0), new(0, 1, 0, 0), new(0, 0, 1, 0));
         var a = k.TopLeft;

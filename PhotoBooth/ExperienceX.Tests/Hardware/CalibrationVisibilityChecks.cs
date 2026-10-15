@@ -78,7 +78,48 @@ internal static class CalibrationVisibilityChecks
             var filled = Render();
             if (filled[centerOffset + 3] < 30 || filled[centerOffset + 3] > 60 || filled[centerOffset] <= filled[centerOffset + 2])
                 throw new Exception("Selected screen did not have a mostly transparent blue fill.");
+            var hintOffset=(330*640+320)*4;
+            if(filled[hintOffset+3]<150 || unselected[hintOffset+3]>15)
+                throw new Exception("Selected-video framing instructions were missing or visible without selection.");
+            overlay.SuppressHelp(true);
+            var submenu = Render();
+            if(submenu[hintOffset+3]>60)
+                throw new Exception("Normal framing instructions remained behind the submenu.");
+            CornersVisible(submenu);
+            overlay.SuppressHelp(false);
+            if(Render()[hintOffset+3]<150)
+                throw new Exception("Normal framing instructions did not return after closing the submenu.");
+            void SavePreview(byte[] pixels, string name)
+            {
+                using var bitmap=new System.Drawing.Bitmap(640,360,System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                var data=bitmap.LockBits(new(0,0,640,360),System.Drawing.Imaging.ImageLockMode.WriteOnly,System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                try{for(int y=0;y<360;y++)Marshal.Copy(pixels,y*640*4,data.Scan0+y*data.Stride,640*4);}
+                finally{bitmap.UnlockBits(data);}
+                var path=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"../../../../.tools/"+name));
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);bitmap.Save(path);
+            }
+            SavePreview(filled,"selected-video-framing-hint.png");
+            overlay.SetMediaCaption("Folder: Ghosts/Hauntings/");Thread.Sleep(110);
+            var caption=Render();
+            if(caption.Skip((210*640+210)*4).Take(220*4).SequenceEqual(filled.Skip((210*640+210)*4).Take(220*4)))
+                throw new Exception("Media/folder caption did not appear beneath the selected screen name.");
+            SavePreview(caption,"selected-media-folder-caption.png");
+            overlay.SetMediaCaption(null);Thread.Sleep(110);Render();
+            var videoOptions=options;
+            options=options with{DisplayScreens=new(){["TEST"]=[new(){Type="mat"}]}};
+            var matHint=Render();
+            if(matHint[hintOffset+3]<150)throw new Exception("Selected mat did not show its action HUD.");
+            byte[] HintArea(byte[] pixels)=>Enumerable.Range(240,96).SelectMany(row=>pixels.Skip((row*640+100)*4).Take(440*4)).ToArray();
+            if(HintArea(matHint).SequenceEqual(HintArea(filled)))throw new Exception("Switching to a mat reused the video-only HUD.");
+            SavePreview(matHint,"selected-mat-hint.png");
+            overlay.SuppressHelp(true);
+            if(Render()[hintOffset+3]>60)throw new Exception("Mat action HUD remained visible behind a submenu.");
+            overlay.SuppressHelp(false);
+            if(Render()[hintOffset+3]<150)throw new Exception("Mat action HUD did not return after the submenu.");
+            options=videoOptions;
+            if(!HintArea(Render()).SequenceEqual(HintArea(filled)))throw new Exception("Switching back to video did not restore its own HUD.");
             overlay.SelectScreen(false);
+            if(Render()[hintOffset+3]>15)throw new Exception("Inline framing hint remained after deselection.");
             overlay.Show(0);
             var selected = Render();
             if (selected[(1 * 640 + 1) * 4] <= selected[(1 * 640 + 1) * 4 + 2])

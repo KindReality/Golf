@@ -1,9 +1,10 @@
 using System.IO;
+using PhotoBooth.Media;
 
 namespace ExperienceX;
 
 internal sealed record ScreenMediaBinding(string? Path, bool IsImage = false, long Length = 0,
-    long LastWriteTicks = 0, string? Error = null);
+    long LastWriteTicks = 0, string? Error = null, string? RelativePath = null);
 
 // Immutable local inventory shared by all displays; no directory I/O on render frames.
 internal sealed class ScreenMediaCatalog
@@ -14,63 +15,47 @@ internal sealed class ScreenMediaCatalog
         { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff" };
     private readonly Dictionary<string, ScreenMediaBinding> _files = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<ScreenMediaBinding>> _names = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<MediaLibraryEntry> _entries = [];
     public static ScreenMediaCatalog Empty { get; } = new("");
     public string DirectoryPath { get; }
     private ScreenMediaCatalog(string directory) => DirectoryPath = directory;
-
     public static ScreenMediaCatalog Read(string directory)
     {
         var root = MediaPath.ResolveDirectory(directory);
         var catalog = new ScreenMediaCatalog(root);
-        if (!Directory.Exists(root)) return catalog;
-        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.TopDirectoryOnly))
+        foreach (var entry in MediaLibrary.Read(root))
         {
-            var extension = System.IO.Path.GetExtension(path);
+            if (entry.IsFolder) { catalog._entries.Add(entry); continue; }
+            var extension = Path.GetExtension(entry.RelativePath);
             bool image = ImageExtensions.Contains(extension);
             if (!image && !VideoExtensions.Contains(extension)) continue;
+            var path = MediaLibrary.Resolve(root, entry.RelativePath);
             MediaPath.EnsureLocalPath(path);
             var file = new FileInfo(path);
             if (!file.Exists) continue;
-            var binding = new ScreenMediaBinding(file.FullName, image, file.Length, file.LastWriteTimeUtc.Ticks);
-            catalog._files.Add(file.Name, binding);
-            var name = System.IO.Path.GetFileNameWithoutExtension(file.Name);
-            if (!catalog._names.TryGetValue(name, out var matches)) catalog._names.Add(name, matches = []);
-            matches.Add(binding);
+            var binding = new ScreenMediaBinding(file.FullName, image, file.Length, file.LastWriteTimeUtc.Ticks, RelativePath:entry.RelativePath);
+            catalog._files.Add(entry.RelativePath, binding);
+            catalog._entries.Add(entry);
+            foreach (var name in new[] { file.Name, Path.GetFileNameWithoutExtension(file.Name) }.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!catalog._names.TryGetValue(name, out var matches)) catalog._names.Add(name, matches = []);
+                matches.Add(binding);
+            }
         }
         return catalog;
     }
-
     public ScreenMediaBinding? Match(ScreenOptions screen)
     {
-        if (!screen.IsVideo) return null;
+        if (!screen.IsVideo || screen.MediaFile == "") return null;
         if (screen.MediaFile is not null)
-            return _files.TryGetValue(screen.MediaFile, out var bound) ? bound : new(null, Error: $"Bound media '{screen.MediaFile}' is unavailable locally.");
-        // An explicit extension disambiguates files that share a basename.
+            return _files.TryGetValue(MediaLibrary.Normalize(screen.MediaFile), out var bound) ? bound : new(null, Error:$"Bound media '{screen.MediaFile}' is unavailable locally.");
         if (_files.TryGetValue(screen.Name, out var exact)) return exact;
         if (!_names.TryGetValue(screen.Name, out var matches)) return null;
         if (matches.Count == 1) return matches[0];
-        var filenames = matches.Select(m => System.IO.Path.GetFileName(m.Path!)).Order(StringComparer.OrdinalIgnoreCase);
-        return new(null, Error: $"Multiple media files match '{screen.Name}': {string.Join(", ", filenames)}. Include the extension in the screen name.");
+        return new(null, Error:$"Multiple media files match '{screen.Name}': {string.Join(", ", matches.Select(m=>m.RelativePath).Order(StringComparer.OrdinalIgnoreCase))}. Select a file with the media browser.");
     }
-    public IReadOnlyList<string> Names()
-    {
-        var result = new List<string>();
-        foreach (var file in _files)
-        {
-            var basename = System.IO.Path.GetFileNameWithoutExtension(file.Key);
-            var candidate = Match(new() { Name = basename });
-            result.Add(string.Equals(candidate?.Path, file.Value.Path, StringComparison.OrdinalIgnoreCase) ? basename : file.Key);
-        }
-        return result.Where(name =>
-        {
-            try { ScreenOptions.ValidateName(name); return true; }
-            catch (ArgumentException) { return false; }
-        }).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
-    }
-    public string? BrowseName(ScreenOptions screen)
-    {
-        var path = Match(screen)?.Path;
-        return path is null ? null : Names().FirstOrDefault(name =>
-            string.Equals(Match(new() { Name = name })?.Path, path, StringComparison.OrdinalIgnoreCase));
-    }
+    internal IReadOnlyList<MediaLibraryEntry> Entries(string directory) => _entries
+        .Where(entry=>MediaLibrary.Parent(entry.RelativePath).Equals(directory,StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(entry=>entry.IsFolder).ThenBy(entry=>entry.Name,StringComparer.OrdinalIgnoreCase).ToArray();
+    internal bool HasFolder(string path) => path == "" || _entries.Any(e=>e.IsFolder&&e.RelativePath.Equals(path,StringComparison.OrdinalIgnoreCase));
 }

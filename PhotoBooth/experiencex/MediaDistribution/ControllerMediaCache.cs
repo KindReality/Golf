@@ -5,7 +5,7 @@ using PhotoBooth.Diagnostics;
 
 namespace ExperienceX;
 
-// Root files only. Copies become visible atomically; source files and local extras are never deleted.
+// Copies preserve category folders and become visible atomically; local extras are never deleted.
 internal sealed class ControllerMediaCache
 {
     private sealed record Origin(string Hostname, long Length, DateTime LastWriteUtc, string Hash);
@@ -13,6 +13,7 @@ internal sealed class ControllerMediaCache
     public async Task<bool> SynchronizeAsync(string hostname, string share, string destination, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        if (!Directory.Exists(share)) throw new DirectoryNotFoundException("The Controller media share is unavailable.");
         MediaPath.EnsureLocalPath(destination);
         Directory.CreateDirectory(destination);
         var statePath = Path.Combine(destination, StateFile);
@@ -39,18 +40,21 @@ internal sealed class ControllerMediaCache
         }
         bool complete = true;
         // SMB enumeration may block in the OS; the caller owns a background worker, never the UI thread.
-        foreach (var source in Directory.EnumerateFiles(share, "*", SearchOption.TopDirectoryOnly))
+        foreach (var entry in PhotoBooth.Media.MediaLibrary.Read(share))
         {
             token.ThrowIfCancellationRequested();
+            var name = entry.RelativePath;
+            var target = PhotoBooth.Media.MediaLibrary.Resolve(destination,name);
+            MediaPath.EnsureLocalPath(target);
+            if (entry.IsFolder) { Directory.CreateDirectory(target); continue; }
+            var source = PhotoBooth.Media.MediaLibrary.Resolve(share,name);
             var info = new FileInfo(source);
-            if ((info.Attributes & FileAttributes.ReparsePoint) != 0) continue;
-            var name = info.Name;
-            if (name == StateFile) continue;
-            var target = Path.Combine(destination, name);
+            if (info.Name == StateFile) continue;
             var temporary = Path.Combine(destination, "." + Guid.NewGuid().ToString("N") + ".download");
             try
             {
                 MediaPath.EnsureLocalPath(target);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 var sourceLength = info.Length;
                 var sourceDate = info.LastWriteTimeUtc;
                 origins.TryGetValue(name, out var origin);

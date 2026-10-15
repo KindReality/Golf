@@ -17,40 +17,52 @@ public sealed record PointOptions
         get => _vertices;
         init => _vertices = Array.AsReadOnly((value ?? throw new ArgumentException("Points cannot be null.")).ToArray());
     }
-    // Quad accessors are used only by video's projective transform, never persisted.
-    [JsonIgnore] public ScreenPoint TopLeft { get => _vertices[0]; init => Set(0, value); }
-    [JsonIgnore] public ScreenPoint TopRight { get => _vertices[1]; init => Set(1, value); }
-    [JsonIgnore] public ScreenPoint BottomRight { get => _vertices[2]; init => Set(2, value); }
-    [JsonIgnore] public ScreenPoint BottomLeft { get => _vertices[3]; init => Set(3, value); }
+    // Extra video points clip the outline; these four boundary indices retain its keystone anchors.
+    private IReadOnlyList<int>? _cornerIndices;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<int>? MappingCornerIndices
+    {
+        get => _cornerIndices;
+        init => _cornerIndices = value is null ? null : Array.AsReadOnly(value.ToArray());
+    }
+    private int CornerIndex(int corner) => _cornerIndices is null ? corner : _cornerIndices[corner];
+    [JsonIgnore] public ScreenPoint TopLeft { get => _vertices[CornerIndex(0)]; init => Set(CornerIndex(0), value); }
+    [JsonIgnore] public ScreenPoint TopRight { get => _vertices[CornerIndex(1)]; init => Set(CornerIndex(1), value); }
+    [JsonIgnore] public ScreenPoint BottomRight { get => _vertices[CornerIndex(2)]; init => Set(CornerIndex(2), value); }
+    [JsonIgnore] public ScreenPoint BottomLeft { get => _vertices[CornerIndex(3)]; init => Set(CornerIndex(3), value); }
     private void Set(int index, ScreenPoint point)
     {
         var copy = _vertices.ToArray();
         copy[index] = point;
         _vertices = Array.AsReadOnly(copy);
     }
-    public bool Equals(PointOptions? other) => other is not null && Enabled == other.Enabled && Vertices.SequenceEqual(other.Vertices);
+    public bool Equals(PointOptions? other) => other is not null && Enabled == other.Enabled && Vertices.SequenceEqual(other.Vertices) &&
+        (MappingCornerIndices is null ? other.MappingCornerIndices is null : other.MappingCornerIndices is not null && MappingCornerIndices.SequenceEqual(other.MappingCornerIndices));
     public override int GetHashCode()
     {
         var hash = new HashCode();
         hash.Add(Enabled);
         foreach (var point in Vertices) hash.Add(point);
+        if (MappingCornerIndices is not null) foreach (var index in MappingCornerIndices) hash.Add(index);
         return hash.ToHashCode();
     }
 
     public void Validate()
     {
         ValidatePolygon();
-        if (Vertices.Count != 4)
-            throw new ArgumentException("Video screens require exactly four points.");
-        var points = Vertices;
+        if (MappingCornerIndices is null && Vertices.Count != 4 || MappingCornerIndices is not null &&
+            (MappingCornerIndices.Count != 4 || MappingCornerIndices.Distinct().Count() != 4 || MappingCornerIndices.Any(i => i < 0 || i >= Vertices.Count)))
+            throw new ArgumentException("Video outlines require four distinct keystone corner indices.");
+        ScreenPoint[] points = [TopLeft, TopRight, BottomRight, BottomLeft];
         for (var i = 0; i < 4; i++)
         {
             var a = points[i];
             var b = points[(i + 1) % 4];
             var c = points[(i + 2) % 4];
             if ((b.X - a.X) * (c.Y - b.Y) - (b.Y - a.Y) * (c.X - b.X) < 0.000001)
-                throw new ArgumentException("Video points must form a convex, clockwise quadrilateral with nonzero area.");
+                throw new ArgumentException("The four video mapping corners must form a convex, clockwise quadrilateral with nonzero area.");
         }
+        if (Vertices.Count > 4) VideoOutlineGeometry.ValidateProjection(this);
     }
 
     public void ValidatePolygon()

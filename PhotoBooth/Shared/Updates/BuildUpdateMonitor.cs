@@ -13,6 +13,13 @@ public sealed class BuildUpdateMonitor : IAsyncDisposable
     private readonly string _application, _source, _runtime, _running;
     private readonly UpdateStability _stability = new(TimeSpan.FromSeconds(5));
     private string? _lastWarning;
+    private readonly bool _watchBuild;
+    private int _manualRestartRequested;
+    private volatile bool _cancelPendingRestart;
+    private readonly object _shutdownGate = new();
+    private Task? _shutdownTask;
+    public event Action<string>? ManualRestartFailed;
+    public void RequestRestart() => Interlocked.Exchange(ref _manualRestartRequested, 1);
 
     public BuildUpdateMonitor(string application, string sourceDirectory, string? runtimeDirectory = null)
     {
@@ -20,13 +27,12 @@ public sealed class BuildUpdateMonitor : IAsyncDisposable
         _source = Path.GetFullPath(sourceDirectory);
         _runtime = Path.GetFullPath(runtimeDirectory ?? AppContext.BaseDirectory);
         _running = BuildUpdatePackage.BinaryFingerprint(_runtime, application);
-        if (Path.TrimEndingDirectorySeparator(_source).Equals(Path.TrimEndingDirectorySeparator(_runtime), StringComparison.OrdinalIgnoreCase))
+        _watchBuild = !Path.TrimEndingDirectorySeparator(_source).Equals(Path.TrimEndingDirectorySeparator(_runtime), StringComparison.OrdinalIgnoreCase);
+        if (!_watchBuild)
         {
             Telemetry.Warning("BuildUpdateMonitoringDisabled", new { Reason = "Run the restart CMD to use a local application copy.", Source = _source });
-            _worker = Task.CompletedTask;
-            return;
         }
-        Telemetry.Info("BuildUpdateMonitoringStarted", new { Source = _source, PollSeconds = 1, SettleSeconds = 5 });
+        else Telemetry.Info("BuildUpdateMonitoringStarted", new { Source = _source, PollSeconds = 1, SettleSeconds = 5 });
         _worker = Task.Run(RunAsync);
     }
 
@@ -36,15 +42,17 @@ public sealed class BuildUpdateMonitor : IAsyncDisposable
         var retryAt = TimeSpan.Zero;
         while (!_stop.IsCancellationRequested)
         {
+            var manual = false;
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(1), _stop.Token).ConfigureAwait(false);
-                if (clock.Elapsed < retryAt) continue;
+                manual = Interlocked.Exchange(ref _manualRestartRequested, 0) != 0;
+                if (!manual && (!_watchBuild || clock.Elapsed < retryAt)) continue;
                 var candidate = BuildUpdatePackage.BinaryFingerprint(_source, _application);
-                if (candidate == _running) { _stability.Reset(); _lastWarning = null; continue; }
+                if (!manual && candidate == _running) { _stability.Reset(); _lastWarning = null; continue; }
                 // Include the manifest in settling so a second build resets the wait.
                 var manifest = File.ReadAllText(Path.Combine(_source, BuildUpdatePackage.ManifestName));
-                if (!_stability.IsReady(candidate + manifest, clock.Elapsed)) continue;
+                if (!manual && !_stability.IsReady(candidate + manifest, clock.Elapsed)) continue;
                 BuildUpdatePackage.Verify(_source, _application, manifest);
                 var scriptName = _application == "Controller" ? "Restart-Controller.ps1" : "Restart-Experience.ps1";
                 var script = Path.Combine(_runtime, scriptName);
@@ -56,12 +64,22 @@ public sealed class BuildUpdateMonitor : IAsyncDisposable
                 };
                 foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
                     "-SourceDirectory", _source, "-AutomaticUpdate" }) start.ArgumentList.Add(argument);
-                Telemetry.Info("BuildUpdateRestartRequested", new { Source = _source, Application = _application, BinaryFingerprint = candidate });
+                Telemetry.Info(manual ? "ApplicationRestartRequested" : "BuildUpdateRestartRequested", new { Source = _source, Application = _application, BinaryFingerprint = candidate });
                 using var process = Process.Start(start) ?? throw new IOException("Could not start the restart script.");
                 // Disposal cancels this wait when the script asks the current app to close.
                 // The external restart process continues through copy and relaunch.
-                await process.WaitForExitAsync(_stop.Token).ConfigureAwait(false);
-                Telemetry.Warning("BuildUpdateRestartFailed", new { process.ExitCode, Log = Path.Combine(_runtime, "logs", "UpdateRestart.log") });
+                try { await process.WaitForExitAsync(_stop.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+                {
+                    if (_cancelPendingRestart && !process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                        await process.WaitForExitAsync().ConfigureAwait(false);
+                    }
+                    throw;
+                }
+                Telemetry.Warning(manual ? "ApplicationRestartFailed" : "BuildUpdateRestartFailed", new { process.ExitCode, Log = Path.Combine(_runtime, "logs", "UpdateRestart.log") });
+                if (manual) ManualRestartFailed?.Invoke("The restart script exited before the application closed. Check UpdateRestart.log.");
                 retryAt = clock.Elapsed + TimeSpan.FromSeconds(60);
                 _stability.Reset();
             }
@@ -69,16 +87,26 @@ public sealed class BuildUpdateMonitor : IAsyncDisposable
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or System.ComponentModel.Win32Exception)
             {
                 _stability.Reset();
+                if (manual) ManualRestartFailed?.Invoke(ex.Message);
                 if (_lastWarning != ex.Message)
                 {
                     _lastWarning = ex.Message;
-                    Telemetry.Warning("BuildUpdateDeferred", new { Source = _source, Reason = ex.Message });
+                    Telemetry.Warning(manual ? "ApplicationRestartDeferred" : "BuildUpdateDeferred", new { Source = _source, Reason = ex.Message });
                 }
             }
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => StopAsync(cancelPendingRestart: false);
+    public ValueTask StopAsync(bool cancelPendingRestart)
+    {
+        lock (_shutdownGate)
+        {
+            if (cancelPendingRestart) _cancelPendingRestart = true;
+            return new(_shutdownTask ??= StopCoreAsync());
+        }
+    }
+    private async Task StopCoreAsync()
     {
         await _stop.CancelAsync().ConfigureAwait(false);
         await _worker.ConfigureAwait(false);

@@ -29,7 +29,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
     private static string Identity(IPointSurface surface) => surface.DisplayName + "/" + surface.ScreenId;
     private PointOptions Coordinates(ExperienceOptions settings, IPointSurface surface) => settings.PointsFor(surface.DisplayName, surface.ScreenId);
     private static ScreenOptions? Definition(ExperienceOptions settings, IPointSurface surface) => settings.ScreensFor(surface.DisplayName).FirstOrDefault(s => surface.ScreenId is null || s.Id.Equals(surface.ScreenId, StringComparison.OrdinalIgnoreCase));
-    private bool IsPolygon(IPointSurface surface) => Definition(options(), surface)?.IsPolygon == true;
+    private bool IsMask(IPointSurface surface) => Definition(options(), surface)?.IsMask == true;
     private bool IsVisualization(IPointSurface surface) => Definition(options(), surface)?.IsVisualization == true;
     private bool IsLedMatrix(IPointSurface surface) => Definition(options(), surface) is { IsLed: true, IsLedArray: false };
     private bool _rotatingLed;
@@ -47,6 +47,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
 
     private bool _saving;
     internal bool Busy => _saving;
+    internal bool Editing => _active is not null;
     private double _dragOffsetX, _dragOffsetY;
     private bool _draggingScreen;
     private bool _draggingEdge;
@@ -59,7 +60,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
     private PointSnapping NewPointDrag(IPointSurface owner)
     {
         var surfaces = (IsVisualization(owner) ? new[] { owner } : windows().Where(w => w.DisplayName.Equals(owner.DisplayName, StringComparison.OrdinalIgnoreCase) && !IsVisualization(w)).Append(owner)).Distinct().ToArray();
-        return new(surfaces.ToDictionary(w => w, w => Coordinates(options(), w)), surfaces.ToDictionary(w => w, IsPolygon), CanJoin, surfaces.ToDictionary(w=>w,IsLedMatrix), surfaces.ToDictionary(w => w, w => Definition(options(), w)?.Type ?? "video"));
+        return new(surfaces.ToDictionary(w => w, w => Coordinates(options(), w)), surfaces.ToDictionary(w => w, IsMask), CanJoin, surfaces.ToDictionary(w=>w,IsLedMatrix), surfaces.ToDictionary(w => w, w => Definition(options(), w)?.Type ?? "video"));
     }
     private void Show(IPointSurface owner, int selected)
     {
@@ -74,6 +75,8 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
             var point = group?.Moving.Where(h => h.Surface == window).Select(h => (int?)h.Index).FirstOrDefault();
             window.ShowCalibration(point ?? (window == owner ? selected : -1));
         }
+        var target = group is not null && selected >= 0 ? group.JoinTarget(new(owner, selected), options().PointHitDiameterPercent) : null;
+        foreach (var window in windows()) window.ShowJoinTarget(target?.Surface == window ? target.Value.Index : -1);
     }
     private void PreviewGroup()
     {
@@ -233,28 +236,13 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
         else
             MovePoint(window, x + _dragOffsetX, y + _dragOffsetY);
     }
-    private void MovePoint(IPointSurface window, double x, double y, bool snap = true)
+    private void MovePoint(IPointSurface window, double x, double y)
     {
         if (_active != window || _draft is null || _saving)
             return;
         _pointDrag ??= NewPointDrag(window);
         var selected = new PointHandle(window, _selected);
-        var undo = _pointDrag.Move(selected, x, y, options().PointHitDiameterPercent, _dragOffsetX, _dragOffsetY, snap);
-        if (undo is not null)
-        {
-            var snapped = _pointDrag.Position(selected);
-            var before = PointEditing.Points(undo.Drafts[window])[_selected];
-            _dragOffsetX += snapped.X - before.X;
-            _dragOffsetY += snapped.Y - before.Y;
-            Telemetry.Info("PointsSnapped", new
-            {
-                window.DisplayName,
-                window.ScreenName,
-                Point = _selected + 1,
-                LinkedPoints = _pointDrag.Moving.Count,
-                Position = snapped
-            });
-        }
+        _pointDrag.Move(selected, x, y);
         foreach (var entry in _detached.ToArray())
         {
             if (!_pointDrag.Drafts.ContainsKey(entry.Key.Surface))
@@ -267,12 +255,42 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
         PreviewGroup();
         Show(window, _selected);
     }
+    private void JoinSelected(IPointSurface window)
+    {
+        if (_focusedPoint is not { } focus || focus.Surface != window || _draggingScreen || _draggingEdge || _rotatingLed) return;
+        if (_active is null)
+        {
+            _active = window; _original = _draft = Coordinates(options(), window); _selected = focus.Index;
+            _dragOffsetX = _dragOffsetY = 0;
+            _pointDrag = NewPointDrag(window); _pointDrag.Select(focus);
+        }
+        if (_active != window || _pointDrag is null) return;
+        var selected = new PointHandle(window, _selected);
+        var undo = _pointDrag.Join(selected, options().PointHitDiameterPercent, _dragOffsetX, _dragOffsetY);
+        if (undo is not null)
+        {
+            var snapped = _pointDrag.Position(selected);
+            var before = PointEditing.Points(undo.Drafts[window])[_selected];
+            _dragOffsetX += snapped.X - before.X;
+            _dragOffsetY += snapped.Y - before.Y;
+            Telemetry.Info("PointsJoined", new
+            {
+                window.DisplayName,
+                window.ScreenName,
+                Point = _selected + 1,
+                LinkedPoints = _pointDrag.Moving.Count,
+                Position = snapped
+            });
+        }
+        PreviewGroup();
+        Show(window, _selected);
+    }
     public async Task<bool> FinishAsync(IPointSurface window, bool remember = true)
     {
         if (_stopping)
             return false;
         foreach (var item in windows())
-            item.FadeCalibration();
+        { item.ShowJoinTarget(-1); item.FadeCalibration(); }
         if (_active != window || _original is null || _draft is null || _saving)
             return false;
         var original = _original;
@@ -338,7 +356,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
                 if (change.Surface == window && selected >= 0)
                     window.FlashCalibration(selected, true);
                 else
-                    change.Surface.FlashCalibrationPoints(IsPolygon(change.Surface) ? -1 : 15);
+                    change.Surface.FlashCalibrationPoints(IsMask(change.Surface) || change.After.Vertices.Count > 4 ? -1 : 15);
             Telemetry.Info("PointsSaved", new
             {
                 window.DisplayName,
@@ -375,6 +393,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
     }
     public void Cancel(string reason)
     {
+        foreach (var window in windows()) window.ShowJoinTarget(-1);
         _rotatingLed = false;
         var active = _active;
         _active = null;
@@ -466,7 +485,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
                     mask |= 1 << i;
             if (mask == 0)
                 mask = 15; // Enabled-only changes confirm at all four corners.
-            if (afterScreen.IsPolygon)
+            if (afterScreen.IsMask || after.Vertices.Count > 4)
                 mask = -1;
             confirmations.Add(ConfirmRemoteAsync(window, after, mask, revision));
         }
@@ -503,22 +522,17 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
     }
     public async Task InsertPointAsync(IPointSurface window, int edge, ScreenPoint point)
     {
-        if (_stopping || !options().ConfigurationMode || _saving || !IsPolygon(window))
+        if (_stopping || !options().ConfigurationMode || _saving || Definition(options(),window) is not { SupportsPointInsertion: true } definition)
             return;
         Cancel("InsertPoint");
         var original = Coordinates(options(), window);
         if (edge < 0 || edge >= original.Vertices.Count)
             return;
-        var points = original.Vertices.ToList();
-        points.Insert(edge + 1, point);
-        var edited = original with
-        {
-            Enabled = true,
-            Vertices = points
-        };
+        PointOptions edited;
         try
         {
-            edited.ValidatePolygon();
+            edited = PointEditing.Insert(original,edge,point,definition.IsVideo);
+            definition.ValidatePoints(edited);
         }
         catch (ArgumentException) { return; }
         Show(window, edge + 1);
@@ -530,7 +544,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
         if (await FinishAsync(window)) Show(window, edge + 1);
     }
     public void RequestInsertPoint(IPointSurface window, int edge, ScreenPoint point) =>
-        _tasks.Run(_ => InsertPointAsync(window, edge, point), "Insert mat point");
+        _tasks.Run(_ => InsertPointAsync(window, edge, point), "Insert screen point");
     public async Task UndoAsync(IPointSurface window, bool movementOnly = false)
     {
         if (!options().ConfigurationMode || _saving)
@@ -662,6 +676,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
             return true;
         }
         var code = key & Forms.Keys.KeyCode;
+        if (key == Forms.Keys.J) { JoinSelected(window); return true; }
         if (key == Forms.Keys.Delete)
         {
             if (DisconnectPoint())
@@ -734,7 +749,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
         var step = (key & Forms.Keys.Shift) != 0 ? 10 : 1;
         var dx = code == Forms.Keys.Left ? -step : code == Forms.Keys.Right ? step : 0;
         var dy = code == Forms.Keys.Up ? -step : code == Forms.Keys.Down ? step : 0;
-        MovePoint(window, p.X + (double)dx / Math.Max(1, window.PixelWidth - 1), p.Y + (double)dy / Math.Max(1, window.PixelHeight - 1), snap: false);
+        MovePoint(window, p.X + (double)dx / Math.Max(1, window.PixelWidth - 1), p.Y + (double)dy / Math.Max(1, window.PixelHeight - 1));
         Show(window, _selected);
         return true;
     }

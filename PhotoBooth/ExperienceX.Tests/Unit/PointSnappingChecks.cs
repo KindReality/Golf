@@ -6,6 +6,7 @@ internal static class PointSnappingChecks
 {
     internal static async Task Run()
     {
+        InitialPointsStayIndependent();
         var folder = Path.Combine(Path.GetTempPath(), "ExperienceX-snapping-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         try
@@ -44,7 +45,10 @@ internal static class PointSnappingChecks
             editor = new(() => current, () => surfaces, store, Reload);
             Check(editor.Begin(source, .4, .1, 1), "Source point selection");
             editor.Move(source, .49, .1);
-            Check(Shape(source).TopRight == new ScreenPoint(.5, .1), "Point jumps exactly to the nearest eligible coordinate");
+            Check(Shape(source).TopRight == new ScreenPoint(.49, .1) && Shape(target) == targetPoints && target.JoinTarget == 0, "Near movement only highlights the eligible target without joining");
+            Check(source.Flashes == 0 && target.Flashes == 0, "Join preview does not claim a completed save");
+            editor.Key(source, Forms.Keys.J);
+            Check(Shape(source).TopRight == new ScreenPoint(.5, .1), "J joins exactly to the nearest eligible coordinate");
             editor.Move(source, .54, .15);
             Check(Shape(source).TopRight == Shape(target).TopLeft && Shape(target).TopLeft == Shape(third).TopLeft,
                 "Snapped media and mat points continue moving as one group");
@@ -75,6 +79,7 @@ internal static class PointSnappingChecks
             Check(current.ScreensFor("DISPLAY1")[0].Id == "target", "Movement undo preserves layer order");
             editor.Begin(source, .4, .1, 1);
             editor.Move(source, .49, .1);
+            editor.Key(source, Forms.Keys.J);
             Check(editor.Key(source, Forms.Keys.Control | Forms.Keys.Z), "Ctrl+Z handles an active snapped movement");
             var draftDeadline = DateTime.UtcNow.AddSeconds(3);
             while (source.Preview is not null || target.Preview is not null)
@@ -86,13 +91,15 @@ internal static class PointSnappingChecks
 
             editor.Begin(source, .4, .1, 1);
             editor.Move(source, .49, .1);
+            editor.Key(source, Forms.Keys.J);
             await editor.UndoAsync(source);
             Check(Shape(source).TopRight == new ScreenPoint(.49, .1) && Shape(target).TopLeft == new ScreenPoint(.5, .1), "Z during a drag undoes the magnet jump");
             editor.Move(source, .495, .1);
             Check(Shape(source).TopRight.X == .495, "Undo prevents an immediate accidental resnap");
             editor.Move(source, .43, .1);
             editor.Move(source, .49, .1);
-            Check(Shape(source).TopRight == Shape(target).TopLeft, "Snapping resumes after leaving the click radius");
+            editor.Key(source, Forms.Keys.J);
+            Check(Shape(source).TopRight == Shape(target).TopLeft, "J can join again after leaving the click radius");
             Check(editor.Key(source, Forms.Keys.Delete), "Delete disconnects the selected point");
             editor.Move(source, .51, .1);
             Check(Shape(source).TopRight != Shape(target).TopLeft && Shape(target) == targetPoints,
@@ -150,12 +157,57 @@ internal static class PointSnappingChecks
             var polygon = Quad(.1, .1, .4, .4);
             var only = new PointSnapping(new() { [target] = polygon }, new() { [target] = true }, (a, b) => a == b);
             only.Select(new(target, 0));
-            only.Move(new(target, 0), .399, .1, 5, 0, 0);
+            only.Move(new(target, 0), .399, .1);
+            Check(only.Join(new(target, 0), 5, 0, 0) is null, "J cannot collapse points on the same screen");
             only.Drafts[target].ValidatePolygon();
             Check(only.Drafts[target].TopLeft != only.Drafts[target].TopRight, "Snapping cannot collapse vertices of the same screen");
+            current = new ExperienceOptions { ConfigurationMode = true, DisplayScreens = new()
+            { ["DISPLAY1"] = [new(){Id="source",Name="source",Points=sourcePoints},new(){Id="target",Name="target",Points=targetPoints}] } };
+            File.WriteAllText(path,JsonSerializer.Serialize(current));source.Preview=null;target.Preview=null;
+            editor = new(()=>current,()=>new[]{source,target},store,Reload);
+            editor.Begin(source,.4,.1,1);editor.Move(source,.49,.1);
+            await editor.FinishAsync(source);
+            Check(current.PointsFor("DISPLAY1","source").TopRight==new ScreenPoint(.49,.1) && target.JoinTarget==0,
+                "Releasing a nearby point joined automatically or lost its J prompt");
+            Check(!editor.Key(source,Forms.Keys.Control|Forms.Keys.J),"Ctrl+J unexpectedly joined points");
+            editor.Key(source,Forms.Keys.J);await editor.FinishAsync(source);
+            Check(current.PointsFor("DISPLAY1","source").TopRight==targetPoints.TopLeft,"J could not join a released, selected point");
+            editor.Cancel("Finished");
+            Check(target.JoinTarget==-1,"Cancel left a stale J target prompt");
+            await editor.DisposeAsync();
             Console.WriteLine("Passed point snapping, exact-coordinate groups, media/mat sharing, linked save/undo, Delete separation, keyboard movement and atomic remote-conflict handling.");
         }
         finally { Directory.Delete(folder, true); }
+    }
+    private static void InitialPointsStayIndependent()
+    {
+        var first = new Surface("DISPLAY1", "fresh-video");
+        var second = new Surface("DISPLAY1", "fresh-mat");
+        PointSnapping Create(PointOptions a, PointOptions b) => new(new() { [first] = a, [second] = b },
+            new() { [first] = false, [second] = true }, (a,b) => a == b || a.Surface != b.Surface);
+        var drag = Create(new(),new());
+        var topLeft = new PointHandle(first,0);
+        drag.Select(topLeft);
+        Check(drag.Moving.SetEquals([topLeft]), "Initial full-display corners were linked across newly created screens.");
+        drag.Move(topLeft,.01,.01);
+        Check(drag.Drafts[first].TopLeft == new ScreenPoint(.01,.01) && drag.Drafts[second] == new PointOptions(),
+            "A new screen's point moved another screen or snapped back to its initial corner.");
+        drag = Create(new(),new()); drag.MoveEdge(first,0,0,.02);
+        Check(drag.Drafts[first].TopLeft.Y == .02 && drag.Drafts[first].TopRight.Y == .02 && drag.Drafts[second] == new PointOptions(),
+            "Moving an initial edge dragged another screen's default points.");
+        var moved = new PointOptions { Enabled = true, TopLeft = new(.02,.02) };
+        var centered = ScreenOptions.CenteredPoints();
+        drag = Create(centered,centered); drag.Select(topLeft); drag.Move(topLeft,.34,.34);
+        Check(drag.Moving.Count == 1 && drag.Drafts[second] == centered && drag.JoinTarget(topLeft,5) is null,
+            "Fresh centered screens linked at their initial points.");
+        drag = Create(moved,moved); drag.Select(topLeft);
+        Check(drag.Moving.Count == 2,"Edited coincident points stopped forming shared groups.");
+        var line = LedGeometry.Initial(true);
+        drag = new(new() { [first] = line, [second] = line }, new() { [first] = false, [second] = false }, (a,b)=>true);
+        drag.Select(topLeft); drag.Move(topLeft,.01,.5);
+        Check(drag.Moving.Count==1 && drag.Drafts[first].Vertices[0]==new ScreenPoint(.01,.5) && drag.Drafts[second]==line,
+            "Initial LED endpoints linked or snapped back while moving a fresh line.");
+        Console.WriteLine("PASS independent initial corners/edges and LED endpoints; edited coincident points still link.");
     }
     private static PointOptions Quad(double x, double y, double right, double bottom) => new() { Enabled = true, TopLeft = new(x, y), TopRight = new(right, y), BottomLeft = new(x, bottom), BottomRight = new(right, bottom) };
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
@@ -168,6 +220,8 @@ internal static class PointSnappingChecks
         public int PixelHeight => 1080;
         public PointOptions? Preview;
         public int Flashes, Selected;
+        public int JoinTarget = -1;
+        public void ShowJoinTarget(int point) => JoinTarget = point;
         public void SelectScreen(bool selected) { }
         public void ShowCalibration(int selected) => Selected = selected;
         public void FadeCalibration() => Selected = -1;

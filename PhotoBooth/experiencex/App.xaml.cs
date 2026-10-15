@@ -52,10 +52,18 @@ public partial class App : System.Windows.Application
         base.OnStartup(e);
         _host = new ExperienceHost(Dispatcher, configurationPath);
         _host.CloseRequested += () => _shutdown ??= ShutdownAsync();
+        _host.ShutdownRequested += () => _shutdown ??= ShutdownAsync(cancelPendingRestart: true);
+        _host.RestartRequested += () =>
+        {
+            if (_updates is not null) _updates.RequestRestart();
+            else _host.ReportRestartFailure("The update service is not ready.");
+        };
         try
         {
             _host.Start();
             _updates = new PhotoBooth.Updates.BuildUpdateMonitor("ExperienceX", System.IO.Path.GetDirectoryName(configurationPath)!);
+            _updates.ManualRestartFailed += reason => Dispatcher.BeginInvoke(new Action(() => _host?.ReportRestartFailure(reason)));
+            _host.FocusExperience();
         }
         catch (Exception ex)
         {
@@ -64,11 +72,11 @@ public partial class App : System.Windows.Application
             _shutdown ??= ShutdownAsync();
         }
     }
-    private async Task ShutdownAsync()
+    private async Task ShutdownAsync(bool cancelPendingRestart = false)
     {
         try
         {
-            if (_updates is not null) await _updates.DisposeAsync();
+            if (_updates is not null) await _updates.StopAsync(cancelPendingRestart);
             if (_host is not null)
                 await _host.DisposeAsync();
         }

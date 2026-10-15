@@ -6,7 +6,9 @@
     <PackageReference Include="Vortice.DirectComposition" Version="3.8.3" />
     <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
     <Compile Include="..\Shared\Telemetry.cs" Link="Diagnostics\Telemetry.cs" />
+    <Compile Include="..\Shared\MediaLibrary\*.cs" Link="MediaDistribution\Shared\%(Filename)%(Extension)" />
     <Compile Include="..\Shared\Updates\*.cs" Link="Updates\%(Filename)%(Extension)" />
+    <None Include="..\Shared\Networking\NetworkAccess.ps1" Link="NetworkAccess.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\Shared\Updates\Stage-ApplicationUpdate.ps1" Link="Stage-ApplicationUpdate.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Compile Include="..\Shared\Configuration\*.cs" Link="Configuration\Shared\%(Filename)%(Extension)" />
     <Compile Include="..\Shared\Appearance\*.cs" Link="Appearance\%(Filename)%(Extension)" />
@@ -33,8 +35,9 @@
     <EmbeddedResource Include="Shaders\VideoVS.cso" />
     <EmbeddedResource Include="Shaders\VideoPS.cso" />
     <EmbeddedResource Include="Shaders\CalibrationPS.cso" />
-    <EmbeddedResource Include="Shaders\MatVS.cso" />
-    <EmbeddedResource Include="Shaders\MatPS.cso" />
+    <EmbeddedResource Include="Shaders\MaskVS.cso" />
+    <EmbeddedResource Include="Shaders\MaskPS.cso" />
+    <EmbeddedResource Include="Shaders\PolygonVS.cso" />
     <None Update="Media\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="SeedExperienceXConfiguration" AfterTargets="CopyFilesToOutputDirectory">

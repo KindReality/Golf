@@ -29,19 +29,79 @@ internal sealed class ExperienceHost : IAsyncDisposable
     private readonly VideoStopHistory _videoStops = new();
     private readonly AsyncTaskScope _tasks = new("Experience host");
     private readonly DispatcherTimer _audioPoll = new() { Interval = TimeSpan.FromSeconds(1) };
-    private bool _polling, _disposed, _togglingBackground, _togglingTransparency, _closeRequested;
+    private bool _polling, _disposed, _togglingBackground, _togglingTransparency, _restartRequested;
     private string? _deviceFailure;
     private bool _addScreenArmed, _editingText, _addingScreen;
-    private bool _creatingPerspective;
+    private bool _creatingPerspective, _choosingPerspective, _resettingVideo;
+    internal ConfigurationSubmenu ActiveSubmenu => _addScreenArmed ? ConfigurationSubmenu.AddScreen :
+        _backgroundSelection.PendingDisplay is not null ? ConfigurationSubmenu.Background : ConfigurationSubmenu.None;
+    internal string HudMessage => _modeNotice.Message;
+    private string? _addScreenDisplay;
     private readonly Queue<(string Display, string ScreenId, int Direction)> _brightnessChanges = new();
     private bool _adjustingBrightness;
     private Task _matCommands = Task.CompletedTask;
+    private Task _clipboardCommands = Task.CompletedTask;
+    private bool _pastingScreen;
+    private void PressScreenClipboard(bool paste)
+    {
+        if (_disposed || !_options.ConfigurationMode || _editingText || _addingScreen && !_pastingScreen) return;
+        CancelBackgroundChoice(); _addScreenArmed = false;
+        var selected = _calibration.SelectedScreen as ScreenSurface;
+        var display = paste ? System.Windows.Forms.Screen.FromPoint(System.Windows.Forms.Cursor.Position).DeviceName : selected?.DisplayName;
+        var window = display is null ? null : _displays.Select(display);
+        var previous = _clipboardCommands;
+        var operation = _clipboardCommands = RunClipboardCommandAsync(previous, paste, selected, window, _tasks.Token);
+        _tasks.Run(_ => operation, paste ? "Paste screen" : "Copy screen");
+    }
+    private async Task RunClipboardCommandAsync(Task previous, bool paste, ScreenSurface? selected, MainWindow? window, CancellationToken token)
+    {
+        var creating = false;
+        try
+        {
+            await previous;
+            token.ThrowIfCancellationRequested();
+            if (_disposed || !_options.ConfigurationMode || _editingText || _addingScreen) return;
+            if (window is null || !window.Visible) throw new InvalidOperationException("The target display is unavailable.");
+            if (_calibration.Busy || window.Capture) throw new InvalidOperationException("Finish moving the screen before copying or pasting.");
+            await window.FinishFramingAsync();
+            if (_disposed || !_options.ConfigurationMode || _editingText) return;
+            if (!paste)
+            {
+                var screen = selected is null ? null : _options.ScreensFor(selected.DisplayName).FirstOrDefault(s => s.Id == selected.ScreenId);
+                if (screen is null || !screen.IsVideo && !screen.IsMat)
+                    throw new InvalidOperationException("Select a video, image or mat screen to copy.");
+                var mediaFile = screen.MediaFile ?? _screenMedia.Current.Match(screen)?.RelativePath;
+                ScreenClipboard.Write(new() { SourceDisplay = selected!.DisplayName, Screen = screen with { MediaFile = mediaFile } });
+                Telemetry.Info("ScreenCopied", new { selected.DisplayName, ScreenId = screen.Id, ScreenName = screen.Name, ScreenType = screen.Type, mediaFile });
+                _modeNotice.Display($"Copied {screen.Name}   •   Ctrl+V to paste", display: selected.DisplayName);
+                return;
+            }
+            var copy = ScreenClipboard.Read();
+            _addingScreen = _pastingScreen = creating = true;
+            var added = await _configuration.Store.PasteScreenAsync(window.DisplayName, copy, token);
+            await _configuration.ReloadAsync();
+            if (_disposed || !_options.ConfigurationMode) return;
+            _calibration.SelectScreen(window.Surface(added.Id));
+            window.Activate(); window.Focus(); window.Surface(added.Id).FlashCalibrationPoints(15);
+            Telemetry.Info("ScreenPasted", new { window.DisplayName, ScreenId = added.Id, ScreenName = added.Name,
+                ScreenType = added.Type, copy.SourceDisplay, SourceScreenId = copy.Screen.Id, added.MediaFile });
+            _modeNotice.Display($"Pasted {added.Name}", display: window.DisplayName);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            Telemetry.Error(paste ? "ScreenPasteFailed" : "ScreenCopyFailed", ex);
+            if (!_disposed) _modeNotice.Display(ex.Message, true);
+        }
+        finally { if (creating) _addingScreen = _pastingScreen = false; }
+    }
 
     private void PressMat()
     {
         CancelBackgroundChoice();
         var create = _addScreenArmed;
         _addScreenArmed = false;
+        UpdateHotkeys(_options.ConfigurationMode);
         var previous = _matCommands;
         // A rapid A,M,M must finish creating/selecting the mat before toggling it.
         var operation = _matCommands = RunMatCommandAsync(previous, create, _tasks.Token);
@@ -69,7 +129,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
             if (applied?.IsNegative != expected.IsNegative)
                 throw new InvalidOperationException("The mat setting could not be applied or changed again remotely.");
             Telemetry.Info("MatNegativeToggled", new { selected.DisplayName, selected.ScreenId, ScreenName = applied.Name, applied.IsNegative, Shortcut = "M" });
-            _modeNotice.Display($"{applied.Name}: {(applied.IsNegative ? "negative — black outside" : "normal — black inside")}   •   M", display: selected.DisplayName);
+            _modeNotice.Display($"{applied.Name}: {(applied.IsNegative ? "negative — cut out outside" : "normal — cut out inside")}   •   M", display: selected.DisplayName);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception) when (_disposed) { }
@@ -138,28 +198,50 @@ internal sealed class ExperienceHost : IAsyncDisposable
     }
     private async Task ChoosePerspectiveAsync(CancellationToken token)
     {
-        if (_calibration.SelectedScreen is not ScreenSurface surface || !_options.ConfigurationMode) return;
+        if (_disposed || !_options.ConfigurationMode || _editingText || _creatingPerspective || _choosingPerspective ||
+            _calibration.SelectedScreen is not ScreenSurface surface) return;
         var window = _displays.Windows.FirstOrDefault(w => w.DisplayName == surface.DisplayName);
         var screen = _options.ScreensFor(surface.DisplayName).FirstOrDefault(s => s.Id == surface.ScreenId);
         if (window is null || screen is null || !screen.IsVideo) return;
-        using var picker = new PerspectivePicker(_definitions.Perspectives, screen.Perspective);
-        System.Windows.Forms.DialogResult result;
-                _editingText=true; UpdateHotkeys(true);
-                try { result=picker.ShowDialog(window); }
-                finally { _editingText=false; UpdateHotkeys(_options.ConfigurationMode); }
-                if (result != System.Windows.Forms.DialogResult.OK) return;
-        try { await _configuration.Store.SetPerspectiveAsync(surface.DisplayName, surface.ScreenId, picker.Selection); await _configuration.ReloadAsync(); }
-        catch (Exception ex) { _modeNotice.Display(ex.Message, true); Telemetry.Error("PerspectiveSelectionFailed", ex); }
+        _choosingPerspective = true;
+        CancelBackgroundChoice(); _addScreenArmed = false;
+        try
+        {
+            await window.FinishFramingAsync();
+            await _calibration.FinishAsync(surface);
+            await _configuration.ReloadAsync();
+            if (_disposed || !_options.ConfigurationMode) return;
+            screen = _options.ScreensFor(surface.DisplayName).FirstOrDefault(s => s.Id == surface.ScreenId);
+            if (screen is null || !screen.IsVideo) return;
+            var display = System.Windows.Forms.Screen.AllScreens.FirstOrDefault(d => d.DeviceName == surface.DisplayName)
+                ?? throw new InvalidOperationException("The selected display is unavailable.");
+            var dimensions = ScreenPerspectiveCrop.Calculate(screen.Points, display.Bounds.Width, display.Bounds.Height);
+            using var picker = new PerspectivePicker(_definitions.Perspectives, screen.Perspective, createFrom: dimensions);
+            System.Windows.Forms.DialogResult result;
+            _editingText = true; UpdateHotkeys(true);
+            try { result = picker.ShowDialog(window); }
+            finally { _editingText = false; UpdateHotkeys(_options.ConfigurationMode); }
+            if (result != System.Windows.Forms.DialogResult.OK || _disposed || !_options.ConfigurationMode) return;
+            if (picker.CreateNew) await CreatePerspectiveAsync(token, surface);
+            else
+            {
+                await _configuration.Store.SetPerspectiveAsync(surface.DisplayName, surface.ScreenId, picker.Selection);
+                await _configuration.ReloadAsync();
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex) { if (!_disposed) { _modeNotice.Display(ex.Message, true); Telemetry.Error("PerspectiveSelectionFailed", ex); } }
+        finally { _choosingPerspective = false; }
     }
-    private async Task<bool> RenameScreenAsync(ScreenSurface surface, string oldName, string name, CancellationToken token, bool browsing = false)
+    private async Task<bool> RenameScreenAsync(ScreenSurface surface, string oldName, string name, CancellationToken token)
     {
         try
         {
             token.ThrowIfCancellationRequested();
-            if (!browsing && name == oldName) return true;
+            if (name == oldName) return true;
             var definition = _options.ScreensFor(surface.DisplayName).FirstOrDefault(s => s.Id == surface.ScreenId);
             var binding = definition?.IsVideo == true ? _screenMedia.Current.Match(new() { Name = name }) : null;
-            var mediaFile = binding?.Path is { } mediaPath ? Path.GetFileName(mediaPath) : null;
+            var mediaFile = definition?.MediaFile ?? binding?.RelativePath;
             await _configuration.Store.RenameScreenAsync(surface.DisplayName, surface.ScreenId, oldName, name, mediaFile);
             await _configuration.ReloadAsync();
             if (_disposed)
@@ -181,6 +263,14 @@ internal sealed class ExperienceHost : IAsyncDisposable
     private volatile object _health = new { State = "Starting" };
     private ExperienceOptions _options => _configuration.Current;
     public event Action? CloseRequested;
+    internal event Action? ShutdownRequested;
+    internal event Action? RestartRequested;
+    internal void ReportRestartFailure(string reason)
+    {
+        if (_disposed) return;
+        _restartRequested = false;
+        _modeNotice.Display("Restart could not complete: " + reason, true);
+    }
     internal nint HotkeyWindowHandle => _hotkeys.Handle;
     internal int[] VisualizationProcessIds => _displays.VisualizationProcessIds;
     internal IEnumerable<MainWindow> DisplayWindows => _displays.Windows;
@@ -199,25 +289,40 @@ internal sealed class ExperienceHost : IAsyncDisposable
         _mediaDiscovery = new(() => _options);
         _definitions = new(dispatcher, async definitions => { await _configuration.Store.ApplyPerspectivesAsync(definitions); await _configuration.ReloadAsync(); });
         _listener = new(dispatcher, () => _options, HandleRequest, message => { _mediaDiscovery.Receive(message); _definitions.Receive(message); }, () => _announcements.RequestAnnouncement());
-        _configurationShortcut = new("Experience", () => _options.ConfigurationMode, enabled => _tasks.Run(token => SetSharedConfigurationAsync(enabled, token), "Set shared configuration"), FocusExperience);
+        _configurationShortcut = new("Experience", () => _options.ConfigurationMode, enabled => _tasks.Run(token => SetSharedConfigurationAsync(enabled, token), "Set shared configuration"), FocusExperience,
+            () => dispatcher.BeginInvoke(new Action(() => ShutdownRequested?.Invoke())));
         _hotkeys = new(() => _configurationShortcut.SwitchTo("Controller"), () =>
         {
-            if (_disposed || _closeRequested)
+            if (_disposed || _restartRequested || !_options.ConfigurationMode || _editingText)
                 return;
-            _closeRequested = true;
-            Telemetry.Info("CloseHotkeyPressed", new
+            _restartRequested = true;
+            Telemetry.Info("RestartHotkeyPressed", new
             {
                 Shortcut = "X"
             });
             // Leave the native message handler before disposing its receiving window.
-            dispatcher.BeginInvoke(new Action(() => { if (!_disposed) CloseRequested?.Invoke(); }));
+            dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_disposed) return;
+                _modeNotice.Display("Restarting Experience…", display: _calibration.SelectedScreen?.DisplayName);
+                RestartRequested?.Invoke();
+            }));
         }, () =>
         {
             PressBackgroundB();
         }, hotkeysFocused);
         _configuration.Changing += next => { if (next.UdpCommandsPort != _options.UdpCommandsPort || next.UdpEventsPort != _options.UdpEventsPort) _listener.Bind(next.UdpCommandsPort, next.UdpEventsPort); };
         _configuration.Changed += ApplyConfiguration;
-        _hotkeys.AddScreenPrefix = () => { CancelBackgroundChoice(); _addScreenArmed = true; _modeNotice.Display("Add screen   •   V: video   M: mat   G: visualization   L: LEDs"); };
+        _hotkeys.CancelSubmenu = CancelConfigurationSubmenu;
+        _displays.CancelSubmenuRequested += CancelConfigurationSubmenu;
+        _hotkeys.AddScreenPrefix = () =>
+        {
+            CancelBackgroundChoice();
+            _addScreenArmed = true;
+            _addScreenDisplay = _displays.Select(_calibration.SelectedScreen?.DisplayName)?.DisplayName;
+            UpdateHotkeys(_options.ConfigurationMode);
+        };
+        _hotkeys.BeforeShortcut = () => { foreach (var window in _displays.Windows) window.SuspendModifierFraming(); };
         _hotkeys.EditScreenName = () =>
         {
             CancelBackgroundChoice(); _addScreenArmed = false;
@@ -226,17 +331,47 @@ internal sealed class ExperienceHost : IAsyncDisposable
             else _modeNotice.Display("Select a screen first   •   N: edit name");
         };
         _hotkeys.ToggleScreenTransparency = () => { CancelBackgroundChoice(); _tasks.Run(ToggleScreenTransparencyAsync, "Toggle screen chroma key"); };
-        _hotkeys.CreatePerspective = () => { CancelBackgroundChoice(); _addScreenArmed = false; _tasks.Run(CreatePerspectiveAsync, "Create screen perspective"); };
         _hotkeys.AdjustScreenBrightness = PressScreenBrightness;
+        _hotkeys.CopyScreen = () => PressScreenClipboard(false);
+        _hotkeys.PasteScreen = () => PressScreenClipboard(true);
+        _hotkeys.ZoomScreen = direction =>
+        {
+            if (_disposed || !_options.ConfigurationMode || _editingText) return;
+            CancelBackgroundChoice(); _addScreenArmed = false;
+            if (_calibration.SelectedScreen is ScreenSurface selected)
+            {
+                var window = _displays.Windows.FirstOrDefault(window => window.DisplayName == selected.DisplayName);
+                if (window is not null) _tasks.Run(async _ => { await window.FinishFramingAsync(); if (!_disposed && _calibration.SelectedScreen == selected) window.ZoomSelected(direction); }, "Keyboard media zoom");
+            }
+        };
+        _hotkeys.ResetVideo = () => _tasks.Run(ResetSelectedVideoAsync, "Reset selected video");
         _hotkeys.ChooseWhiteBackground = () => ApplyBackgroundChoice(_backgroundSelection.PressW());
-        _hotkeys.AddVideoScreen = () => { if (_addScreenArmed) { _addScreenArmed = false; _tasks.Run(token => CreateScreenAsync(token, "video"), "Create video screen"); } };
+        _hotkeys.AddVideoScreen = () => { if (_addScreenArmed) { _addScreenArmed = false; UpdateHotkeys(_options.ConfigurationMode); _tasks.Run(token => CreateScreenAsync(token, "video"), "Create video screen"); } };
         _hotkeys.ChoosePerspective = () => _tasks.Run(ChoosePerspectiveAsync, "Choose screen perspective");
-        _hotkeys.AddVisualizationScreen = () => { if (_addScreenArmed) { _addScreenArmed = false; _tasks.Run(token => CreateScreenAsync(token, "visualization"), "Create visualization screen"); } };
+        _hotkeys.AddVisualizationScreen = () => { if (_addScreenArmed) { _addScreenArmed = false; UpdateHotkeys(_options.ConfigurationMode); _tasks.Run(token => CreateScreenAsync(token, "visualization"), "Create visualization screen"); } };
         _hotkeys.AddMatScreen = PressMat;
-        _hotkeys.AddLedScreen = () => { if (_addScreenArmed) { _addScreenArmed = false; _tasks.Run(token => CreateScreenAsync(token, "fastled"), "Create LED screen"); } };
+        _hotkeys.AddLedScreen = () => { if (_addScreenArmed) { _addScreenArmed = false; UpdateHotkeys(_options.ConfigurationMode); _tasks.Run(token => CreateScreenAsync(token, "fastled"), "Create LED screen"); } };
         _displays.TextEditingChanged += editing => { if (_disposed) return; _editingText = editing; _addScreenArmed = false; CancelBackgroundChoice(); UpdateHotkeys(_options.ConfigurationMode); };
         _displays.RenameRequested += (surface, oldName, name) => _tasks.Run(token => RenameScreenAsync(surface, oldName, name, token), "Rename screen");
-        _displays.BrowseRenameRequested = (surface, oldName, name) => RenameScreenAsync(surface, oldName, name, _tasks.Token, browsing: true);
+        _displays.SelectMediaRequested = async (surface, screen, media) =>
+        {
+            try
+            {
+                await _configuration.Store.SelectMediaAsync(surface.DisplayName,screen,media);
+                await _configuration.ReloadAsync();
+                Telemetry.Info("ScreenMediaSelected",new { surface.DisplayName,ScreenId=screen.Id,ScreenName=screen.Name,MediaFile=media });
+                return true;
+            }
+            catch(Exception ex) { Telemetry.Error("ScreenMediaSelectionFailed",ex); if(!_disposed)_modeNotice.Display(ex.Message,true);return false; }
+        };
+        _displays.SaveFramingRequested = async (display, screen, framing, token) =>
+        {
+            await _configuration.Store.SaveVideoFramingAsync(display, screen, framing, token);
+            await _configuration.ReloadAsync();
+            if (_options.ScreensFor(display).FirstOrDefault(s => s.Id == screen.Id)?.Framing != framing)
+                throw new InvalidOperationException("Video framing was changed again remotely.");
+            Telemetry.Info("VideoFramingSaved", new { DisplayName = display, ScreenName = screen.Name, ScreenId = screen.Id, framing.Zoom, framing.CenterX, framing.CenterY, framing.RotationDegrees, Perspective = screen.Perspective?.Name });
+        };
         _audioPoll.Tick += (_, _) => _tasks.Run(PollAudioAsync, "Audio inventory");
         Telemetry.SetHealthProvider(() => _health);
     }
@@ -257,30 +392,40 @@ internal sealed class ExperienceHost : IAsyncDisposable
         _audioPoll.Start();
         _tasks.Run(PollAudioAsync, "Initial audio inventory");
     }
-    private void FocusExperience()
+    internal void FocusExperience()
     {
         if (_disposed) return;
         var window = _displays.Select(_calibration.SelectedScreen?.DisplayName);
-        window?.Activate(); window?.Focus();
+        window?.FocusConfiguration();
     }
     private async Task SetSharedConfigurationAsync(bool enabled, CancellationToken token)
     {
+        if (!enabled) foreach (var window in _displays.Windows) await window.FinishFramingAsync();
         await _configuration.Store.SetConfigurationModeAsync(enabled, token);
         await _configuration.ReloadAsync();
-        if (enabled && !PhotoBooth.Windows.ConfigurationShortcut.ControllerRunning) FocusExperience();
-        _modeNotice.Display(enabled ? "Configuration ON • Ctrl+Shift+Alt+C: exit • C: Controller • A: add • N: name" : "Configuration OFF");
+        if (enabled) FocusExperience();
+        _modeNotice.Display(enabled ? "Configuration ON • Ctrl+Shift+C: exit • C: Controller • A: add • N: name" : "Configuration OFF");
     }
     private void UpdateHotkeys(bool configurationMode)
     {
-        var unavailable = _hotkeys.Register(configurationMode, _editingText, _backgroundSelection.PendingDisplay is not null);
+        var menu = configurationMode && !_editingText ? ActiveSubmenu : ConfigurationSubmenu.None;
+        _displays.SetSubmenu(menu);
+        _modeNotice.SetMenu(menu == ConfigurationSubmenu.None ? null : ConfigurationSubmenuChoices.Text(menu),
+            menu == ConfigurationSubmenu.Background ? _backgroundSelection.PendingDisplay : menu == ConfigurationSubmenu.AddScreen ? _addScreenDisplay : null);
+        var unavailable = _hotkeys.Register(configurationMode, _editingText, menu);
         if (unavailable.Length > 0)
             _modeNotice.Display($"{string.Join(", ", unavailable)} unavailable — check the log", true);
+    }
+    private void CancelConfigurationSubmenu()
+    {
+        _addScreenArmed = false;
+        _backgroundSelection.Cancel();
+        UpdateHotkeys(_options.ConfigurationMode);
     }
     private void CancelBackgroundChoice()
     {
         if (_backgroundSelection.PendingDisplay is null) return;
         _backgroundSelection.Cancel();
-        _modeNotice.Hide();
         UpdateHotkeys(_options.ConfigurationMode);
     }
     private void PressBackgroundB()
@@ -293,7 +438,6 @@ internal sealed class ExperienceHost : IAsyncDisposable
         UpdateHotkeys(true);
         var target = _backgroundSelection.PendingDisplay!;
         Telemetry.Info("BackgroundColorChoiceOpened", new { DisplayName = target });
-        _modeNotice.Display($"{target}: B: black   W: white", persistent: true, display: target);
     }
     private void ApplyBackgroundChoice(BackgroundChange? change)
     {
@@ -340,7 +484,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
             return;
         if (_calibration.SelectedScreen is not ScreenSurface selected)
         {
-            _modeNotice.Display("Select a video screen first   •   T: chroma key");
+            _modeNotice.Display("Select a video screen first   •   K: chroma key");
             return;
         }
         _togglingTransparency = true;
@@ -350,7 +494,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
             if (_disposed) return;
             var name = _options.ScreensFor(selected.DisplayName).FirstOrDefault(s => s.Id == selected.ScreenId)?.Name;
             Telemetry.Info("ScreenTransparencyToggled", new { Shortcut = "T", selected.DisplayName, selected.ScreenId, ScreenName = name, BlackKeyEnabled = enabled });
-            _modeNotice.Display($"{name}: chroma key {(enabled ? "ON" : "OFF")}   •   T");
+            _modeNotice.Display($"{name}: chroma key {(enabled ? "ON" : "OFF")}   •   K");
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception) when (_disposed) { }
@@ -361,11 +505,42 @@ internal sealed class ExperienceHost : IAsyncDisposable
         }
         finally { _togglingTransparency = false; }
     }
-    private async Task CreatePerspectiveAsync(CancellationToken token)
+    private async Task ResetSelectedVideoAsync(CancellationToken token)
+    {
+        if (_disposed || !_options.ConfigurationMode || _editingText || _resettingVideo ||
+            ActiveSubmenu != ConfigurationSubmenu.None || _calibration.SelectedScreen is not ScreenSurface selected) return;
+        var window = _displays.Windows.FirstOrDefault(w => w.DisplayName == selected.DisplayName);
+        if (window is null || _options.ScreensFor(selected.DisplayName).FirstOrDefault(s => s.Id == selected.ScreenId)?.IsVideo != true) return;
+        _resettingVideo = true;
+        try
+        {
+            await window.FinishFramingAsync();
+            await _calibration.FinishAsync(selected);
+            await _configuration.ReloadAsync();
+            if (_disposed || !_options.ConfigurationMode || _calibration.SelectedScreen != selected) return;
+            var expected = _options.ScreensFor(selected.DisplayName).FirstOrDefault(s => s.Id == selected.ScreenId);
+            if (expected?.IsVideo != true) return;
+            await _configuration.Store.ResetVideoAsync(selected.DisplayName, expected, token);
+            await _configuration.ReloadAsync();
+            if (_disposed) return;
+            var applied = _options.ScreensFor(selected.DisplayName).FirstOrDefault(s => s.Id == selected.ScreenId);
+            if (applied is null || applied.Framing != new VideoFramingOptions() || applied.Brightness != 100 ||
+                applied.Perspective is not null || applied.BlackKey is not null)
+                throw new InvalidOperationException("Video settings changed again remotely while resetting.");
+            selected.FlashCalibrationPoints(15);
+            Telemetry.Info("VideoScreenReset", new { selected.DisplayName, selected.ScreenId, ScreenName = applied.Name,
+                applied.Framing, applied.Brightness, applied.Perspective, BlackKey = applied.EffectiveBlackKey(_options), Shortcut = "Ctrl+R" });
+            _modeNotice.Display($"{applied.Name}: video reset   •   Ctrl+R", display: selected.DisplayName);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex) { if (!_disposed) { Telemetry.Error("VideoScreenResetFailed", ex); _modeNotice.Display(ex.Message, true); } }
+        finally { _resettingVideo = false; }
+    }
+
+    private async Task CreatePerspectiveAsync(CancellationToken token, ScreenSurface selected)
     {
         if (_disposed || !_options.ConfigurationMode || _editingText || _creatingPerspective) return;
-        if (_calibration.SelectedScreen is not ScreenSurface selected || !_options.ScreensFor(selected.DisplayName).Any(s=>s.Id==selected.ScreenId && s.IsVideo))
-        { _modeNotice.Display("Select a video/image screen first • F: create perspective"); return; }
+        if (!_options.ScreensFor(selected.DisplayName).Any(s=>s.Id==selected.ScreenId && s.IsVideo)) return;
         _creatingPerspective=true;
         try
         {
@@ -383,7 +558,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
                 finally { _editingText=false;UpdateHotkeys(_options.ConfigurationMode); }
             }
             else controller=null;
-            if(controller is null)throw new InvalidOperationException(initial.Perspective is null ? "No Controller is available. Start a Controller and try F again." : "The Controller that owns this perspective is unavailable. Try again when it reconnects.");
+            if(controller is null)throw new InvalidOperationException(initial.Perspective is null ? "No Controller is available. Start a Controller and try P again." : "The Controller that owns this perspective is unavailable. Try again when it reconnects.");
             if(!_options.ConfigurationMode)return;
             var display=System.Windows.Forms.Screen.AllScreens.FirstOrDefault(d=>d.DeviceName==selected.DisplayName) ?? throw new InvalidOperationException("The selected display is unavailable.");
             await _calibration.FinishAsync(selected); await _configuration.ReloadAsync();
@@ -399,7 +574,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
             while((saved=_definitions.FindPerspective(controller.ControllerId,request.PerspectiveId)) is null)
             {
                 if(_disposed || !_options.ConfigurationMode)return;
-                if(Environment.TickCount64>=deadline)throw new TimeoutException("Controller save was not confirmed by its definitions. Check connectivity and try F again.");
+                if(Environment.TickCount64>=deadline)throw new TimeoutException("Controller save was not confirmed by its definitions. Check connectivity and try P again.");
                 await Task.Delay(100,token);
             }
             if(_disposed || !_options.ConfigurationMode)return;
@@ -408,7 +583,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
             await _configuration.Store.SetPerspectiveAsync(selected.DisplayName,selected.ScreenId,saved);
             await _configuration.ReloadAsync();
             Telemetry.Info("ScreenPerspectiveCreated",new { selected.DisplayName, selected.ScreenId, saved.ControllerId,saved.PerspectiveId,saved.Name,saved.Rectangle });
-            _modeNotice.Display($"{screen.Name}: {saved.Name} saved • F",display:selected.DisplayName);
+            _modeNotice.Display($"{screen.Name}: {saved.Name} saved • P",display:selected.DisplayName);
         }
         catch(OperationCanceledException) when(token.IsCancellationRequested) { }
         catch(Exception ex) { if(!_disposed){Telemetry.Error("ScreenPerspectiveCreationFailed",ex);_modeNotice.Display(ex.Message,true);} }
@@ -660,6 +835,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
         await _definitions.DisposeAsync();
         await _mediaDiscovery.DisposeAsync();
         await _screenMedia.DisposeAsync();
+        foreach (var window in _displays.Windows) await window.FinishFramingAsync();
         await _configuration.DisposeAsync();
         await _calibration.DisposeAsync();
         await _tasks.DisposeAsync();

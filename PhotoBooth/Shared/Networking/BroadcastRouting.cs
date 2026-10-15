@@ -18,6 +18,7 @@ internal static class BroadcastRouting
 
     public static BroadcastRoute[] Select(BroadcastOptions options, IReadOnlyList<BroadcastInterface> inventory)
     {
+        if (LocalTestNetwork.Address is { } local) return LocalTestNetwork.Routes(local);
         var destination = IPAddress.Parse(options.UdpBroadcastAddress);
         var explicitAddress = string.IsNullOrWhiteSpace(options.UdpInterfaceAddress) ? null : IPAddress.Parse(options.UdpInterfaceAddress);
         if (!destination.Equals(IPAddress.Broadcast))

@@ -73,8 +73,36 @@ internal static class BuildUpdateChecks
                 if (!File.Exists(marker) || !(await File.ReadAllTextAsync(marker)).Contains(source)) throw new Exception("DLL-only update did not request a restart with the correct source.");
                 await Task.Delay(2500);
                 if (File.ReadAllLines(marker).Length != 1) throw new Exception("Failed restart caused a rapid retry loop.");
+                var manualFailures = new List<string>();
+                monitor.ManualRestartFailed += reason => { lock(manualFailures) manualFailures.Add(reason); };
+                monitor.RequestRestart(); // Explicit restart must work without a binary change and during the automatic retry delay.
+                deadline.Restart();
+                while (File.ReadAllLines(marker).Length < 2 && deadline.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(50);
+                if(File.ReadAllLines(marker).Length != 2) throw new Exception("Manual restart was skipped because the build was unchanged or retry was cooling down.");
+                await Task.Delay(300);
+                lock(manualFailures) if(manualFailures.Count!=1) throw new Exception("Manual restart failure did not notify the application.");
+                await File.WriteAllTextAsync(dependency,"incomplete-sync");
+                monitor.RequestRestart(); await Task.Delay(1500);
+                lock(manualFailures) if(manualFailures.Count!=2) throw new Exception("Incomplete manual restart was not reported.");
+                if(File.ReadAllLines(marker).Length!=2) throw new Exception("Manual restart launched an incomplete package.");
             }
-            Console.WriteLine($"PASS: {application} complete package, partial sync, DLL-only update, settle delay, safe paths, quiet retry and monitor disposal.");
+            await File.WriteAllTextAsync(Path.Combine(source, "runtimes/win-x64/native/dependency.dll"), "version-two");
+            await File.WriteAllTextAsync(manifestPath, Manifest());
+            var pending = Path.Combine(runtime,"pending-restart.txt");
+            await File.WriteAllTextAsync(Path.Combine(runtime,restartName),
+                "param([string]$SourceDirectory, [switch]$AutomaticUpdate)\n" +
+                "[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'pending-restart.txt'),[string]$PID)\nStart-Sleep -Seconds 60\n");
+            await using (var monitor = new BuildUpdateMonitor(application,source,runtime))
+            {
+                monitor.RequestRestart();
+                var waiting=Stopwatch.StartNew();
+                while(!File.Exists(pending)&&waiting.Elapsed<TimeSpan.FromSeconds(5))await Task.Delay(50);
+                if(!File.Exists(pending))throw new Exception("Pending restart did not start.");
+                using var launcher=Process.GetProcessById(int.Parse(File.ReadAllText(pending)));
+                await monitor.StopAsync(cancelPendingRestart:true).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+                if(!launcher.HasExited)throw new Exception("Intentional shutdown left a pending restart launcher running.");
+            }
+            Console.WriteLine($"PASS: {application} complete package, partial sync, DLL-only update, settle delay, safe paths, quiet retry, restart cancellation and monitor disposal.");
         }
         finally { Directory.Delete(directory, true); }
     }

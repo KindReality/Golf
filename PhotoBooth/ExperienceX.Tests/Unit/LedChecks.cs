@@ -77,8 +77,9 @@ internal static class LedChecks
         PointOptions Quad(double left,double right)=>new(){Enabled=true,TopLeft=new(left,.1),TopRight=new(right,.1),BottomLeft=new(left,.4),BottomRight=new(right,.4)};
         var snapping=new PointSnapping(new(){[matrixSurface]=Quad(.1,.4),[videoSurface]=Quad(.5,.8)},new(){[matrixSurface]=false,[videoSurface]=false},(a,b)=>a==b || a.Surface!=b.Surface,new(){[matrixSurface]=true,[videoSurface]=false});
         var selected=new PointHandle(matrixSurface,1);snapping.Select(selected);
-        Check(snapping.Move(selected,.49,.1,5,0,0) is not null,"Matrix corner snaps to another screen's point");
-        snapping.Move(selected,.55,.16,5,0,0);
+        snapping.Move(selected,.49,.1);
+        Check(snapping.Join(selected,5,0,0) is not null,"J joins a matrix corner to another screen's point");
+        snapping.Move(selected,.55,.16);
         Check(snapping.Drafts[matrixSurface].TopRight==snapping.Drafts[videoSurface].TopLeft && Perpendicular(snapping.Drafts[matrixSurface],1920,1080),"Shared matrix/video points move together while the matrix stays rectangular");
         Reject(()=>LedGeometry.Validate(line with{Vertices=[new(.5,.5),new(.5,.5)]},true));
         var folder=Path.Combine(Path.GetTempPath(),"LedChecks-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);

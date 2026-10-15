@@ -23,10 +23,10 @@ internal static class ScreenMediaBindingChecks
             var original = catalog.Match(screen)!;
             Check(original.Path == eye && !original.IsImage, "Video basename matching must be case insensitive.");
             Check(catalog.Match(screen with { Name = "Eye.mp4" }) == original, "Explicit filenames must select the same video.");
-            Check(catalog.Match(screen with { Name = "Eye-2", MediaFile = "Eye.mp4" }) == original && catalog.BrowseName(screen with { Name = "Eye-2", MediaFile = "Eye.mp4" }) == "Eye", "An independently named duplicate must bind and browse the same video.");
+            Check(catalog.Match(screen with { Name = "Eye-2", MediaFile = "Eye.mp4" }) == original && catalog.Match(screen with { Name = "Eye-2", MediaFile = "Eye.mp4" })?.RelativePath == "Eye.mp4", "An independently named duplicate must bind and browse the same video.");
             Check(catalog.Match(screen with { Name = "Ghost.v1" }) is not null, "Dots within a basename must be retained.");
-            Check(catalog.Match(screen with { Name = "Sound" }) is null && catalog.Match(screen with { Name = "Nested" }) is null,
-                "Audio, downloads and nested files must not bind video screens.");
+            Check(catalog.Match(screen with { Name = "Sound" }) is null && catalog.Match(screen with { Name = "Nested" })?.RelativePath == "Other/Nested.mp4",
+                "Audio/downloads must not bind video screens; nested video files must be available.");
             Check(catalog.Match(screen with { Type = "mat" }) is null, "Mat screens must never start media.");
             Check(catalog.Match(screen with { Name = "Ordinary" }) is null, "Renaming away from a media file must unlock playback.");
 

@@ -45,7 +45,8 @@ internal sealed class ExperienceAnnouncements(Func<ExperienceOptions> options) :
     private static string[] Files(string directory, HashSet<string> extensions)
     {
         var path = MediaPath.ResolveDirectory(directory);
-        return Directory.Exists(path) ? Directory.EnumerateFiles(path).Where(p => extensions.Contains(Path.GetExtension(p))).Select(p => Path.GetFileName(p)).Order(StringComparer.OrdinalIgnoreCase).ToArray() : [];
+        return PhotoBooth.Media.MediaLibrary.Read(path).Where(entry => !entry.IsFolder && extensions.Contains(Path.GetExtension(entry.RelativePath)))
+            .Select(entry => entry.RelativePath).Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
     public void Start() { if (_started) return; _started = true; _loop = RunAsync(); }
     public void RequestAnnouncement() { if (_signal.CurrentCount == 0) try { _signal.Release(); } catch (SemaphoreFullException) { } }

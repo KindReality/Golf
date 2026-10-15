@@ -24,7 +24,8 @@ internal static class Program
     {
         try
         {
-            if(args.SequenceEqual(["--perspective-create"])) PerspectiveCreationChecks.Run().GetAwaiter().GetResult();
+            if(args.SequenceEqual(["--experience-process"])) ExperienceProcessChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--perspective-create"])) PerspectiveCreationChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--roles"])) RolePlaylistChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--perspective-shortcuts"])) PerspectiveShortcutChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--live"])) LiveChecks.Run().GetAwaiter().GetResult();
@@ -439,7 +440,7 @@ internal static class Program
     {
         System.Windows.Forms.Application.EnableVisualStyles(); System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
         var directory = Path.Combine(Path.GetTempPath(), "Controller.Window-" + Guid.NewGuid().ToString("N"));
-        var settings = Options(Board("demo", Item("first"), Item("last", 3000))) with { Scenes = [new() { Name = "idle", AmbientPlaylist = "idle-ambient" }, new() { Name = "second", AmbientPlaylist = "idle-ambient" }] };
+        var settings = Options(Board("demo", Item("first"), Item("last", 3000))) with { ExperienceSupervisionEnabled = false, Scenes = [new() { Name = "idle", AmbientPlaylist = "idle-ambient" }, new() { Name = "second", AmbientPlaylist = "idle-ambient" }] };
         var path = TestConfiguration(directory, settings); Exception? failure = null;
         using var window = new ControlWindow(path);
         IEnumerable<Control> Descendants(Control control) => control.Controls.Cast<Control>().SelectMany(c => new[] { c }.Concat(Descendants(c)));
@@ -449,12 +450,21 @@ internal static class Program
             {
                 var controls = Descendants(window).ToArray(); var run = controls.OfType<Button>().Single(b => b.Text == "Run playlist"); var cancel = controls.OfType<Button>().Single(b => b.Text == "Cancel selected"); var activate = controls.OfType<Button>().Single(b => b.Text == "Activate scene");
                 await UntilAsync(() => run.Enabled && activate.Enabled); Check(window.Visible && controls.OfType<Label>().Any(l => l.Text.Contains("Development")), "Monitoring window shows identity and environment");
+                var restart = controls.OfType<Button>().Single(b => b.Text == "Restart"); var shutdown = controls.OfType<Button>().Single(b => b.Text == "Shutdown");
+                Check(restart.Parent == shutdown.Parent && shutdown.Left > restart.Left && shutdown.Top == restart.Top, "Restart and Shutdown are adjacent horizontal controls");
+                window.Close();
+                Check(!window.Visible && !window.IsDisposed, "Window close hides to the notification area without stopping Controller");
+                window.RestoreFromNotification();
+                Check(window.Visible && window.ShowInTaskbar && window.Bounds == Screen.PrimaryScreen!.WorkingArea && window.WindowState == FormWindowState.Normal, "Notification restore shows the normal window on the primary display");
                 Check(window.WindowState == FormWindowState.Normal && window.Opacity == 1 && window.Bounds == Screen.PrimaryScreen!.WorkingArea, "Controller starts at the primary display's full working area without maximizing");
                 if (Screen.AllScreens.FirstOrDefault(display => !display.Primary) is { } secondary)
                 {
                     ConfigurationDefaults.Write(path, JsonSerializer.Serialize(settings with { DefaultDisplayName = "Presentation", DisplayAliases = new() { ["Presentation"] = secondary.DeviceName } }, ControllerOptions.Json));
                     await UntilAsync(() => window.Bounds == secondary.WorkingArea);
                     Check(window.WindowState == FormWindowState.Normal, "Live Controller display alias edits reposition the normal window");
+                    window.Close(); window.RestoreFromNotification();
+                    await Task.Delay(1250);
+                    Check(window.Bounds == Screen.PrimaryScreen!.WorkingArea, $"Notification restore remains on primary even when configuration selects another display (actual {window.Bounds}, expected {Screen.PrimaryScreen.WorkingArea})");
                     ConfigurationDefaults.Write(path, JsonSerializer.Serialize(settings, ControllerOptions.Json));
                     await UntilAsync(() => window.Bounds == Screen.PrimaryScreen!.WorkingArea);
                     Check(true, "Clearing Controller display selection returns the window to the primary display");
@@ -464,7 +474,7 @@ internal static class Program
                 if (Environment.GetEnvironmentVariable("CONTROLLER_WINDOW_SNAPSHOT") is { Length: > 0 } snapshot) { using var bitmap = new Bitmap(window.Width, window.Height); window.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(snapshot); }
             }
             catch (Exception ex) { failure = ex; }
-            finally { window.Close(); }
+            finally { window.ExitController(); }
         };
         System.Windows.Forms.Application.Run(window); Telemetry.Stop(); Directory.Delete(directory, true); if (failure is not null) throw failure;
     }

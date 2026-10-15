@@ -35,6 +35,12 @@ internal static class LiveChecks
         var renamed = inventory with { Screens = [inventory.Screens[0] with { Name = "renamed" }] };
         Check(BroadcastEnvelope.Parse(LivePlayback.Build(options, [new(renamed, true, false)], [screen], "Eye.mp4", 100, true).Commands.Single()).Body.GetProperty("screen").GetString()!.EndsWith("/renamed"), "Stable IDs follow the current screen name");
         var audio = LivePlayback.Build(options, peers, [screen, speaker], "Bell.wav", 35, true);
+        var categorized=inventory with{VideoFiles=["Ghosts/Eye.mp4","Witches/Eye.mp4"],AudioFiles=["Ghosts/Bell.wav"]};
+        categorized.Validate();
+        var nestedVideo=LivePlayback.Build(options,[new(categorized,true,false)],[screen],"Witches/Eye.mp4",100,true);
+        Check(BroadcastEnvelope.Parse(nestedVideo.Commands.Single()).Body.GetProperty("value").GetString()=="Witches/Eye.mp4","Live playback retains category paths when filenames repeat");
+        var nestedAudio=LivePlayback.BuildRoles(options,[new(categorized,true,false)],["subwoofer"],"Ghosts/Bell.wav",35,true);
+        Check(BroadcastEnvelope.Parse(nestedAudio.Commands.Single()).Body.GetProperty("value").GetString()=="Ghosts/Bell.wav","Live role audio retains its category path");
         message = BroadcastEnvelope.Parse(audio.Commands.Single());
         Check(message.Body.GetProperty("audioDevices")[0].GetString() == "Left" && message.Body.GetProperty("volume").GetInt32() == 35, "Audio routes independently with requested volume");
         message = BroadcastEnvelope.Parse(LivePlayback.Build(options, peers, [speaker, new(inventory.Hostname, "speaker-b"), speaker], "Bell.wav", 100, true).Commands.Single());

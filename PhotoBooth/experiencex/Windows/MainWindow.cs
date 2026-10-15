@@ -9,6 +9,27 @@ namespace ExperienceX;
 public sealed class MainWindow : Forms.Form, IPointSurface
 {
     private readonly string _display;
+    private ConfigurationSubmenu _submenu;
+    internal ConfigurationSubmenu Submenu => _submenu;
+    internal event Action? CancelSubmenuRequested;
+    internal void SetSubmenu(ConfigurationSubmenu menu)
+    {
+        if (_submenu == menu) return;
+        _submenu = menu;
+        if (menu != ConfigurationSubmenu.None)
+        {
+            _modifierFraming.Suspend();
+            if (_mouseHeld)
+            {
+                if (_framing.Dragging) _framing.EndDrag();
+                var dragged = _dragScreen;
+                ReleaseCalibrationCapture();
+                if (dragged is not null) _calibration?.RequestFinish(dragged);
+            }
+        }
+        _renderer?.SuppressHelp(menu != ConfigurationSubmenu.None);
+        _ledTools?.Renderer.SuppressHelp(menu != ConfigurationSubmenu.None);
+    }
     // Form's base constructor calls CreateParams before this constructor assigns the supplied options.
     private ExperienceOptions _options = new();
     private VideoRenderer? _renderer;
@@ -45,6 +66,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             _ledTools=new(this,_options);
         }
         _ledTools?.Update(this,_options);
+        _ledTools?.Renderer.SuppressHelp(_submenu != ConfigurationSubmenu.None);
         _renderer?.ShowTools(!needed);
     }
     private ScreenMediaCatalog _mediaCatalog = ScreenMediaCatalog.Empty;
@@ -52,6 +74,11 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     private bool _available;
     private PointCalibration? _calibration;
     private bool _mouseHeld;
+    private bool _pointerShift;
+    private bool _pointerControl;
+    private bool PanModifier => _pointerShift || (ModifierKeys & Forms.Keys.Shift) != 0;
+    private bool ZoomModifier => _pointerControl || (ModifierKeys & Forms.Keys.Control) != 0;
+    private bool RotateModifier => (ModifierKeys & Forms.Keys.Alt) != 0;
     private ScreenSurface? _dragScreen;
     private ScreenSurface? _pendingNameEdit;
     private System.Drawing.Point _mouseDownPosition;
@@ -62,12 +89,12 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     private ScreenNameEditor? _nameEditor;
     private ScreenSurface? _editingScreen;
     private string? _originalName;
-    private string? _pendingBrowseName;
-    private readonly Queue<(ScreenSurface Surface, ScreenNameEditor? Editor, int Direction)> _nameDirections = new();
-    private bool _browsingName, _finishAfterBrowse;
+    private readonly Dictionary<string, ScreenMediaBrowser> _mediaBrowsers = new();
+    private readonly Queue<(ScreenSurface Surface, Forms.Keys Key)> _mediaKeys = new();
+    private bool _browsingMedia;
     internal event Action<bool>? TextEditingChanged;
     internal event Action<ScreenSurface, string, string>? RenameRequested;
-    internal Func<ScreenSurface, string, string, Task<bool>>? BrowseRenameRequested;
+    internal Func<ScreenSurface, ScreenOptions, string, Task<bool>>? SelectMediaRequested;
     internal VideoRenderer? Renderer => _renderer;
     internal ScreenOptions? ScreenDefinition(string id) => _options.ScreensFor(_display).FirstOrDefault(s => s.Id == id);
     internal IEnumerable<ScreenSurface> Surfaces => _options.ScreensFor(_display).Select(s => Surface(s.Id));
@@ -82,12 +109,28 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     private bool _recovering, _waitingForRenderer, _closing;
     private readonly Action? _beforePresent;
     private readonly AsyncTaskScope _tasks = new("Display window");
+    private readonly VideoFramingEditor _framing;
+    private readonly ModifierFramingGesture _modifierFraming;
+    private readonly Forms.Timer _modifierPoll = new() { Interval = 25 };
+    private readonly byte[] _keyboard = new byte[256];
+    internal Func<ModifierFramingInput>? ModifierInputForTest = null;
+    internal bool ModifierFramingActive => _modifierFraming.Active;
+    internal Func<ScreenOptions, VideoFramingOptions, CancellationToken, Task>? SaveFramingRequested;
+    internal VideoFramingEditor FramingEditor => _framing;
+    internal Task FinishFramingAsync() { _modifierFraming.Suspend(); return _framing.FinishAsync(); }
+    internal void SuspendModifierFraming() => _modifierFraming.Suspend();
     internal void AttachCalibration(PointCalibration calibration) => _calibration = calibration;
     internal string DisplayName => _display;
+    internal void FocusConfiguration()
+    {
+        if (_closing || !_options.ConfigurationMode || !Visible) return;
+        Activate(); Focus(); _guard?.EnsureTopmost("ConfigurationFocus", true);
+    }
     string IPointSurface.DisplayName => _display;
     int IPointSurface.PixelWidth => ClientSize.Width;
     int IPointSurface.PixelHeight => ClientSize.Height;
     void IPointSurface.ShowCalibration(int point) => ShowCalibration(point);
+    void IPointSurface.ShowJoinTarget(int point) => _renderer?.ShowJoinTarget(point);
     void IPointSurface.FadeCalibration() => FadeCalibration();
     void IPointSurface.FlashCalibration(int point, bool success) => FlashCalibration(point, success);
     void IPointSurface.FlashCalibrationPoints(int pointMask)
@@ -117,6 +160,16 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _beforePresent = beforePresent;
         _display = display;
         _options = options;
+        _framing = new((id, view) => _renderer?.PreviewFraming(id, view),
+            (screen, view, token) => SaveFramingRequested?.Invoke(screen, view, token) ?? Task.FromException(new InvalidOperationException("Video framing persistence is unavailable.")),
+            (id, success) => _renderer?.FlashCalibrationPoints(15, success, id),
+            screen => VideoFramingOptions.ScreenAspect(screen.Points, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height)));
+        _modifierFraming = new(_framing, () =>
+        {
+            var selected = _calibration?.SelectedScreen;
+            if (selected is not null) _calibration?.SelectScreen(selected);
+        });
+        _modifierPoll.Tick += (_, _) => PollModifierFraming();
         Text = "ExperienceX — " + display;
         FormBorderStyle = options.DeveloperMode ? Forms.FormBorderStyle.Sizable : Forms.FormBorderStyle.None;
         ShowInTaskbar = options.DeveloperMode;
@@ -133,6 +186,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         if (_available)
             ShowSurface();
         RefreshLedTools();
+        if (_options.ConfigurationMode) _modifierPoll.Start();
     }
     public void RefreshDisplay()
     {
@@ -143,6 +197,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         {
             if (_available)
             {
+                _framing.Cancel("DisplayUnavailable");
                 _calibration?.Cancel("DisplayUnavailable");
                 Hide();
                 _renderer?.SetDisplayAvailable(false);
@@ -185,12 +240,18 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             ShowSurface();
         RefreshLedTools();
     }
-    private VideoRenderer CreateRenderer(Dispatcher dispatcher) => new(Handle, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height), _options, _display,
-        () => { if (!_closing && !dispatcher.HasShutdownStarted) dispatcher.BeginInvoke(new Action(() => { if (!_closing) Hide(); })); }, _beforePresent, _mediaCatalog);
+    private VideoRenderer CreateRenderer(Dispatcher dispatcher)
+    {
+        var renderer = new VideoRenderer(Handle, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height), _options, _display,
+            () => { if (!_closing && !dispatcher.HasShutdownStarted) dispatcher.BeginInvoke(new Action(() => { if (!_closing) Hide(); })); }, _beforePresent, _mediaCatalog);
+        renderer.SuppressHelp(_submenu != ConfigurationSubmenu.None);
+        return renderer;
+    }
     internal void UpdateMediaCatalog(ScreenMediaCatalog catalog)
     {
         _mediaCatalog = catalog;
         _renderer?.UpdateMediaCatalog(catalog);
+        RefreshMediaLabels();
     }
     private async Task RecoverRendererAsync()
     {
@@ -229,11 +290,16 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     public void UpdateOptions(ExperienceOptions options)
     {
         var changed = _options.ConfigurationMode != options.ConfigurationMode;
+        var wasDragging = _framing.Dragging;
+        _framing.Configure(options, _display);
+        if (wasDragging && !_framing.Dragging) ReleaseCalibrationCapture();
         _options = options;
+        if (options.ConfigurationMode) _modifierPoll.Start();
+        else { _modifierPoll.Stop(); _modifierFraming.Cancel("ConfigurationModeDisabled"); }
         foreach (var id in _surfaces.Keys.Where(id => ScreenDefinition(id) is null).ToArray())
             _surfaces.Remove(id);
         if (_editingScreen is not null && (!options.ConfigurationMode ||
-            (ScreenDefinition(_editingScreen.ScreenId)?.Name != _originalName && ScreenDefinition(_editingScreen.ScreenId)?.Name != _pendingBrowseName)))
+            (ScreenDefinition(_editingScreen.ScreenId)?.Name != _originalName)))
             FinishNameEdit(false);
         _renderer?.Configure(options);
         if (changed && IsHandleCreated)
@@ -245,6 +311,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         }
         RefreshDisplay();
         RefreshLedTools();
+        RefreshMediaLabels();
         LedGeometryChanged?.Invoke();
     }
     internal void ShowCalibration(int point)
@@ -257,6 +324,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     internal void PreviewPoints(PointOptions? value) => _renderer?.PreviewPoints(value);
     internal void ReleaseCalibrationCapture()
     {
+        if (_framing.Dragging) _framing.Cancel("CaptureReleased");
         _mouseHeld = false;
         _dragScreen = null;
         _pendingNameEdit = null;
@@ -265,20 +333,30 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     protected override void OnMouseDown(Forms.MouseEventArgs e)
     {
         base.OnMouseDown(e);
-        if (!_options.ConfigurationMode || e.Button != Forms.MouseButtons.Left)
+        if (_submenu != ConfigurationSubmenu.None || !_options.ConfigurationMode || e.Button != Forms.MouseButtons.Left)
             return;
+        _modifierFraming.Suspend();
         Activate();
         Focus();
         if (_nameEditor is not null)
         {
+            var continueGesture = (ZoomModifier || PanModifier || RotateModifier) && _nameEditor.Text == _originalName && !_browsingMedia;
             FinishNameEdit(false);
-            return;
+            if (!continueGesture) return;
         }
         var selected = _calibration?.SelectedScreen as ScreenSurface;
         _mouseDownPosition = e.Location;
         var x = (double)e.X / Math.Max(1, ClientSize.Width - 1);
         var y = (double)e.Y / Math.Max(1, ClientSize.Height - 1);
         var screens = _options.ScreensFor(_display);
+        if ((ZoomModifier || PanModifier || RotateModifier) && selected?.DisplayName == _display &&
+            ScreenDefinition(selected.ScreenId) is { IsVideo: true } selectedVideo && ScreenSelection.Contains(selectedVideo.Points, x, y))
+        {
+            BeginSurfaceDrag(selected, x, y);
+            return;
+        }
+        _framing.Flush();
+        if (_framing.Busy) return;
         if (selected?.DisplayName == _display && ScreenDefinition(selected.ScreenId) is { IsLed: true, IsLedArray: false } matrix)
         {
             var handle=LedGeometry.RotationHandle(matrix.Points,ClientSize.Width,ClientSize.Height);
@@ -326,9 +404,9 @@ public sealed class MainWindow : Forms.Form, IPointSurface
                     BeginNameEdit(selected);
                     return;
                 }
-                _mouseHeld = _calibration?.BeginScreenDrag(selected, x, y) == true;
+                _mouseHeld = BeginSurfaceDrag(selected, x, y);
                 _dragScreen = _mouseHeld ? selected : null;
-                _pendingNameEdit = _mouseHeld ? selected : null;
+                _pendingNameEdit = _mouseHeld && !_framing.Dragging ? selected : null;
                 Capture = _mouseHeld;
                 return;
             }
@@ -338,23 +416,69 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             else
             {
                 var dragging = Surface(screens[chosen].Id);
-                _mouseHeld = _calibration?.BeginScreenDrag(dragging, x, y) == true;
+                _mouseHeld = BeginSurfaceDrag(dragging, x, y);
                 _dragScreen = _mouseHeld ? dragging : null;
                 Capture = _mouseHeld;
             }
         }
     }
+    private bool BeginSurfaceDrag(ScreenSurface screen, double x, double y)
+    {
+        if ((ZoomModifier || PanModifier || RotateModifier) && ScreenDefinition(screen.ScreenId) is { IsVideo: true } video)
+        {
+            if (_calibration?.Busy == true) return false;
+            _calibration?.SelectScreen(screen);
+            var width = Math.Max(1, ClientSize.Width - 1) * 96.0 / DeviceDpi;
+            var height = Math.Max(1, ClientSize.Height - 1) * 96.0 / DeviceDpi;
+            var dragging = ZoomModifier ? _framing.BeginZoom(video, x, y, width, height)
+                : RotateModifier ? _framing.BeginRotate(video, x, y, width, height) : _framing.BeginPan(video, x, y);
+            Capture = dragging;
+            return dragging;
+        }
+        return _calibration?.BeginScreenDrag(screen, x, y) == true;
+    }
+    protected override void OnMouseWheel(Forms.MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        if (_submenu != ConfigurationSubmenu.None || _closing || !_options.ConfigurationMode || _mouseHeld || _framing.Dragging || _calibration?.Busy == true ||
+            _calibration?.SelectedScreen is not ScreenSurface selected || selected.DisplayName != _display ||
+            ScreenDefinition(selected.ScreenId) is not { IsVideo: true } video) return;
+        if (_nameEditor is not null)
+        {
+            if (_nameEditor.Text != _originalName || _browsingMedia) return;
+            FinishNameEdit(false); // A center-label click followed by scrolling means zoom, not rename.
+        }
+        var x = (double)e.X / Math.Max(1, ClientSize.Width - 1);
+        var y = (double)e.Y / Math.Max(1, ClientSize.Height - 1);
+        if (!ScreenSelection.Contains(video.Points, x, y)) return;
+        _calibration.SelectScreen(selected);
+        _framing.Wheel(video, x, y, e.Delta);
+    }
+    internal void ZoomSelected(int direction)
+    {
+        _modifierFraming.Suspend();
+        if (_submenu != ConfigurationSubmenu.None || _closing || !_options.ConfigurationMode || _nameEditor is not null || _mouseHeld || _framing.Dragging || _calibration?.Busy == true ||
+            _calibration?.SelectedScreen is not ScreenSurface selected || selected.DisplayName != _display ||
+            ScreenDefinition(selected.ScreenId) is not { IsVideo: true } video) return;
+        var position = PointToClient(Forms.Cursor.Position);
+        var x = (double)position.X / Math.Max(1, ClientSize.Width - 1);
+        var y = (double)position.Y / Math.Max(1, ClientSize.Height - 1);
+        var anchor = ScreenSelection.Contains(video.Points, x, y) && VideoFramingOptions.TryPointer(video.Points, x, y, out var pointer)
+            ? new ScreenPoint(Math.Clamp(pointer.X, 0, 1), Math.Clamp(pointer.Y, 0, 1)) : new ScreenPoint(.5, .5);
+        _calibration.SelectScreen(selected);
+        _framing.KeyboardZoom(video, anchor, direction);
+    }
     protected override void OnMouseDoubleClick(Forms.MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
-        if (!_options.ConfigurationMode || e.Button != Forms.MouseButtons.Left || _nameEditor is not null) return;
+        if (_submenu != ConfigurationSubmenu.None || !_options.ConfigurationMode || e.Button != Forms.MouseButtons.Left || _nameEditor is not null) return;
         var x = (double)e.X / Math.Max(1, ClientSize.Width - 1);
         var y = (double)e.Y / Math.Max(1, ClientSize.Height - 1);
         // Edge insertion has a small pixel tolerance independent of the larger point grab area.
         var selected = _calibration?.SelectedScreen;
         var candidates = ScreenSelection.EditablePoints(_options.ScreensFor(_display), selected?.DisplayName == _display ? selected.ScreenId : null).Select((screen, index) => (screen, index,
             edge: PolygonGeometry.ClosestEdge(screen.Points, x, y, ClientSize.Width, ClientSize.Height)))
-            .Where(item => item.screen.IsPolygon && item.edge.Distance <= 8 &&
+            .Where(item => item.screen.SupportsPointInsertion && item.edge.Distance <= 8 &&
                 !PointEditing.Points(item.screen.Points).Any(p => Math.Sqrt(Math.Pow((p.X - item.edge.Point.X) * (ClientSize.Width - 1), 2) +
                     Math.Pow((p.Y - item.edge.Point.Y) * (ClientSize.Height - 1), 2)) < 2)).ToArray();
         var chosen = _edgeCycle.Pick(candidates.Select(item => item.index).ToArray());
@@ -373,6 +497,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     }
     private void BeginNameEdit(ScreenSurface surface)
     {
+        _modifierFraming.Suspend();
         if (_nameEditor is not null) FinishNameEdit(false);
         _calibration?.Cancel("ScreenNameEdit");
         _editingScreen = surface;
@@ -380,9 +505,14 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         TextEditingChanged?.Invoke(true);
         var k = ScreenDefinition(surface.ScreenId)!.Points;
         var bounds = ScreenNameLabel.Bounds(surface.ScreenName, k, ClientSize.Width, ClientSize.Height);
-        _nameDirections.Clear();
-        _finishAfterBrowse = false;
-        _nameEditor = new(FinishNameEdit, ScreenDefinition(surface.ScreenId)!.IsVideo ? BrowseMediaName : null)
+        _mediaKeys.Clear();
+        _nameEditor = new(FinishNameEdit,
+            ScreenDefinition(surface.ScreenId)!.IsVideo ? e =>
+        {
+            if (_nameEditor is not { } editor) return;
+            var position = PointToClient(editor.PointToScreen(e.Location));
+            OnMouseWheel(new(e.Button, e.Clicks, position.X, position.Y, e.Delta));
+        } : null)
         {
             Text = surface.ScreenName,
             MaxLength = 80,
@@ -397,61 +527,54 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _nameEditor.Focus();
         _nameEditor.SelectAll();
     }
-    private void BrowseMediaName(int direction)
+    internal string? BrowserLabel(string id) => _mediaBrowsers.TryGetValue(id,out var browser) ? browser.Label : null;
+    private ScreenMediaBrowser Browser(ScreenOptions screen)
     {
-        var surface = _editingScreen ?? _calibration?.SelectedScreen as ScreenSurface;
-        if (!_options.ConfigurationMode || surface is null || surface.DisplayName != _display ||
-            ScreenDefinition(surface.ScreenId)?.IsVideo != true || BrowseRenameRequested is null || _nameDirections.Count >= 32) return;
-        _nameDirections.Enqueue((surface, _nameEditor, direction));
-        if (!_browsingName) _tasks.Run(BrowseMediaNamesAsync, "Browse screen media names");
+        if (!_mediaBrowsers.TryGetValue(screen.Id,out var browser)) _mediaBrowsers[screen.Id]=browser=new();
+        return browser;
     }
-    private async Task BrowseMediaNamesAsync(CancellationToken token)
+    private void RefreshMediaLabels()
     {
-        _browsingName = true;
+        foreach(var screen in _options.ScreensFor(_display).Where(s=>s.IsVideo))
+        {
+            var browser=Browser(screen);
+            if (!_browsingMedia) browser.Reconcile(_mediaCatalog,screen);
+            var caption=_options.ConfigurationMode && browser.Active ? browser.Label : null;
+            _renderer?.SetMediaCaption(screen.Id,caption);
+            _ledTools?.Renderer.SetMediaCaption(screen.Id,caption);
+        }
+        foreach(var id in _mediaBrowsers.Keys.Where(id=>ScreenDefinition(id) is null).ToArray()) _mediaBrowsers.Remove(id);
+    }
+    private void BrowseMedia(Forms.Keys key)
+    {
+        if (_nameEditor is not null || _calibration?.SelectedScreen is not ScreenSurface surface || surface.DisplayName!=_display ||
+            ScreenDefinition(surface.ScreenId)?.IsVideo!=true || SelectMediaRequested is null || _mediaKeys.Count>=32) return;
+        _mediaKeys.Enqueue((surface,key));
+        if (!_browsingMedia) _tasks.Run(BrowseMediaAsync,"Browse media folders");
+    }
+    private async Task BrowseMediaAsync(CancellationToken token)
+    {
+        _browsingMedia=true;
         try
         {
-            while (_nameDirections.TryDequeue(out var change))
+            while(_mediaKeys.TryDequeue(out var change))
             {
                 token.ThrowIfCancellationRequested();
-                var (surface, editor, direction) = change;
-                // Discard queued keys if selection, editing context or configuration mode changed.
-                if (!_options.ConfigurationMode || !ReferenceEquals(editor, _nameEditor) ||
-                    (editor is not null ? _editingScreen != surface :
-                        _calibration?.SelectedScreen != surface || _calibration.HasSelectedPoint(surface))) continue;
-                var definition = ScreenDefinition(surface.ScreenId);
-                if (definition is null || !definition.IsVideo) continue;
-                var names = _mediaCatalog.Names();
-                var defaultName = ScreenOptions.DefaultFor(definition, _options.ScreensFor(_display));
-                var next = ScreenMediaNameCycle.Next(defaultName, _mediaCatalog.BrowseName(definition) ?? definition.Name, names, direction);
-                if (next == (_mediaCatalog.BrowseName(definition) ?? definition.Name)) continue;
-                if (editor is not null) { _pendingBrowseName = ScreenOptions.AvailableMediaName(next, _options.ScreensFor(_display).Where(s => s.Id != definition.Id)); editor.ReadOnly = true; }
-                var renamed = await BrowseRenameRequested!(surface, definition.Name, next);
-                if (editor is not null && ReferenceEquals(editor, _nameEditor))
-                {
-                    _pendingBrowseName = null;
-                    _originalName = ScreenDefinition(surface.ScreenId)?.Name ?? definition.Name;
-                    editor.Text = _originalName;
-                    editor.SelectAll();
-                    editor.ReadOnly = false;
-                }
-                if (!renamed) { _nameDirections.Clear(); break; }
+                if (!_options.ConfigurationMode || _nameEditor is not null || _calibration?.SelectedScreen!=change.Surface ||
+                    _calibration.HasSelectedPoint(change.Surface) || ScreenDefinition(change.Surface.ScreenId) is not {IsVideo:true} screen) continue;
+                var browser=Browser(screen);
+                var media=browser.Navigate(_mediaCatalog,screen,change.Key);
+                RefreshMediaLabels();
+                if (media is not null && !await SelectMediaRequested!(change.Surface,screen,media)) { _mediaKeys.Clear(); break; }
             }
         }
-        finally
-        {
-            _browsingName = false;
-            _pendingBrowseName = null;
-            if (_nameEditor is not null) _nameEditor.ReadOnly = false;
-            if (_finishAfterBrowse) { _finishAfterBrowse = false; FinishNameEdit(true); }
-        }
+        finally { _browsingMedia=false; RefreshMediaLabels(); }
     }
     private void FinishNameEdit(bool commit)
     {
         if (_nameEditor is null || _editingScreen is null)
             return;
-        if (commit && _browsingName) { _finishAfterBrowse = true; return; }
-        _nameDirections.Clear();
-        _finishAfterBrowse = false;
+        _mediaKeys.Clear();
         var surface = _editingScreen;
         var oldName = _originalName!;
         var name = _nameEditor.Text.Trim();
@@ -469,6 +592,13 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     protected override void OnMouseMove(Forms.MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        if (_submenu != ConfigurationSubmenu.None) return;
+        if (_modifierFraming.Active) { PollModifierFraming(); return; }
+        if (_framing.Dragging)
+        {
+            _framing.MoveDrag((double)e.X / Math.Max(1, ClientSize.Width - 1), (double)e.Y / Math.Max(1, ClientSize.Height - 1));
+            return;
+        }
         if (_pendingNameEdit is not null)
         {
             var threshold = Forms.SystemInformation.DragSize;
@@ -483,6 +613,13 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     protected override void OnMouseUp(Forms.MouseEventArgs e)
     {
         base.OnMouseUp(e);
+        if (e.Button == Forms.MouseButtons.Left && _framing.Dragging && !_modifierFraming.Active)
+        {
+            _framing.MoveDrag((double)e.X / Math.Max(1, ClientSize.Width - 1), (double)e.Y / Math.Max(1, ClientSize.Height - 1));
+            _framing.EndDrag();
+            ReleaseCalibrationCapture();
+            return;
+        }
         if (e.Button != Forms.MouseButtons.Left || !_mouseHeld)
             return;
         var dragged = _dragScreen;
@@ -496,6 +633,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     protected override void OnMouseCaptureChanged(EventArgs e)
     {
         base.OnMouseCaptureChanged(e);
+        if (!Capture && _framing.Dragging && !_modifierFraming.Active) _framing.Cancel("MouseCaptureLost");
         if (!Capture && _mouseHeld)
         {
             _mouseHeld = false;
@@ -503,14 +641,48 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         }
     }
     private IPointSurface KeySurface() => _calibration?.SelectedScreen is ScreenSurface selected && selected.DisplayName == _display ? selected : Surfaces.FirstOrDefault() ?? (IPointSurface)this;
+    private void PollModifierFraming()
+    {
+        var selected = _calibration?.SelectedScreen as ScreenSurface;
+        var screen = selected?.DisplayName == _display ? ScreenDefinition(selected.ScreenId) : null;
+        var allowed = _submenu == ConfigurationSubmenu.None && !_closing && _available && Visible && _options.ConfigurationMode && _nameEditor is null &&
+            !_mouseHeld && _calibration?.Busy != true && _calibration?.Editing != true && !ConfigurationDialog.Active;
+        var input = ModifierInputForTest?.Invoke() ?? ReadModifierInput();
+        _modifierFraming.Update(input, screen, allowed, Math.Max(1,ClientSize.Width-1)*96.0/DeviceDpi, Math.Max(1,ClientSize.Height-1)*96.0/DeviceDpi);
+    }
+    private ModifierFramingInput ReadModifierInput()
+    {
+        if (!GetKeyboardState(_keyboard)) return new(Forms.Keys.None,new(0,0),false);
+        bool Down(int key) => (_keyboard[key] & 0x80) != 0;
+        var modifiers = (Down(0x10) ? Forms.Keys.Shift : 0) | (Down(0x11) ? Forms.Keys.Control : 0) | (Down(0x12) ? Forms.Keys.Alt : 0);
+        var other = Enumerable.Range(8,248).Any(key => key is not (0x10 or 0x11 or 0x12 or 0xa0 or 0xa1 or 0xa2 or 0xa3 or 0xa4 or 0xa5) && Down(key));
+        var pointer = PointToClient(Forms.Cursor.Position);
+        return new(modifiers,new((double)pointer.X/Math.Max(1,ClientSize.Width-1),(double)pointer.Y/Math.Max(1,ClientSize.Height-1)),
+            ContainsFocus && PhotoBooth.Windows.ConfigurationShortcut.ApplicationFocused,
+            Forms.Control.MouseButtons != Forms.MouseButtons.None,other,Down(0x1b));
+    }
+    protected override void OnDeactivate(EventArgs e)
+    {
+        _modifierFraming?.Cancel("FocusLost"); base.OnDeactivate(e);
+    }
     private bool HandleScreenKey(Forms.Keys key)
     {
+        if (_submenu != ConfigurationSubmenu.None)
+        {
+            if (key == Forms.Keys.Escape) CancelSubmenuRequested?.Invoke();
+            return true;
+        }
         if (_nameEditor is not null) return false;
-        if (_options.ConfigurationMode && key is Forms.Keys.Left or Forms.Keys.Right &&
+        if (key == Forms.Keys.Escape && _framing.Dragging)
+        {
+            if (_modifierFraming.Active) _modifierFraming.Cancel("Escape"); else _framing.Cancel("Escape");
+            ReleaseCalibrationCapture(); return true;
+        }
+        if (_options.ConfigurationMode && key is Forms.Keys.Up or Forms.Keys.Down or Forms.Keys.Left or Forms.Keys.Right &&
             _calibration?.SelectedScreen is ScreenSurface selected && selected.DisplayName == _display &&
             !_calibration.HasSelectedPoint(selected) && ScreenDefinition(selected.ScreenId)?.IsVideo == true)
         {
-            BrowseMediaName(key == Forms.Keys.Left ? -1 : 1);
+            BrowseMedia(key);
             return true;
         }
         return _calibration?.Key(KeySurface(), key) == true;
@@ -519,12 +691,30 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         HandleScreenKey(keyData) || base.ProcessCmdKey(ref msg, keyData);
     protected override void WndProc(ref Forms.Message m)
     {
+        // Alt is an editing gesture here; don't let its release activate the system menu.
+        if (m.Msg == 0x112 && (m.WParam.ToInt64() & 0xfff0) == 0xf100 &&
+            _options.ConfigurationMode && _nameEditor is null && _submenu == ConfigurationSubmenu.None &&
+            _calibration?.SelectedScreen?.ScreenId is { } selectedId && ScreenDefinition(selectedId)?.IsVideo == true)
+        { m.Result = 0; return; }
+        if (m.Msg == 0x201)
+        {
+            _pointerShift = (m.WParam.ToInt64() & 4) != 0;
+            _pointerControl = (m.WParam.ToInt64() & 8) != 0;
+            try { base.WndProc(ref m); }
+            finally { _pointerShift = false; _pointerControl = false; }
+            return;
+        }
         // These Forms windows run on a WPF dispatcher, without the WinForms pre-translation loop.
+        if (m.Msg is 0x100 or 0x104 && (Forms.Keys)(int)m.WParam is not (Forms.Keys.ShiftKey or Forms.Keys.ControlKey or Forms.Keys.Menu or Forms.Keys.LShiftKey or Forms.Keys.RShiftKey or Forms.Keys.LControlKey or Forms.Keys.RControlKey or Forms.Keys.LMenu or Forms.Keys.RMenu or Forms.Keys.Escape))
+            _modifierFraming?.Suspend();
+        if (m.Msg == 0x100 && (Forms.Keys)(int)m.WParam == Forms.Keys.J && (m.LParam.ToInt64() & (1L << 30)) != 0 && _options.ConfigurationMode && _nameEditor is null)
+        { m.Result = 0; return; }
         if (m.Msg == 0x100 && HandleScreenKey((Forms.Keys)(int)m.WParam | ModifierKeys))
         {
             m.Result = 0;
             return;
         }
+        if (_submenu != ConfigurationSubmenu.None && m.Msg is 0x102 or 0x106) { m.Result = 0; return; }
         if (_options.ConfigurationMode && m.Msg == 0x102 && (int)m.WParam is 9 or 13 or 27)
         {
             m.Result = 0;
@@ -550,6 +740,8 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     // Production awaits recovery and worker shutdown without blocking the dispatcher.
     public async Task ShutdownWindowAsync()
     {
+        _modifierPoll.Stop(); _modifierFraming.Finish();
+        await _framing.DisposeAsync();
         _closing = true;
         FinishNameEdit(false);
         Hide();
@@ -566,6 +758,8 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     // Synchronous cleanup for isolated native-window tests, which have no pending UI operations.
     public void ShutdownWindow()
     {
+        _modifierPoll.Stop(); _modifierFraming.Cancel("Shutdown");
+        _framing.Stop();
         _closing = true;
         FinishNameEdit(false);
         _tasks.Cancel();
@@ -590,7 +784,13 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         });
     }
     [DllImport("user32.dll")] private static extern bool ShowWindow(nint hwnd, int command);
+    [DllImport("user32.dll")] private static extern bool GetKeyboardState([Out] byte[] state);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hwnd);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr(nint hwnd, int index);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] private static extern nint SetWindowLongPtr(nint hwnd, int index, nint value);
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { _modifierPoll?.Dispose(); _modifierFraming?.Cancel("WindowDisposed"); }
+        base.Dispose(disposing);
+    }
 }

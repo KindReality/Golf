@@ -4,6 +4,26 @@ internal static class TestSuites
 {
     public static async Task RunAsync(string[] arguments)
     {
+        if (arguments.SequenceEqual(["--video-outline"]))
+        {
+            await VideoOutlineChecks.Run(); await VideoOutlineHardwareChecks.Run();
+            await MatChecks.Run(); await MatHardwareChecks.Run(); await VideoFramingChecks.Run(); return;
+        }
+        if (arguments.SequenceEqual(["--submenus"]))
+        {
+            await ConfigurationHotkeyChecks.Run(); BackgroundSelectionChecks.Run();
+            await CalibrationVisibilityChecks.Run(); await ConfigurationSubmenuChecks.Run(); return;
+        }
+        if (arguments.SequenceEqual(["--restart"])) { await ExperienceRestartChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--lifecycle"])) { await LocalControllerExperienceChecks.Run(lifecycleOnly:true); return; }
+        if (arguments.SequenceEqual(["--point-joins"]))
+        {
+            await PointSnappingChecks.Run(); await ScreenChecks.Run(); await MatChecks.Run();
+            await LedChecks.Run(); GpuShaderChecks.Run(); await CalibrationVisibilityChecks.Run();
+            await PointSnappingHardwareChecks.Run(); return;
+        }
+        if (arguments.SequenceEqual(["--screen-copy"])) { await ScreenCopyChecks.Run(); await ConfigurationHotkeyChecks.Run(); await PointSnappingChecks.Run(); await ScreenCopyHardwareChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--video-framing"])) { await VideoResetChecks.Run(); await ConfigurationHotkeyChecks.Run(); await VideoFramingChecks.Run(); await ModifierFramingChecks.Run(); GpuShaderChecks.Run(); await ZoomRotationGpuChecks.Run(); await CalibrationVisibilityChecks.Run(); await VideoFramingHardwareChecks.Run(); return; }
         if (arguments.SequenceEqual(["--mask-edges"])) { await VisualizationMaskEdgeChecks.Run(); await VisualizationConfigurationChecks.Run(); await MatHardwareChecks.Run(); return; }
         if (arguments.SequenceEqual(["--screen-layers"])) { await ScreenLayerChecks.Run(); await MatHardwareChecks.Run(); return; }
         if (arguments.SequenceEqual(["--roles"]))
@@ -105,14 +125,14 @@ internal static class TestSuites
             await ScreenBrightnessChecks.Run();
             await ConfigurationHotkeyChecks.Run();
             GpuShaderChecks.Run();
-            await ScreenMediaNameBrowsingChecks.Run();
+            await ScreenMediaBrowsingHardwareChecks.Run();
             return;
         }
         if (arguments.SequenceEqual(["--name-browsing"]))
         {
-            await ScreenMediaNameCycleChecks.Run();
+            await ScreenMediaBrowserChecks.Run();
             await ConfigurationHotkeyChecks.Run();
-            await ScreenMediaNameBrowsingChecks.Run();
+            await ScreenMediaBrowsingHardwareChecks.Run();
             return;
         }
         if (arguments.SequenceEqual(["--screen-media"]))
@@ -241,13 +261,17 @@ internal static class TestSuites
         bool unit = !arguments.Contains("--hardware") || arguments.Contains("--all");
         if (unit)
         {
+            await VideoOutlineChecks.Run();
+            await ScreenCopyChecks.Run();
+            await VideoFramingChecks.Run();
+            await ModifierFramingChecks.Run();
             await LedChecks.Run();
             await VisualizationCommandChecks.Run();
             await GForceControlChecks.Run();
             await VisualizationConfigurationChecks.Run();
             await PerspectiveChecks.Run();
             ScreenMediaBindingChecks.Run();
-            await ScreenMediaNameCycleChecks.Run();
+            await ScreenMediaBrowserChecks.Run();
             await MediaPathChecks.Run();
             CoreChecks.Run();
             VideoLoopChecks.Run();
@@ -277,6 +301,8 @@ internal static class TestSuites
         }
         if (hardware)
         {
+            await VideoOutlineHardwareChecks.Run();
+            await ScreenCopyHardwareChecks.Run();
             await ScreenEditingWorkflowChecks.Run();
             await CoordinatedAudioHardwareChecks.RunAsync();
             GpuShaderChecks.Run();

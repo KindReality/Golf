@@ -30,8 +30,10 @@ internal static class ScreenChecks
             var root = JsonNode.Parse(File.ReadAllText(path))!;
             Check(root["MonitorAliases"] is null && root["MonitorBackgrounds"] is null && root["DisplayKeystones"] is null && root["Custom"]!.GetValue<int>() == 17, "Migration left legacy fields or lost custom fields.");
             var second = await store.AddScreenAsync("DISPLAY1");
-            Check(second.Name == "screen2" && second.Points == new PointOptions(), "Second screen did not fill the display.");
-            Check(ScreenOptions.New([new(), second]).Points == new PointOptions(), "Subsequent screens did not fill the display.");
+            Check(second.Name == "screen2" && second.Points == ScreenOptions.CenteredPoints(), "Second video was not centered at one-third size.");
+            Check(ScreenOptions.New([new(), second]).Points == ScreenOptions.CenteredPoints(), "Subsequent videos were not centered at one-third size.");
+            Check(ScreenOptions.New([],"mat").Points == ScreenOptions.CenteredPoints(), "First mat on an empty display was not one-third size.");
+            Check(ScreenOptions.New([new(){Type="mat"}]).Points == new PointOptions(), "A mat prevented the first video from filling the display.");
             await store.RenameScreenAsync("DISPLAY1", second.Id, "screen2", "News");
             options = ExperienceOptions.Parse(File.ReadAllText(path));
             Check(options.ScreensFor("DISPLAY1")[1].Id == second.Id && options.ScreensFor("DISPLAY1")[1].Name == "News", "Rename changed identity or order.");
@@ -194,10 +196,10 @@ internal static class ScreenChecks
                 SendMessage(hotkeys.Handle, 0x312, ApplicationHotkeys.VideoId, (nint)(0x56 << 16));
                 Check(adds == 1 && videos == 1, "A/V callbacks failed.");
                 hotkeys.Register(true, true);
-                SendMessage(hotkeys.Handle, 0x312, ApplicationHotkeys.CloseId, (nint)(0x58 << 16));
+                SendMessage(hotkeys.Handle, 0x312, ApplicationHotkeys.RestartId, (nint)(0x58 << 16));
                 Check(closes == 0, "Typing X while editing a name closed the app.");
                 hotkeys.Register(true, false);
-                SendMessage(hotkeys.Handle, 0x312, ApplicationHotkeys.CloseId, (nint)(0x58 << 16));
+                SendMessage(hotkeys.Handle, 0x312, ApplicationHotkeys.RestartId, (nint)(0x58 << 16));
                 Check(closes == 1, "Shortcuts did not resume after name editing.");
                 completion.SetResult();
             }

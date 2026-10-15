@@ -15,14 +15,20 @@ using Forms=System.Windows.Forms;
 internal static class LocalControllerExperienceChecks
 {
     private static readonly List<string> Results=[];
-    public static async Task Run(bool focusOnly=false, bool liveOnly=false)
+    public static async Task Run(bool focusOnly=false, bool liveOnly=false, bool lifecycleOnly=false)
     {
         var workspace=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"../../../.."));
-        var root=Path.Combine(workspace,".tools","local-controller-experience-"+DateTime.Now.ToString("yyyyMMdd-HHmmss"));Directory.CreateDirectory(root);
+        var root=Path.Combine(workspace,".tools","local-controller-experience");Directory.CreateDirectory(root);
+        using var runLock=new FileStream(Path.Combine(root,"run.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
+        foreach(var name in new[]{"Controller","ExperienceX"})
+            foreach(var existing in Process.GetProcessesByName(name))
+                using(existing) if(!existing.HasExited) throw new InvalidOperationException("Stop existing "+name+" before isolated integration testing.");
+        using var localNetwork=new LocalNetworkScope();
+        var evidence=Path.Combine(root,"Runs",DateTime.Now.ToString("yyyyMMdd-HHmmss-fff"));Directory.CreateDirectory(evidence);
         var fakeDrive=Path.Combine(root,"OneDrive");var media=Path.Combine(root,"Media");Directory.CreateDirectory(media);
         var fixture=Environment.GetEnvironmentVariable("EXPERIENCEX_TEST_VIDEO") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Home Technologies","Controller","Media","Eye.mp4");
         var definitionsPort=int.Parse(Environment.GetEnvironmentVariable("CONTROLLER_TEST_DEFINITIONS_PORT") ?? "54244");
-        File.Copy(fixture,Path.Combine(media,"Eye.mp4"));
+        File.Copy(fixture,Path.Combine(media,"Eye.mp4"),true);
         if (liveOnly)
         {
             using var writer = new NAudio.Wave.WaveFileWriter(Path.Combine(media,"Bell.wav"), new NAudio.Wave.WaveFormat(44100,16,2));
@@ -36,9 +42,10 @@ internal static class LocalControllerExperienceChecks
         CopyBuild(Path.Combine(workspace,"Controller","bin","Release","net9.0-windows"),cRoot);
         CopyBuild(Path.Combine(workspace,"experiencex","bin","Release","net9.0-windows"),xRoot);
         var cPath=Path.Combine(cRoot,$"appsettings.{Environment.MachineName}.json");var xPath=Path.Combine(xRoot,$"appsettings.{Environment.MachineName}.json");
-        var logRoot=Path.Combine(root,"logs");
+        var logRoot=Path.Combine(evidence,"logs");
         var config=JsonNode.Parse(File.ReadAllText(Path.Combine(cRoot,"appsettings.defaults.json")))!.AsObject();
         config["ControllerId"]=controllerId;config["DeviceName"]="local-controller-test";config["ConfigurationMode"]=false;config["DefinitionsPort"]=definitionsPort;
+        config["ExperienceSupervisionEnabled"]=false;
         config["UdpCommandsPort"]=commandPort;config["UdpEventsPort"]=eventPort;config["Perspectives"]=JsonSerializer.SerializeToNode(large);
         config["Arduinos"]=new JsonArray();config["Triggers"]=new JsonArray();
         config["Scenes"]=JsonSerializer.SerializeToNode(new[]{new{Name="local-test",AmbientPlaylist="local-test-ambient"}});
@@ -55,13 +62,58 @@ internal static class LocalControllerExperienceChecks
         {
             controller=Launch(Path.Combine(cRoot,"Controller.exe"),fakeDrive,cRoot);experience=Launch(Path.Combine(xRoot,"ExperienceX.exe"),fakeDrive,xRoot);
             await Until(()=>Events(logRoot,controller.Id).Any(e=>Name(e)=="ControllerReady")&&Events(logRoot,experience.Id).Count(e=>Name(e)=="DirectXRendererReady")==displays.Length,"Both real applications started",20000);
+            Check(Events(logRoot,controller.Id).Any(e=>Name(e)=="UdpListening"&&e.GetProperty("Data").GetProperty("Address").GetString()=="127.0.0.2")&&
+                Events(logRoot,experience.Id).Any(e=>Name(e)=="UdpListening"&&e.GetProperty("Data").GetProperty("Address").GetString()=="127.0.0.3"),"Both UDP listeners are loopback-only");
+            await Until(()=>ReadExperience(xPath).ControllerDefinitions.TryGetValue(controllerId,out var d)&&d.Perspectives.Length==500,
+                "Loopback UDP announcements and HTTP deliver 500 perspectives",15000);
+            await Until(()=>Events(logRoot,controller.Id).Any(e=>Name(e)=="ExperienceInventoryUpdated"),
+                "Loopback Experience inventory reaches Controller",15000);
+            if (lifecycleOnly)
+            {
+                var lifetimeMain = Windows(controller.Id).First(h => Visible(h) && Caption(h).Contains("Home Technologies"));
+                PostMessage(lifetimeMain,0x10,0,0);
+                await Until(()=>!Visible(lifetimeMain),"Controller close hides its window");
+                await Task.Delay(1500);
+                Check(!controller.HasExited&&!experience.HasExited,"Controller and Experience keep running while Controller is hidden");
+                var controllerPid=controller.Id;
+                config=ReadNode(cPath);config["ExperienceSupervisionEnabled"]=true;Write(cPath,config);
+                await Task.Delay(1500);
+                PhotoBooth.Windows.ConfigurationShortcut.RequestClose("Experience");
+                await Until(()=>experience.HasExited,"Experience closes cooperatively through local IPC");
+                var runtime=Path.Combine(root,"Temp","Experience","ExperienceX.exe");
+                Process? replacement=null;
+                await Until(()=>{replacement=Process.GetProcessesByName("ExperienceX").FirstOrDefault(p=>PathFor(p)==runtime);return replacement is not null;},"Hidden Controller watchdog starts a fresh Experience local copy",20000);
+                experience.Dispose();experience=replacement!;
+                await Until(()=>Events(logRoot,experience.Id).Any(e=>Name(e)=="DirectXRendererReady"),"Watchdog-launched Experience renders successfully",15000);
+                var presentationPid=experience.Id;
+                // Same restore handler as the notification icon; activation is not required for this check.
+                using(var peer=new PhotoBooth.Windows.ConfigurationShortcut("LifecycleTest",()=>false,_=>{},()=>{}))peer.SwitchTo("Controller");
+                await Until(()=>Visible(lifetimeMain),"Hidden Controller can be restored through its local receiver");
+                SendMessage(Children(lifetimeMain).First(h=>Caption(h)=="Restart"),0xf5,0,0);
+                await Until(()=>controller.HasExited,"Restart button gracefully exits the old Controller",15000);
+                var controllerRuntime=Path.Combine(root,"LocalAppData","Home Technologies","Controller","Application","Controller.exe");
+                Process? restarted=null;
+                await Until(()=>{restarted=Process.GetProcessesByName("Controller").FirstOrDefault(p=>PathFor(p)==controllerRuntime);return restarted is not null;},"Restart launches Controller from its local application folder",20000);
+                controller.Dispose();controller=restarted!;
+                await Until(()=>Events(logRoot,controller.Id).Any(e=>Name(e)=="ControllerReady"),"Restarted Controller is ready",15000);
+                Check(experience.Id==presentationPid&&!experience.HasExited,"Controller restart leaves Experience running");
+                lifetimeMain=Windows(controller.Id).First(h=>Visible(h)&&Caption(h).Contains("Home Technologies"));
+                var shutdown=Children(lifetimeMain).First(h=>Caption(h)=="Shutdown");
+                await Until(()=>IsWindowEnabled(shutdown),"Shutdown button is ready");
+                SendMessage(shutdown,0xf5,0,0);
+                await Until(()=>controller.HasExited&&experience.HasExited,"Shutdown closes both applications",18000);
+                await Task.Delay(2500);
+                Check(!Process.GetProcessesByName("ExperienceX").Any(p=>PathFor(p).StartsWith(root,StringComparison.OrdinalIgnoreCase)),"No watchdog relaunch follows intentional shutdown");
+                Check(Events(logRoot,controllerPid).Any(e=>Name(e)=="ApplicationStopped")&&Events(logRoot,controller.Id).Any(e=>Name(e)=="ApplicationStopped")&&Events(logRoot,experience.Id).Any(e=>Name(e)=="ApplicationStopped"),"Restart and shutdown complete graceful lifecycle logging");
+                Console.WriteLine("Lifecycle evidence: "+root);return;
+            }
             if (liveOnly)
             {
                 var liveMain = Windows(controller.Id).First(h => Visible(h) && Caption(h).Contains("Home Technologies"));
                 nint Button(string caption) => Children(liveMain).First(h => Caption(h) == caption);
                 var live = Button("Live"); await Until(() => IsWindowEnabled(live), "Live is available outside configuration mode"); SendMessage(live,0xf5,0,0);
                 await Until(() => Events(logRoot,controller.Id).Any(e => Name(e)=="ExperienceInventoryUpdated"), "Controller discovers real Experience inventory over UDP and TCP");
-                await Task.Delay(2000); File.WriteAllLines(Path.Combine(root,"live-captions.txt"),Children(liveMain).Select(Caption)); Snapshot(liveMain,Path.Combine(root,"live-before.png"));
+                await Task.Delay(2000); File.WriteAllLines(Path.Combine(evidence,"live-captions.txt"),Children(liveMain).Select(Caption)); Snapshot(liveMain,Path.Combine(evidence,"live-before.png"));
                 await Until(() => Children(liveMain).Count(h => Caption(h).Contains(" / probe Video screen"))==displays.Length, "Live displays every real screen target");
                 SendMessage(Button("Select all"),0xf5,0,0);
                 await Until(() => Children(liveMain).Any(h => Caption(h).EndsWith("Eye")), "Live carousel includes local video media");
@@ -71,16 +123,16 @@ internal static class LocalControllerExperienceChecks
                 await Until(() => Children(liveMain).Any(h=>Caption(h).EndsWith("Bell")), "Live carousel includes audio media");
                 SendMessage(Children(liveMain).First(h=>Caption(h).EndsWith("Bell")),0xf5,0,0);
                 await Until(() => Events(logRoot,experience.Id).Any(e=>Name(e)=="AudioPlaybackStarted" || Name(e)=="AudioGroupPlaybackStarted" || Name(e)=="CoordinatedAudioPlaybackStarted"), "Live starts silent fixture audio on selected outputs",10000);
-                Snapshot(liveMain,Path.Combine(root,"live.png"));
-                Inject(0x11,0x10,0x12,0x43);
+                Snapshot(liveMain,Path.Combine(evidence,"live.png"));
+                Inject(0x11,0x10,0x43);
                 await Until(()=>ReadNode(cPath)["ConfigurationMode"]!.GetValue<bool>()&&ReadExperience(xPath).ConfigurationMode,"Shared chord enables both processes");
                 if (IsSecurityPromptForeground())
                 { Results.Add("BLOCKED C/E foreground switching: Windows Security holds focus. Shortcut dispatch covered by unit checks."); Console.WriteLine(Results.Last()); }
                 else
                 {
-                await Until(()=>ForegroundPid()==controller.Id,"Controller receives configuration focus");
-                Inject(0x45); await Until(()=>ForegroundPid()==experience.Id,"E switches from Controller to Experience");
-                await Task.Delay(300); Inject(0x43); await Until(()=>ForegroundPid()==controller.Id,"C switches from Experience to Controller");
+                await Until(()=>ForegroundPid()==experience.Id,"Experience receives configuration focus");
+                Inject(0x43); await Until(()=>ForegroundPid()==controller.Id,"C switches from Experience to Controller");
+                await Task.Delay(300); Inject(0x45); await Until(()=>ForegroundPid()==experience.Id,"E switches from Controller to Experience");
                 Check(ReadExperience(xPath).ConfigurationMode&&ReadNode(cPath)["ConfigurationMode"]!.GetValue<bool>(),"Application switching preserves configuration mode");
                 }
                 await Until(()=>IsWindowEnabled(Button("Perspectives")),"Perspectives enabled after configuration reload");
@@ -92,23 +144,26 @@ internal static class LocalControllerExperienceChecks
                 Check(Windows(controller.Id).Count(h=>Visible(h))==1,"LED settings creates no popup dialog");
                 SendMessage(Button("Cancel"),0xf5,0,0);
                 SendMessage(Button("← Dashboard"),0xf5,0,0);
-                Inject(0x11,0x10,0x12,0x43);
+                Inject(0x11,0x10,0x43);
                 await Until(()=>!ReadNode(cPath)["ConfigurationMode"]!.GetValue<bool>()&&!ReadExperience(xPath).ConfigurationMode,"The same shared chord exits configuration mode in both processes");
                 Check(!Events(logRoot,experience.Id).Any(e=>Name(e)=="ScreenRenderingFailed"),"Live playback has no screen rendering failures");
                 Console.WriteLine("Local Live evidence: "+root); return;
             }
             if(focusOnly)
             {
-                Inject(0x11,0x10,0x12,0x43);
+                Inject(0x11,0x10,0x43);
                 await Until(()=>ReadNode(cPath)["ConfigurationMode"]!.GetValue<bool>()&&ReadExperience(xPath).ConfigurationMode,"Actual shortcut enables both processes");
-                await Until(()=>ForegroundPid()==controller.Id,"Controller receives focus",4000);
+                await Until(()=>ForegroundPid()==experience.Id,"Experience receives focus",4000);
+                await Task.Delay(1200);Check(ForegroundPid()==experience.Id,"Experience retains focus after both configuration saves and watchdog ticks");
+                Inject(0x43);await Until(()=>ForegroundPid()==controller.Id,"C explicitly switches to Controller");
+                await Task.Delay(250);Inject(0x45);await Until(()=>ForegroundPid()==experience.Id,"E explicitly switches back to Experience");
                 Check(true,"Focus-only real-process check passed");return;
             }
             await Until(()=>ReadExperience(xPath).ControllerDefinitions.TryGetValue(controllerId,out var d)&&d.Perspectives.Length==500,"500 perspectives reached Experience over real UDP and HTTP",15000);
             using var http=new HttpClient(new HttpClientHandler{UseProxy=false});
-            using var response=await http.GetAsync($"http://localhost:{definitionsPort}/definitions");var bytes=await response.Content.ReadAsByteArrayAsync();
+            using var response=await http.GetAsync($"http://127.0.0.2:{definitionsPort}/definitions");var bytes=await response.Content.ReadAsByteArrayAsync();
             Check(response.IsSuccessStatusCode&&JsonSerializer.Deserialize<ControllerSharedDefinitions>(bytes,ControllerSharedDefinitions.Json)!.Perspectives.Length==500,"Real HTTP response contains all 500 independent perspectives");
-            using var conditional=new HttpRequestMessage(HttpMethod.Get,$"http://localhost:{definitionsPort}/definitions");conditional.Headers.IfNoneMatch.Add(response.Headers.ETag!);
+            using var conditional=new HttpRequestMessage(HttpMethod.Get,$"http://127.0.0.2:{definitionsPort}/definitions");conditional.Headers.IfNoneMatch.Add(response.Headers.ETag!);
             using var notModified=await http.SendAsync(conditional);Check(notModified.StatusCode==HttpStatusCode.NotModified,"Unchanged HTTP snapshot returns 304");
             using var udp=new UdpClient(AddressFamily.InterNetwork);
             var network = new BroadcastOptions { DeviceName="local-test-parent",UdpCommandsPort=commandPort,UdpEventsPort=eventPort,UdpSendAttempts=1 };
@@ -133,17 +188,17 @@ internal static class LocalControllerExperienceChecks
             Check(ReadExperience(xPath).ScreensFor(primary)[0].Perspective!.Rectangle==old,"Deleted perspective retains its last crop");
             config["Perspectives"]=JsonSerializer.SerializeToNode(new[]{updated});Write(cPath,config);
             await Until(()=>ReadExperience(xPath).ScreensFor(primary)[0].Perspective!.Available,"Reintroducing the same perspective ID restores the binding");
-            Inject(0x11,0x10,0x12,0x43);
+            Inject(0x11,0x10,0x43);
             await Until(()=>ReadNode(cPath)["ConfigurationMode"]!.GetValue<bool>()&&ReadExperience(xPath).ConfigurationMode,"Actual global shortcut enables both separate processes");
             if(IsSecurityPromptForeground())
             {
-                Results.Add("BLOCKED Controller focus: Windows Security retains the foreground");
+                Results.Add("BLOCKED Experience focus: Windows Security retains the foreground");
                 Console.WriteLine("BLOCKED interactive focus check: Windows Security retains the foreground; continuing other real-process checks.");
             }
             else
             {
-                await Until(()=>ForegroundPid()==controller.Id,"Controller receives focus after the shared shortcut",5000);
-                await Task.Delay(1200);Check(ForegroundPid()==controller.Id,"Experience watchdog does not steal Controller focus");
+                await Until(()=>ForegroundPid()==experience.Id,"Experience receives focus after the shared shortcut",5000);
+                await Task.Delay(1200);Check(ForegroundPid()==experience.Id,"Controller does not steal Experience configuration focus");
             }
             var main=Windows(controller.Id).First(h=>Visible(h)&&Caption(h).Contains("Controller"));
             var editorButton=Children(main).First(h=>Caption(h)=="Perspectives");
@@ -188,9 +243,15 @@ internal static class LocalControllerExperienceChecks
             Exception? cleanupError=null;
             foreach(var process in new[]{controller,experience}.Where(p=>p is not null))
                 try { await Stop(process!); } catch(Exception ex) { cleanupError??=ex;Results.Add("FAIL cleanup: "+ex.Message); }
-            File.WriteAllLines(Path.Combine(root,"checks.txt"),Results);
+            File.WriteAllLines(Path.Combine(evidence,"checks.txt"),Results);
             if(cleanupError is not null)throw cleanupError;
         }
+    }
+    private sealed class LocalNetworkScope : IDisposable
+    {
+        private readonly string? _previous=Environment.GetEnvironmentVariable(LocalTestNetwork.Variable);
+        public LocalNetworkScope()=>Environment.SetEnvironmentVariable(LocalTestNetwork.Variable,"127.0.0.1");
+        public void Dispose()=>Environment.SetEnvironmentVariable(LocalTestNetwork.Variable,_previous);
     }
     private static void Snapshot(nint window, string path)
     {
@@ -209,11 +270,20 @@ internal static class LocalControllerExperienceChecks
         File.Copy(Path.Combine(source,"build-manifest.sha256"),Path.Combine(target,"build-manifest.sha256"),true);
     }
     private static Process Launch(string executable,string drive,string working)
-    {var start=new ProcessStartInfo(executable){UseShellExecute=false,WorkingDirectory=working};start.Environment["OneDrive"]=drive;return Process.Start(start)!;}
+    {
+        var start=new ProcessStartInfo(executable){UseShellExecute=false,WorkingDirectory=working};start.Environment["OneDrive"]=drive;
+        start.Environment[LocalTestNetwork.Variable]=Path.GetFileName(executable)=="Controller.exe"?"127.0.0.2":"127.0.0.3";
+        var root=Path.GetDirectoryName(drive)!;
+        foreach(var name in new[]{"Temp","LocalAppData"})Directory.CreateDirectory(Path.Combine(root,name));
+        start.Environment["TEMP"]=start.Environment["TMP"]=Path.Combine(root,"Temp");start.Environment["LOCALAPPDATA"]=Path.Combine(root,"LocalAppData");
+        return Process.Start(start)!;
+    }
+    private static string PathFor(Process p){try{return p.MainModule?.FileName??"";}catch{return "";}}
     private static async Task Stop(Process p)
     {
         if(p.HasExited){p.Dispose();return;}
-        foreach(var h in Windows(p.Id).Where(Visible))PostMessage(h,0x10,0,0);
+        if (!PhotoBooth.Windows.ConfigurationShortcut.RequestClose(p.ProcessName == "Controller" ? "Controller" : "Experience"))
+            foreach(var h in Windows(p.Id).Where(Visible))PostMessage(h,0x10,0,0);
         try{await p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(8));}
         catch(TimeoutException){p.Kill(true);await p.WaitForExitAsync();throw new Exception("Application did not shut down gracefully: "+p.ProcessName);}
         finally{p.Dispose();}

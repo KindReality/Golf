@@ -129,7 +129,8 @@ internal sealed class LivePage : UserControl
         try
         {
             var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Home Technologies", "Controller", "Media");
-            var files = Directory.Exists(root) ? Directory.EnumerateFiles(root).Select(Path.GetFileName).OfType<string>().Where(f => LivePlayback.Videos.Contains(Path.GetExtension(f)) || LivePlayback.Audio.Contains(Path.GetExtension(f))).Order(StringComparer.OrdinalIgnoreCase).ToArray() : [];
+            var files = PhotoBooth.Media.MediaLibrary.Read(root).Where(entry => !entry.IsFolder).Select(entry=>entry.RelativePath)
+                .Where(f => LivePlayback.Videos.Contains(Path.GetExtension(f)) || LivePlayback.Audio.Contains(Path.GetExtension(f))).Order(StringComparer.OrdinalIgnoreCase).ToArray();
             var signatureFiles = string.Join('|', files);
             if (_filesSignature != signatureFiles) { _filesSignature = signatureFiles; _files = files; RenderMedia(); }
         }
@@ -161,7 +162,7 @@ internal sealed class LivePage : UserControl
         foreach (var file in _files.Where(f => f.Contains(_search.Text, StringComparison.OrdinalIgnoreCase) && (_filter.SelectedIndex == 0 || LivePlayback.Videos.Contains(Path.GetExtension(f)) == (_filter.SelectedIndex == 1))))
         {
             var video = LivePlayback.Videos.Contains(Path.GetExtension(file));
-            var button = new Button { Text = (video ? "▶  VIDEO\n\n" : "♫  AUDIO\n\n") + Path.GetFileNameWithoutExtension(file), Width = 210, Height = 124, Margin = new(5), AccessibleName = "Play " + file, Tag = file };
+            var button = new Button { Text = (video ? "▶  VIDEO\n\n" : "♫  AUDIO\n\n") + file, Width = 210, Height = 124, Margin = new(5), AccessibleName = "Play " + file, Tag = file };
             DarkTheme.Button(button); button.Click += async (_, _) => await PlayAsync(file); _media.Controls.Add(button);
         }
     }

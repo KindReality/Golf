@@ -29,6 +29,7 @@ class Fixture {
     foreach ($name in @('Restart-Controller.cmd','Restart-Controller.ps1','Install-Controller.cmd','Install-Controller.ps1')) {
         Copy-Item -LiteralPath (Join-Path $workspace ('Controller\'+$name)) -Destination $source
     }
+    Copy-Item -LiteralPath (Join-Path $workspace 'Shared\Networking\NetworkAccess.ps1') -Destination $source
     # Verify hashing without PowerShell's Get-FileHash, including literal paths and file closure.
     $launcherPath = Join-Path $source 'Restart-Controller.ps1'
     $tokens = $null; $parseErrors = $null

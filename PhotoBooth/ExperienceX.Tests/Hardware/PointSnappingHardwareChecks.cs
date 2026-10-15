@@ -47,14 +47,16 @@ internal static class PointSnappingHardwareChecks
                     }
                     host = new(dispatcher, path); host.Start();
                     var window = host.DisplayWindows.Single(w => w.DisplayName == display);
-                    await GForceFullscreenChecks.FocusForTest(window.Handle);
+                    // Direct native messages exercise our window without taking focus from OS prompts.
                     nint Position(double x, double y) => (nint)(((int)Math.Round(y * (window.ClientSize.Height - 1)) << 16) | (int)Math.Round(x * (window.ClientSize.Width - 1)));
                     void Down(ScreenPoint p) => SendMessage(window.Handle, 0x201, 1, Position(p.X, p.Y));
                     void Move(double x, double y) => SendMessage(window.Handle, 0x200, 1, Position(x, y));
                     void Up(double x, double y) => SendMessage(window.Handle, 0x202, 0, Position(x, y));
                     Down(source.Points.TopRight);
                     Check(window.Capture && host.SelectedScreen?.ScreenId == source.Id, "Native mouse-down selects and captures the source point");
-                    Move(.49, .1); Move(.54, .15); Up(.54, .15);
+                    Move(.49, .1);
+                    SendMessage(window.Handle, 0x100, 0x4a, 0);
+                    Move(.54, .15); Up(.54, .15);
                     await Until(() => Read().PointsFor(display, source.Id).TopRight == Read().PointsFor(display, mat.Id).TopLeft && Read().PointsFor(display, source.Id).TopRight.X > .5,
                         "Native drag and release save identical linked media/mat coordinates");
                     await Task.Delay(250);

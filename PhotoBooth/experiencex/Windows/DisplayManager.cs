@@ -20,11 +20,19 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
     private ScreenMediaCatalog _mediaCatalog = ScreenMediaCatalog.Empty;
     private bool _disposed;
     private string? _displayInventory, _aliasInventory, _defaultDisplayFailure;
+    private ConfigurationSubmenu _submenu;
+    internal event Action? CancelSubmenuRequested;
+    internal void SetSubmenu(ConfigurationSubmenu menu)
+    {
+        _submenu = menu;
+        foreach (var window in _windows.Values) window.SetSubmenu(menu);
+    }
     public IEnumerable<MainWindow> Windows => _windows.Values;
     public event Action? CloseRequested;
     public event Action<bool>? TextEditingChanged;
     public event Action<ScreenSurface, string, string>? RenameRequested;
-    public Func<ScreenSurface, string, string, Task<bool>>? BrowseRenameRequested { get; set; }
+    public Func<ScreenSurface, ScreenOptions, string, Task<bool>>? SelectMediaRequested { get; set; }
+    internal Func<string, ScreenOptions, VideoFramingOptions, CancellationToken, Task>? SaveFramingRequested { get; set; }
 
     public void Start(ExperienceOptions options)
     {
@@ -83,10 +91,14 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
             var window = new MainWindow(screen.DeviceName, _options);
             window.UpdateMediaCatalog(_mediaCatalog);
             window.AttachCalibration(_calibration);
+            window.SetSubmenu(_submenu);
+            window.CancelSubmenuRequested += () => CancelSubmenuRequested?.Invoke();
             window.LedGeometryChanged += UpdateLeds;
             window.TextEditingChanged += editing => TextEditingChanged?.Invoke(editing);
             window.RenameRequested += (surface, oldName, name) => RenameRequested?.Invoke(surface, oldName, name);
-            window.BrowseRenameRequested = (surface, oldName, name) => BrowseRenameRequested?.Invoke(surface, oldName, name) ?? Task.FromResult(false);
+            window.SelectMediaRequested = (surface, screen, media) => SelectMediaRequested?.Invoke(surface, screen, media) ?? Task.FromResult(false);
+            window.SaveFramingRequested = (screen, framing, token) => SaveFramingRequested?.Invoke(window.DisplayName, screen, framing, token) ??
+                Task.FromException(new InvalidOperationException("Video framing persistence is unavailable."));
             _windows.Add(screen.DeviceName, window);
             window.FormClosing += (_, args) =>
             {

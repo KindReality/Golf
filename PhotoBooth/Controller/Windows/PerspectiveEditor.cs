@@ -72,9 +72,10 @@ internal sealed class PerspectiveEditor : Form
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Home Technologies", "Controller", "Media");
         Directory.CreateDirectory(root);
         var extensions = new HashSet<string>([".mp4", ".mpg", ".mpeg", ".avi", ".mov", ".mkv", ".wmv", ".png", ".jpg", ".jpeg", ".bmp", ".gif"], StringComparer.OrdinalIgnoreCase);
-        foreach (var path in Directory.EnumerateFiles(root).Where(p => extensions.Contains(Path.GetExtension(p))).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
+        foreach (var relative in PhotoBooth.Media.MediaLibrary.Read(root).Where(entry=>!entry.IsFolder&&extensions.Contains(Path.GetExtension(entry.RelativePath))).Select(entry=>entry.RelativePath).Order(StringComparer.OrdinalIgnoreCase))
         {
-            var button = new Button { Text = Path.GetFileName(path), Width = 150, Height = 62, Margin = new Padding(3), Tag = path };
+            var path = PhotoBooth.Media.MediaLibrary.Resolve(root,relative);
+            var button = new Button { Text = relative, Width = 150, Height = 62, Margin = new Padding(3), Tag = path };
             DarkTheme.Button(button);
             button.Click += (_, _) => { try { _preview.Open(path); _play.Text = _preview.Playing ? "Pause" : "Play"; _status.Text = Path.GetFileName(path) + " • preview only"; } catch (Exception ex) { _status.Text = ex.Message; } };
             _media.Controls.Add(button);

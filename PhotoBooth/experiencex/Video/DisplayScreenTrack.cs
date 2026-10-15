@@ -6,12 +6,13 @@ using Vortice.DXGI;
 
 namespace ExperienceX;
 
-// One editable screen and overlay on its display's worker. Video owns a decoder; mat owns cached geometry.
+// One editable screen and overlay on its display's worker. Video owns a decoder; outlines use cached triangles.
 internal sealed class DisplayScreenTrack : IDisposable
 {
     private readonly string _display;
     private readonly GraphicsResources _graphics;
-    private readonly MatLayer _mat;
+    private readonly MaskLayer _mask;
+    private readonly PolygonMesh _videoOutline;
     private readonly Action _present;
     private readonly MediaEngineSession _media;
     private readonly CalibrationOverlay _overlay = new();
@@ -34,6 +35,10 @@ internal sealed class DisplayScreenTrack : IDisposable
     private VideoPriorityLease? _priority;
     private VideoLoopIdentity? _loopIdentity;
     private bool _stillImage;
+    private string? _mediaCaption, _playbackMedia;
+    internal void SetMediaCaption(string? caption) => _mediaCaption=caption;
+    private VideoFramingOptions? _framingPreview;
+    private readonly VideoOutlineCache _outlineCache = new();
     private long _retryAt;
     private readonly Action<int, int> _createVideoTexture;
     public ScreenOptions Screen
@@ -55,7 +60,8 @@ internal sealed class DisplayScreenTrack : IDisposable
     public DisplayScreenTrack(GraphicsResources graphics, string display, ScreenOptions screen, ExperienceOptions options, Action wake, Action present)
     {
         _graphics = graphics;
-        _mat = new(graphics);
+        _mask = new(graphics);
+        _videoOutline = new(graphics);
         _display = display;
         Screen = screen;
         _options = options;
@@ -73,6 +79,7 @@ internal sealed class DisplayScreenTrack : IDisposable
     public void Configure(ScreenOptions screen, ExperienceOptions options)
     {
         if (Screen.Type != screen.Type) Complete("ScreenTypeChanged");
+        if (screen.Framing != Screen.Framing || !options.ConfigurationMode) _framingPreview = null;
         Screen = screen;
         _options = options;
         _overlay.Configure(options);
@@ -83,6 +90,9 @@ internal sealed class DisplayScreenTrack : IDisposable
         _overlay.SelectScreen(selected);
     }
     public void Fade() => _overlay.Fade();
+    internal void SuppressHelp(bool value) => _overlay.SuppressHelp(value);
+    public void ShowJoinTarget(int point) => _overlay.ShowJoinTarget(point);
+    internal void PreviewFraming(VideoFramingOptions? value) => _framingPreview = value;
     public void Preview(PointOptions? value) => _overlay.SetPreview(value);
     public void Flash(int mask, bool success) => _overlay.Flash(mask, success);
     public void FlashPoint(int point, bool success) => _overlay.FlashPoint(point, success);
@@ -105,7 +115,7 @@ internal sealed class DisplayScreenTrack : IDisposable
         if (!available || IsOpen || binding?.Path is not { } path || Stopwatch.GetTimestamp() < _retryAt) return;
         var request = new ExperienceRequest
         {
-            Experience = "video", Value = System.IO.Path.GetFileName(path), Loop = true, Mute = true,
+            Experience = "video", Value = binding.RelativePath ?? System.IO.Path.GetFileName(path), Loop = true, Mute = true,
             Source = _options.EffectiveDeviceName, TargetDevice = _options.EffectiveDeviceName,
             RequestId = Guid.NewGuid().ToString("N"), ScreenId = Screen.Id, ScreenName = Screen.Name
         };
@@ -132,6 +142,7 @@ internal sealed class DisplayScreenTrack : IDisposable
     private void OpenImage(string path, ExperienceRequest request)
     {
         Complete("Replaced");
+        _playbackMedia=request.Value;
         RequestId = request.RequestId;
         _source = request.Source;
         _state.TransitionTo(RendererState.Opening);
@@ -173,6 +184,7 @@ internal sealed class DisplayScreenTrack : IDisposable
         Complete("Replaced");
         _priority = request.VideoPriority;
         _loopIdentity = looping;
+        _playbackMedia=request.Value;
         RequestId = request.RequestId;
         _source = request.Source;
         _loop = request.Loop;
@@ -282,15 +294,20 @@ internal sealed class DisplayScreenTrack : IDisposable
         if (!Screen.IsVideo) return;
         var points = _overlay.Preview ?? Screen.Points;
         var inverse = _alpha > 0 ? _transforms.Get(points) : default;
-        _graphics.DrawLayer(_view, _alpha, _options, inverse, Screen.EffectiveBlackKey(_options), _stillImage, Screen.Brightness, Screen.Perspective?.Rectangle);
+        var (aspect,framing) = _outlineCache.Get(points,_graphics.Width,_graphics.Height,_framingPreview ?? Screen.Framing);
+        var polygon = points.Vertices.Count > 4;
+        if (polygon) _videoOutline.Configure(points);
+        _graphics.DrawLayer(_view, _alpha, _options, inverse, Screen.EffectiveBlackKey(_options), _stillImage, Screen.Brightness,
+            Screen.Perspective?.Rectangle, framing,aspect,polygon ? _videoOutline : null);
     }
-    public void DrawMat()
+    public void DrawMask()
     {
-        if (Screen.IsPolygon) _mat.Draw(_overlay.Preview ?? Screen.Points, Screen.IsVisualization || Screen.IsNegative);
+        if (Screen.IsMask) _mask.Draw(_overlay.Preview ?? Screen.Points, Screen.IsVisualization || Screen.IsNegative, cutout: Screen.IsMat);
     }
     internal bool SelectedScreen => _overlay.SelectedScreen;
     public void DrawOverlay()
     {
+        _overlay.SetMediaCaption(Screen.IsVideo ? _mediaCaption ?? _binding?.RelativePath ?? Screen.MediaFile ?? _playbackMedia : null);
         if (_overlay.Visible(_options))
             _overlay.Draw(_graphics, _options, _display, _overlayTransforms, Screen.Id);
     }
@@ -370,7 +387,8 @@ internal sealed class DisplayScreenTrack : IDisposable
         _priority = null;
         _media.Dispose();
         _overlay.Dispose();
-        _mat.Dispose();
+        _mask.Dispose();
+        _videoOutline.Dispose();
         _graphics.Context.PSUnsetShaderResource(0);
         _view?.Dispose();
         _texture?.Dispose();

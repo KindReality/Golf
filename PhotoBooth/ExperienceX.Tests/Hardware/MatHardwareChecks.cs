@@ -16,7 +16,7 @@ internal static class MatHardwareChecks
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA); thread.Start();
         await completion.Task.WaitAsync(TimeSpan.FromSeconds(20));
-        Console.WriteLine("GPU mat readback passed video/mat layer ordering, opaque black, transparent cutouts, concave geometry, idle masks, command rejection, and editing/flash of point 38.");
+        Console.WriteLine("GPU mat readback passed transparent media cutouts, background preservation, normal/negative geometry, z-order, G-Force boundary protection, resize, and editing/flash of point 38.");
     }
     private static void Check()
     {
@@ -26,7 +26,7 @@ internal static class MatHardwareChecks
             using var window = new Forms.Form { ShowInTaskbar = false };
             using var graphics = new GraphicsResources(window.Handle, 640, 360, "TEST");
             graphics.Initialize();
-            using var mat = new MatLayer(graphics);
+            using var mat = new MaskLayer(graphics);
             using var staging = graphics.Device.CreateTexture2D(new Texture2DDescription(Format.B8G8R8A8_UNorm, 640, 360, 1, 1, BindFlags.None, ResourceUsage.Staging, CpuAccessFlags.Read));
             byte[] Read()
             {
@@ -42,6 +42,9 @@ internal static class MatHardwareChecks
                 finally { graphics.Context.Unmap(staging, 0); }
             }
             int At(int x, int y, int channel) => (y * 640 + x) * 4 + channel;
+            using var greenTexture = graphics.Device.CreateTexture2D<byte>([0,255,0,255], Format.B8G8R8A8_UNorm, 1, 1, 1, 1, BindFlags.ShaderResource);
+            using var greenView = graphics.Device.CreateShaderResourceView(greenTexture);
+            void Fill(double opacity = 1) => graphics.DrawLayer(greenView, opacity, new(), VideoTransform.Inverse(new()), sourceAlpha: true);
             var shape = new PointOptions { Enabled = true, Vertices = [new(.1, .1), new(.9, .1), new(.9, .9), new(.5, .5), new(.1, .9)] };
             graphics.BeginFrame(new(1, 0, 0, 1));
             mat.Draw(shape);
@@ -62,9 +65,9 @@ internal static class MatHardwareChecks
             var negative = options.ScreensFor("TEST")[0] with { Points = shape, IsNegative = true };
             using (var negativeTrack = new DisplayScreenTrack(graphics, "TEST", negative, options, () => { }, () => { }))
             {
-                graphics.BeginFrame(new(0, 0, 0, 0)); negativeTrack.DrawMat(); pixels = Read();
-                if (pixels[At(320, 108, 3)] != 0 || pixels[At(320, 288, 3)] != 255 || pixels[At(20, 20, 3)] != 255)
-                    throw new Exception("Configured negative mat did not render a transparent polygon with a black exterior.");
+                graphics.BeginFrame(new(0, 0, 0, 0)); graphics.BeginScreenLayers(); Fill(); negativeTrack.DrawMask(); graphics.FinishScreenLayers(); pixels = Read();
+                if (pixels[At(320, 108, 1)] != 255 || pixels[At(320, 108, 3)] != 255 || pixels[At(320, 288, 3)] != 0 || pixels[At(20, 20, 3)] != 0)
+                    throw new Exception("Negative mat did not retain media inside its polygon and reveal the background outside.");
             }
             using var track = new DisplayScreenTrack(graphics, "TEST", options.ScreensFor("TEST")[0], options, () => { }, () => { });
             try { track.Open("no-file-needed", new()); throw new Exception("A mat accepted a playback request."); } catch (ArgumentException) { }
@@ -81,14 +84,36 @@ internal static class MatHardwareChecks
                 Thread.Sleep(20); media.Tick();
                 graphics.BeginFrame(new(0, 0, 0, 0)); mat.Draw(shape, inverse: true); media.DrawVideo(); pixels = Read();
                 if (pixels[At(20, 20, 1)] < 250) throw new Exception("The bottom inverse mat obscured media above it.");
-                graphics.BeginFrame(new(0, 0, 0, 0)); track.DrawVideo(); track.DrawMat(); media.DrawVideo(); media.DrawMat();
+                graphics.BeginFrame(new(0, 0, 0, 0)); graphics.BeginScreenLayers(); track.DrawVideo(); track.DrawMask(); media.DrawVideo(); media.DrawMask(); graphics.FinishScreenLayers();
                 pixels = Read();
                 if (pixels[At(320, 180, 1)] < 250 || pixels[At(320, 180, 3)] != 255) throw new Exception("Media above a mat did not cover it.");
-                graphics.BeginFrame(new(0, 0, 0, 0)); media.DrawVideo(); media.DrawMat(); track.DrawVideo(); track.DrawMat();
+                graphics.BeginFrame(new(0, 0, 0, 0)); graphics.BeginScreenLayers(); media.DrawVideo(); media.DrawMask(); track.DrawVideo(); track.DrawMask(); graphics.FinishScreenLayers();
                 pixels = Read();
-                if (pixels[At(320, 180, 0)] != 0 || pixels[At(320, 180, 1)] != 0 || pixels[At(320, 180, 2)] != 0 || pixels[At(320, 180, 3)] != 255) throw new Exception("A mat above media did not black it out.");
+                if (pixels[At(320, 180, 0)] != 0 || pixels[At(320, 180, 1)] != 0 || pixels[At(320, 180, 2)] != 0 || pixels[At(320, 180, 3)] != 0) throw new Exception("A mat above media did not clear both RGB and alpha.");
             }
             finally { File.Delete(imagePath); }
+            // Erasing ordered media must preserve the base, including the separate visualization boundary mask.
+            foreach (var background in new[] { new Vortice.Mathematics.Color4(0,0,0,0), new Vortice.Mathematics.Color4(0,0,1,1), new Vortice.Mathematics.Color4(1,1,1,1) })
+            {
+                graphics.BeginFrame(background); graphics.BeginScreenLayers(); Fill(.5); mat.Draw(shape, cutout: true); graphics.FinishScreenLayers(); pixels = Read();
+                if (pixels[At(320,108,0)] != (byte)(background.B*255) || pixels[At(320,108,1)] != (byte)(background.G*255) ||
+                    pixels[At(320,108,2)] != (byte)(background.R*255) || pixels[At(320,108,3)] != (byte)(background.A*255))
+                    throw new Exception("A cutout erased or altered the display background.");
+                if (Math.Abs(pixels[At(320,288,3)]-(128+background.A*127))>1 || Math.Abs(pixels[At(320,288,1)]-(128+background.G*127))>1)
+                    throw new Exception("Compositing masked media reapplied chroma key, brightness or opacity.");
+                graphics.BeginFrame(background); graphics.BeginScreenLayers(); track.DrawMask(); graphics.FinishScreenLayers(); pixels=Read();
+                if (pixels[At(320,180,3)]!=(byte)(background.A*255) || pixels[At(320,180,0)]!=(byte)(background.B*255))
+                    throw new Exception("An idle mat covered the background despite no media playing.");
+            }
+            graphics.BeginFrame(new(0,0,0,0)); mat.Draw(shape,inverse:true); graphics.BeginScreenLayers(); Fill(); mat.Draw(new(),cutout:true); graphics.FinishScreenLayers(); pixels=Read();
+            if (pixels[At(320,108,3)]!=0 || pixels[At(20,20,3)]!=255 || pixels[At(20,20,1)]!=0)
+                throw new Exception("A regular cutout erased the G-Force boundary mask or failed to reveal the visualization opening.");
+            graphics.BeginFrame(new(0,0,0,0)); graphics.BeginScreenLayers(); Fill(); mat.Draw(shape,cutout:true); Fill(.5); graphics.FinishScreenLayers(); pixels=Read();
+            if (Math.Abs(pixels[At(320,108,3)]-128)>1 || pixels[At(320,288,3)]!=255)
+                throw new Exception("Cutout ordering lost translucent media above it or retained media below it.");
+            graphics.Resize(320,180); graphics.BeginFrame(new(0,0,0,0)); graphics.BeginScreenLayers(); Fill(); graphics.FinishScreenLayers();
+            graphics.Resize(640,360); graphics.BeginFrame(new(0,0,0,0)); graphics.BeginScreenLayers(); Fill(); mat.Draw(shape,cutout:true); graphics.FinishScreenLayers(); pixels=Read();
+            if(pixels[At(320,108,3)]!=0 || pixels[At(20,20,1)]!=255) throw new Exception("Resize failed to recreate the media compositing target.");
             using var overlay = new CalibrationOverlay(); overlay.Initialize(graphics); overlay.Configure(options);
             overlay.SelectScreen(true); overlay.Show(37);
             graphics.BeginFrame(new(0, 0, 0, 0)); mat.Draw(many); overlay.Draw(graphics, options, "TEST", new(), "mask");

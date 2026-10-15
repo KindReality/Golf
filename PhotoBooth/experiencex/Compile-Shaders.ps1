@@ -8,7 +8,7 @@ foreach ($stage in @(@('vs_5_0','VSMain','VideoVS.cso'),@('ps_5_0','PSMain','Vid
 }
 & $compiler.FullName /nologo /T ps_5_0 /E PSMain /Fo (Join-Path $PSScriptRoot 'Shaders\CalibrationPS.cso') (Join-Path $PSScriptRoot 'Shaders\Calibration.hlsl')
 if ($LASTEXITCODE -ne 0) {throw 'Calibration shader compilation failed.'}
-foreach ($stage in @(@('vs_5_0','VSMain','MatVS.cso'),@('ps_5_0','PSMain','MatPS.cso'))) {
-    & $compiler.FullName /nologo /T $stage[0] /E $stage[1] /Fo (Join-Path $PSScriptRoot ('Shaders\'+$stage[2])) (Join-Path $PSScriptRoot 'Shaders\Mat.hlsl')
-    if ($LASTEXITCODE -ne 0) { throw 'Mat shader compilation failed.' }
+foreach ($stage in @(@('vs_5_0','VSMain','MaskVS.cso'),@('ps_5_0','PSMain','MaskPS.cso'),@('vs_5_0','VideoVSMain','PolygonVS.cso'))) {
+    & $compiler.FullName /nologo /T $stage[0] /E $stage[1] /Fo (Join-Path $PSScriptRoot ('Shaders\'+$stage[2])) (Join-Path $PSScriptRoot 'Shaders\Polygon.hlsl')
+    if ($LASTEXITCODE -ne 0) { throw 'Polygon shader compilation failed.' }
 }

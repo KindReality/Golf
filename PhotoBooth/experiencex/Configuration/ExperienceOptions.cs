@@ -96,6 +96,10 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
                     throw new ArgumentException("Screen type must be video, mat, visualization or fastled.");
                 if (screen.IsNegative && !screen.IsMat)
                     throw new ArgumentException("Only mat screens support IsNegative.");
+                if (screen.Framing is null) throw new ArgumentException("Screen framing cannot be null.");
+                screen.Framing.Validate();
+                if (!screen.IsVideo && screen.Framing != new VideoFramingOptions())
+                    throw new ArgumentException("Only video/image screens support zoom and pan.");
                 if (!double.IsFinite(screen.Brightness) || screen.Brightness is < 0 or > 100)
                     throw new ArgumentException("Screen Brightness must be a percentage from 0 to 100.");
                 if (screen.Points is null)
@@ -106,9 +110,7 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
                 screen.Perspective?.Validate();
                 if (screen.IsLed != (screen.Perspective?.IsLed == true))
                     throw new ArgumentException("LED perspectives belong only to fastled screens; each LED screen needs a perspective.");
-                if (screen.IsLed) LedGeometry.Validate(screen.Points, screen.IsLedArray);
-                else if (screen.IsPolygon) screen.Points.ValidatePolygon();
-                else screen.Points.Validate();
+                screen.ValidatePoints(screen.Points);
             }
         }
         if (DisplayAliases is null)

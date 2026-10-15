@@ -9,6 +9,15 @@ internal sealed class ConfigurationModeNotice : Forms.Form
 {
     private readonly Forms.Label _label = new() { Dock = Forms.DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter };
     private readonly DispatcherTimer _hide = new() { Interval = TimeSpan.FromSeconds(1.8) };
+    private string? _menuMessage, _menuDisplay;
+    internal string Message => _label.Text;
+    public void SetMenu(string? message, string? display = null)
+    {
+        if (_menuMessage == message && _menuDisplay == display) return;
+        _menuMessage = message; _menuDisplay = display;
+        if (message is null) { _hide.Stop(); Hide(); }
+        else DisplayCore(message, false, true, display);
+    }
     protected override bool ShowWithoutActivation => true;
     protected override Forms.CreateParams CreateParams
     {
@@ -38,10 +47,20 @@ internal sealed class ConfigurationModeNotice : Forms.Form
     }
     public void Display(string message, bool error = false, bool persistent = false, string? display = null)
     {
+        // A pending choice owns the HUD until completed or canceled.
+        if (_menuMessage is not null) return;
+        DisplayCore(message, error, persistent, display);
+    }
+    private void DisplayCore(string message, bool error, bool persistent, string? display)
+    {
         _hide.Stop();
         _label.Text = message;
         _label.ForeColor = error ? Color.LightCoral : Color.Azure;
         var screen = (Forms.Screen.AllScreens.FirstOrDefault(s => s.DeviceName.Equals(display, StringComparison.OrdinalIgnoreCase)) ?? Forms.Screen.FromPoint(Forms.Cursor.Position)).WorkingArea;
+        var measured = Forms.TextRenderer.MeasureText(message, Font);
+        Width = Math.Min(Math.Max(1, screen.Width - 32), Math.Max(430, measured.Width + 32));
+        var wrapped = Forms.TextRenderer.MeasureText(message, Font, new Size(Math.Max(1, Width - 24), int.MaxValue), Forms.TextFormatFlags.WordBreak);
+        Height = Math.Max(60, wrapped.Height + 24);
         Location = new(screen.Left + (screen.Width - Width) / 2, screen.Top + 40);
         Show();
         BringToFront();

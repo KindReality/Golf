@@ -12,7 +12,7 @@ internal static class GpuShaderChecks
     [StructLayout(LayoutKind.Sequential)]
     private struct Constants
     {
-        public Vector4 Row0, Row1, Row2, Effects, Aspect, Crop;
+        public Vector4 Row0, Row1, Row2, Effects, Aspect, Crop, Rotation, SourceBounds;
     }
     public static void Run()
     {
@@ -49,12 +49,14 @@ internal static class GpuShaderChecks
             context.PSSetShaderResource(0, srv);
             context.PSSetSampler(0, sampler);
             context.PSSetConstantBuffer(0, buffer);
-            byte[] Render(float opacity, bool key, PointOptions? keystone = null, Color4? background = null, Vector4? contentScale = null, float brightness = 1, Vector4? crop = null)
+            byte[] Render(float opacity, bool key, PointOptions? keystone = null, Color4? background = null, Vector4? contentScale = null, float brightness = 1, Vector4? crop = null, Vector4? rotation = null, Vector4? sourceBounds = null)
             {
                 context.ClearRenderTargetView(rtv, background ?? new Color4(0, 0, 0, 0));
                 context.OMSetBlendState(videoBlend);
                 var (r0, r1, r2) = VideoTransform.Inverse(keystone ?? new());
                 var data = new Constants { Crop = crop ?? new(0,0,1,1), Row0 = r0, Row1 = r1, Row2 = r2, Effects = new(opacity, 0.015f, 0.03f, key ? 1 : 0), Aspect = contentScale ?? new(1, 1, 0, 0) };
+                data.Rotation = rotation ?? new(1, 0, 0, 1);
+                data.SourceBounds = sourceBounds ?? new(0, 0, 1, 1);
                 data.Aspect.W = brightness;
                 context.UpdateSubresource(in data, buffer);
                 context.Draw(3, 0);
@@ -74,7 +76,36 @@ internal static class GpuShaderChecks
                 if(cropped[p]<250 || cropped[p+1]>2 || cropped[p+2]>2 || cropped[p+3]<250)
                     throw new Exception("Perspective crop sampled outside the selected bottom-left source quadrant.");
             Console.WriteLine("PASS GPU perspective crop fills output with only the selected source quadrant.");
+            var framedCrop = new VideoFramingOptions { Zoom = 2, CenterY = .75 }.Crop(new() { X = 50, Width = 50 });
+            var framed = Render(1, false, crop: new((float)(framedCrop.X/100),(float)(framedCrop.Y/100),(float)(framedCrop.Width/100),(float)(framedCrop.Height/100)));
+            if (framed.Any(channel => channel < 250)) throw new Exception("Zoom/pan escaped its perspective instead of sampling only the bottom-right source quadrant.");
+            Console.WriteLine("PASS GPU zoom/pan composes with the selected perspective and fills the screen.");
             int Alpha(byte[] b, int x, int y) => b[(y * 16 + x) * 4 + 3];
+            var quarterTurn = new VideoFramingOptions { RotationDegrees = 90 };
+            var rotated = Render(1, false, rotation: quarterTurn.SamplingRotation());
+            int At(int x, int y, int channel) => (y * 16 + x) * 4 + channel;
+            if (rotated[At(3,3,0)] != 255 || rotated[At(3,3,2)] != 0 ||
+                rotated[At(12,3,0)] != 0 || rotated[At(12,3,2)] != 0 ||
+                rotated[At(12,12,2)] != 255 || rotated[At(12,12,0)] != 0 ||
+                rotated[At(3,12,0)] != 255 || rotated[At(3,12,2)] != 255)
+                throw new Exception("90-degree clockwise rotation did not put the source quadrants in their expected positions.");
+            var angled = Render(1, false, rotation: new VideoFramingOptions { RotationDegrees = 45 }.SamplingRotation());
+            if (Alpha(angled,0,0) != 0 || Alpha(angled,8,8) != 255)
+                throw new Exception("Rotated media stretched its edge pixels instead of leaving uncovered areas transparent.");
+            var wideRotation = Render(1, false, rotation: quarterTurn.SamplingRotation(2));
+            if (Alpha(wideRotation,3,8) != 0 || Alpha(wideRotation,12,8) != 0 || Alpha(wideRotation,8,3) != 255 || Alpha(wideRotation,8,12) != 255)
+                throw new Exception("Rotation distorted a rectangular screen instead of preserving its pixel proportions.");
+            var rotatedCrop = Render(1, false, crop: new(0,.5f,.5f,.5f), rotation: new VideoFramingOptions { RotationDegrees = 45 }.SamplingRotation(), sourceBounds: new(0,.5f,.5f,1));
+            for (int p=0;p<rotatedCrop.Length;p+=4)
+                if (rotatedCrop[p+3] != 0 && (rotatedCrop[p] != 255 || rotatedCrop[p+1] != 0 || rotatedCrop[p+2] != 0))
+                    throw new Exception("Rotation sampled media outside its selected perspective.");
+            var keyedRotation = Render(.25f, true, rotation: quarterTurn.SamplingRotation(), brightness: .5f);
+            if (Alpha(keyedRotation,12,3) != 0 || Math.Abs(Alpha(keyedRotation,3,3)-64)>1 || Math.Abs(keyedRotation[At(3,3,0)]-32)>1)
+                throw new Exception("Rotation changed chroma key, fade alpha or brightness.");
+            var fixedPoints = Render(1, false, new PointOptions { Enabled=true, TopLeft=new(.25,.25), TopRight=new(.75,.25), BottomLeft=new(.25,.75), BottomRight=new(.75,.75) }, rotation: quarterTurn.SamplingRotation());
+            if (Alpha(fixedPoints,1,1)!=0 || Alpha(fixedPoints,8,8)!=255)
+                throw new Exception("Media rotation changed screen clipping.");
+            Console.WriteLine("PASS GPU media rotation: clockwise quadrants, rectangular pixel proportions, fixed screen clipping, transparent corners, perspective bounds, brightness, key and fade.");
             byte[] imagePixels = [0, 0, 128, 128, 0, 0, 0, 0, 0, 0, 128, 128, 0, 0, 0, 0];
             using var imageSource = device.CreateTexture2D<byte>(imagePixels, Format.B8G8R8A8_UNorm, 2, 2, 1, 1, BindFlags.ShaderResource);
             using var imageView = device.CreateShaderResourceView(imageSource);
@@ -139,7 +170,7 @@ internal static class GpuShaderChecks
     [StructLayout(LayoutKind.Sequential)]
     private struct OverlayData
     {
-        public Vector4 Screen, Selection, Grid, Row0, Row1, Row2, Label;
+        public Vector4 Screen, Selection, Grid, Row0, Row1, Row2, Label, Join, Hint;
     }
     private static void Overlay(ID3D11Device device, ID3D11DeviceContext context, ID3D11VertexShader vs, Func<string, byte[]> shader)
     {
@@ -155,7 +186,7 @@ internal static class GpuShaderChecks
         context.VSSetShader(vs);
         context.PSSetShader(ps);
         context.PSSetConstantBuffer(0, constants);
-        byte[] Render(float opacity, float time, int flash = 0, float progress = -1, bool grid = false)
+        byte[] Render(float opacity, float time, int flash = 0, float progress = -1, bool grid = false, int join = -1)
         {
             Vector4[] points = [new(.15f, .15f, (flash & 1) != 0 ? 1 : 0, 0), new(.85f, .15f, (flash & 2) != 0 ? 1 : 0, 1),
                 new(.85f, .85f, (flash & 8) != 0 ? 1 : 0, 3), new(.15f, .85f, (flash & 4) != 0 ? 1 : 0, 2)];
@@ -163,7 +194,7 @@ internal static class GpuShaderChecks
                 ResourceOptionFlags.BufferStructured, structureByteStride: 16);
             using var pointsView = device.CreateShaderResourceView(vertices);
             context.PSSetShaderResource(1, pointsView);
-            var data = new OverlayData { Screen = new(w, h, time, opacity), Selection = new(0, flash, progress, 1), Label = new(0, 0, 0, 4) };
+            var data = new OverlayData { Screen = new(w, h, time, opacity), Selection = new(0, flash, progress, 1), Label = new(0, 0, 0, 4), Join = new(join,0,0,0) };
             if (grid)
             {
                 var inverse = VideoTransform.Inverse(new PointOptions { Enabled = true, TopLeft = new(.15, .15), TopRight = new(.85, .15), BottomLeft = new(.15, .85), BottomRight = new(.85, .85) });
@@ -206,6 +237,14 @@ internal static class GpuShaderChecks
         var later = Render(1, 2);
         if (image[At(104, 54, 3)] == later[At(104, 54, 3)] || image[At(320, 54, 3)] != later[At(320, 54, 3)])
             throw new Exception("Orbs did not pulse independently of the lines.");
+        var joinHint = Render(1, 1, join: 1);
+        if (joinHint[At(546,20,3)] < 180 || image[At(546,20,3)] > 10)
+            throw new Exception("J hint did not appear above the nearby target point.");
+        var joinLater = Render(1, 1.4f, join: 1);
+        if (joinHint[At(560,65,3)] == joinLater[At(560,65,3)] || joinHint[At(320,54,3)] != joinLater[At(320,54,3)])
+            throw new Exception("Join target halo did not pulse independently of the perimeter.");
+        if (Render(0,1,join:1).Any(v=>v!=0))throw new Exception("Join prompt remained visible outside editing mode.");
+        image = joinHint;
         // Composite the production shader's premultiplied result over a dark preview backdrop.
         for (int p = 0; p < image.Length; p += 4)
         {
@@ -225,6 +264,6 @@ internal static class GpuShaderChecks
         var path = System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory, "../../../../.tools/calibration-preview.png"));
         System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
         bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
-        Console.WriteLine("GPU calibration readback passed azure/red orbs, perimeter lines, independent pulse, fade-to-zero, and local save flash.");
+        Console.WriteLine("GPU calibration readback passed azure/red orbs, J target label and pulse, perimeter lines, independent pulse, fade-to-zero, and local save flash.");
     }
 }

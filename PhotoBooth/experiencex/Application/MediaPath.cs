@@ -24,12 +24,8 @@ public static class MediaPath
 
     public static string Resolve(string directory, string value, string? localApplicationData = null)
     {
-        if (string.IsNullOrWhiteSpace(value) || Path.IsPathRooted(value) || value.Contains(':'))
-            throw new ArgumentException("A local media filename is required.");
         var root = ResolveDirectory(directory, localApplicationData);
-        var path = Path.GetFullPath(Path.Combine(root, value));
-        if (!path.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Media must be inside its configured directory.");
+        var path = PhotoBooth.Media.MediaLibrary.Resolve(root, value);
         EnsureLocalPath(path);
         if (!File.Exists(path))
             throw new FileNotFoundException("Media file is unavailable.", path);

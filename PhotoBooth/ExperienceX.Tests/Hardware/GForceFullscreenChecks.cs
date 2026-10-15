@@ -76,8 +76,8 @@ internal static class GForceFullscreenChecks
                             {var pixel=bitmap.GetPixel(x,y);if(pixel.B>20||pixel.G>20)visible++;}
                             Check(visible>20,"G-Force colors are visible through Eye.mp4's keyed black source pixels");
                         }
-                        int black=0,total=0;for(int y=(int)(bounds.Height*.25);y<(int)(bounds.Height*.6);y+=8)for(int x=(int)(bounds.Width*.73);x<(int)(bounds.Width*.85);x+=8){var p=bitmap.GetPixel(x,y);if(p.R<3&&p.G<3&&p.B<3)black++;total++;}
-                        bitmap.Dispose();Check(black==total,"Mat is black on the actual desktop capture above G-Force");
+                        int colors=0;for(int y=(int)(bounds.Height*.25);y<(int)(bounds.Height*.6);y+=8)for(int x=(int)(bounds.Width*.73);x<(int)(bounds.Width*.85);x+=8){var p=bitmap.GetPixel(x,y);if(p.R>20||p.G>20||p.B>20)colors++;}
+                        bitmap.Dispose();Check(colors>20,"A mat above the display background reveals fullscreen G-Force");
                         SetWindowPos(fullscreen,(nint)(-1),0,0,0,0,0x13);
                         await Until(()=>Above(window.Handle,fullscreen),"Experience reasserts its position after G-Force is raised",4000);
                         await Task.Delay(1000);Capture("gforce-fullscreen-restacked.png").Dispose();

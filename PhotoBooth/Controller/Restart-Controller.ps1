@@ -98,8 +98,24 @@ try {
     }
 
     Write-Host 'Stopping the existing Controller instance...'
+    # WM_CLOSE now hides Controller in the notification area. Request its actual exit.
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SaftControllerLifetime {
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(IntPtr cls, string title);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern uint RegisterWindowMessage(string name);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+}
+'@
     foreach ($process in @(Get-Process -Name Controller -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session })) {
-        [void]$process.CloseMainWindow()
+        $receiver = [SaftControllerLifetime]::FindWindow([IntPtr]::Zero, 'HomeTechnologies.Configuration.Controller')
+        [uint32]$receiverProcess = 0
+        if ($receiver -ne [IntPtr]::Zero) { [void][SaftControllerLifetime]::GetWindowThreadProcessId($receiver, [ref]$receiverProcess) }
+        if ($receiverProcess -eq $process.Id) {
+            [void][SaftControllerLifetime]::PostMessage($receiver, [SaftControllerLifetime]::RegisterWindowMessage('HomeTechnologies.CloseApplication.v1'), [IntPtr]::Zero, [IntPtr]::Zero)
+        } else { [void]$process.CloseMainWindow() }
         if (!$process.WaitForExit(3000)) { Stop-Process -Id $process.Id -Force -ErrorAction Stop }
         if (!$process.WaitForExit(5000)) { throw "Controller process $($process.Id) did not exit. Copy cancelled." }
     }

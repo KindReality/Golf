@@ -3,13 +3,13 @@ namespace ExperienceX;
 internal readonly record struct PointHandle(IPointSurface Surface, int Index);
 
 // A drag owns immutable originals and a shared draft for every editable screen on its display.
-// Group membership is derived from exact coordinates, so it survives saving and restarting.
+// Edited coincident points form persistent groups. Initial display corners remain independent.
 internal sealed class PointSnapping
 {
     internal sealed record SnapUndo(Dictionary<IPointSurface, PointOptions> Drafts, HashSet<PointHandle> Moving,
         PointHandle[] Joined, double OffsetX, double OffsetY);
     private readonly Func<PointHandle, PointHandle, bool> _canJoin;
-    private readonly Dictionary<IPointSurface, bool> _polygons;
+    private readonly Dictionary<IPointSurface, bool> _masks;
     private readonly Dictionary<IPointSurface,bool> _rectangles;
     private readonly Dictionary<IPointSurface, string>? _types;
     private readonly Stack<SnapUndo> _snaps = new();
@@ -25,21 +25,26 @@ internal sealed class PointSnapping
     internal IEnumerable<PointHandle> Handles => Drafts.SelectMany(entry =>
         PointEditing.Points(entry.Value).Select((_, index) => new PointHandle(entry.Key, index)));
 
-    internal PointSnapping(Dictionary<IPointSurface, PointOptions> originals, Dictionary<IPointSurface, bool> polygons,
+    internal PointSnapping(Dictionary<IPointSurface, PointOptions> originals, Dictionary<IPointSurface, bool> masks,
         Func<PointHandle, PointHandle, bool> canJoin, Dictionary<IPointSurface,bool>? rectangles = null, Dictionary<IPointSurface, string>? types = null)
     {
         Originals = originals;
         Drafts = new(originals);
-        _polygons = polygons;
+        _masks = masks;
         _rectangles = rectangles ?? originals.Keys.ToDictionary(k=>k,_=>false);
         _canJoin = canJoin;
         _types = types;
     }
     internal ScreenPoint Position(PointHandle handle) => PointEditing.Points(Drafts[handle.Surface])[handle.Index];
+    private bool IsInitialPoint(PointHandle handle, ScreenPoint point) => Originals[handle.Surface].Vertices.Count == 2
+        ? (point.X == 0 || point.X == 1) && point.Y == .5
+        : (point.X == 0 || point.X == 1) && (point.Y == 0 || point.Y == 1) ||
+          (point.X == 1d / 3 || point.X == 2d / 3) && (point.Y == 1d / 3 || point.Y == 2d / 3);
     internal void Select(PointHandle handle)
     {
         var point = Position(handle);
-        Moving = Handles.Where(other => Position(other) == point && _canJoin(handle, other)).ToHashSet();
+        Moving = IsInitialPoint(handle, point) ? [] : Handles.Where(other => Position(other) == point &&
+            !IsInitialPoint(other, point) && _canJoin(handle, other)).ToHashSet();
         Moving.Add(handle);
         _snaps.Clear();
     }
@@ -50,13 +55,13 @@ internal sealed class PointSnapping
     }
     internal bool Current(ExperienceOptions options) => Originals.All(entry =>
         options.PointsFor(entry.Key.DisplayName, entry.Key.ScreenId) == entry.Value &&
-         Definition(options, entry.Key) is not null && (Definition(options, entry.Key)?.IsPolygon == true) == _polygons[entry.Key] &&
+         Definition(options, entry.Key) is not null && (Definition(options, entry.Key)?.IsMask == true) == _masks[entry.Key] &&
          (_types is null || _types[entry.Key] == Definition(options, entry.Key)?.Type) &&
          (Definition(options,entry.Key) is {IsLed:true,IsLedArray:false}) == _rectangles[entry.Key]);
     private static ScreenOptions? Definition(ExperienceOptions options, IPointSurface surface) =>
         options.ScreensFor(surface.DisplayName).FirstOrDefault(s => surface.ScreenId is null || s.Id == surface.ScreenId);
 
-    internal SnapUndo? Move(PointHandle selected, double x, double y, double percent, double offsetX, double offsetY, bool snap = true)
+    internal void Move(PointHandle selected, double x, double y)
     {
         if (!Moving.Contains(selected))
             Select(selected);
@@ -78,16 +83,22 @@ internal sealed class PointSnapping
             moved = Candidate(Moving, target);
         }
         Drafts = moved;
-        if (!snap || target == old)
+    }
+    private sealed record JoinProposal(PointHandle Target, PointHandle[] Joined, HashSet<PointHandle> Group, Dictionary<IPointSurface, PointOptions> Points);
+    private JoinProposal? FindJoin(PointHandle selected, double percent)
+    {
+        var target = Position(selected);
+        if (!Moving.Contains(selected) || IsInitialPoint(selected, target))
             return null;
         var radius = PointEditing.HitRadius(selected.Surface.PixelWidth, selected.Surface.PixelHeight, percent);
-        var candidates = Handles.Where(h => !Moving.Contains(h) && _canJoin(selected, h))
+        var candidates = Handles.Where(h => !Moving.Contains(h) && !IsInitialPoint(h, Position(h)) && _canJoin(selected, h))
             .Select(h => (Handle: h, Distance: Distance(target, Position(h), selected.Surface)))
             .Where(h => h.Distance <= radius * radius).OrderBy(h => h.Distance).ToArray();
         foreach (var candidate in candidates)
         {
             var destination = Position(candidate.Handle);
-            var joined = Handles.Where(h => !Moving.Contains(h) && Position(h) == destination && Moving.All(m => _canJoin(m, h))).ToArray();
+            var joined = Handles.Where(h => !Moving.Contains(h) && !IsInitialPoint(h, Position(h)) &&
+                Position(h) == destination && Moving.All(m => _canJoin(m, h))).ToArray();
             if (joined.Length == 0)
                 continue;
             var group = Moving.Concat(joined).ToHashSet();
@@ -95,13 +106,18 @@ internal sealed class PointSnapping
             // Never collapse a screen or partially snap a linked group.
             if (!Valid(snapped))
                 continue;
-            var undo = new SnapUndo(new(Drafts), new(Moving), joined, offsetX, offsetY);
-            _snaps.Push(undo);
-            Moving = group;
-            Drafts = snapped;
-            return undo;
+            return new(candidate.Handle, joined, group, snapped);
         }
         return null;
+    }
+    internal PointHandle? JoinTarget(PointHandle selected, double percent) => FindJoin(selected, percent)?.Target;
+    internal SnapUndo? Join(PointHandle selected, double percent, double offsetX, double offsetY)
+    {
+        var proposal = FindJoin(selected, percent);
+        if (proposal is null) return null;
+        var undo = new SnapUndo(new(Drafts), new(Moving), proposal.Joined, offsetX, offsetY);
+        _snaps.Push(undo); Moving = proposal.Group; Drafts = proposal.Points;
+        return undo;
     }
     internal SnapUndo? UndoSnap()
     {
@@ -117,7 +133,9 @@ internal sealed class PointSnapping
         var shape = Originals[owner];
         var endpoints = new[] { edge, (edge + 1) % shape.Vertices.Count };
         var anchors = endpoints.Select(index => new PointHandle(owner, PointEditing.BoundaryIndex(shape, index))).ToArray();
-        Moving = anchors.SelectMany(anchor => Handles.Where(other =>
+        Moving = anchors.SelectMany(anchor => Handles.Where(other => other == anchor ||
+            !IsInitialPoint(anchor, PointEditing.Points(shape)[anchor.Index]) &&
+            !IsInitialPoint(other, PointEditing.Points(Originals[other.Surface])[other.Index]) &&
             PointEditing.Points(Originals[other.Surface])[other.Index] == PointEditing.Points(shape)[anchor.Index] && _canJoin(anchor, other))).ToHashSet();
         if (_rectangles[owner])
         {
@@ -215,7 +233,7 @@ internal sealed class PointSnapping
                     LedGeometry.Validate(entry.Value,false);
                 else if (entry.Value.Vertices.Count == 2)
                     LedGeometry.Validate(entry.Value,true);
-                else if (_polygons[entry.Key])
+                else if (_masks[entry.Key])
                     entry.Value.ValidatePolygon();
                 else
                     entry.Value.Validate();

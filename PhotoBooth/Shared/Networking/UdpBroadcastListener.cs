@@ -31,7 +31,7 @@ internal sealed class UdpBroadcastListener(Func<BroadcastOptions> options,
         _loops.RemoveAll(task => task.IsCompleted);
         _loops.Add(ListenAsync(commands, "command"));
         _loops.Add(ListenAsync(events, "event"));
-        Telemetry.Info("UdpListening", new { Address = "0.0.0.0", CommandsPort = Port, EventsPort, DeviceName = options().EffectiveDeviceName, Broadcast = true });
+        Telemetry.Info("UdpListening", new { Address = LocalTestNetwork.ListenAddress.ToString(), CommandsPort = Port, EventsPort, DeviceName = options().EffectiveDeviceName, Broadcast = LocalTestNetwork.Address is null });
     }
 
     public void Bind(int port)
@@ -44,7 +44,7 @@ internal sealed class UdpBroadcastListener(Func<BroadcastOptions> options,
         _binding = replacement;
         _loops.RemoveAll(task => task.IsCompleted);
         _loops.Add(ListenAsync(replacement));
-        Telemetry.Info("UdpListening", new { Address = "0.0.0.0", Port, DeviceName = options().EffectiveDeviceName, Broadcast = true });
+        Telemetry.Info("UdpListening", new { Address = LocalTestNetwork.ListenAddress.ToString(), Port, DeviceName = options().EffectiveDeviceName, Broadcast = LocalTestNetwork.Address is null });
     }
 
     private async Task ListenAsync(Binding binding, string? expectedType = null)
@@ -119,7 +119,7 @@ internal sealed class UdpBroadcastListener(Func<BroadcastOptions> options,
                 // Cooperating applications on the same PC each receive broadcast datagrams.
                 Client.ExclusiveAddressUse = false;
                 Client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                Client.Client.Bind(new IPEndPoint(IPAddress.Any, port));
+                Client.Client.Bind(new IPEndPoint(LocalTestNetwork.ListenAddress, port));
             }
             catch { Client.Dispose(); Cancellation.Dispose(); throw; }
         }

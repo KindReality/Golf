@@ -42,7 +42,7 @@ internal static class MatChecks
                 root["DisplayScreens"]!["TEST"]![0]!["Keystone"] is null && root["DisplayScreens"]!["TEST"]![0]!["Points"]!["Vertices"]!.AsArray().Count == 4,
                 "Existing video coordinates were lost or kept obsolete point names during migration.");
             var mat = await store.AddScreenAsync("TEST", type: "mat");
-            Check(mat.IsMat && !mat.IsNegative && mat.Points == new PointOptions(), "New mat did not fill the display in normal mode.");
+            Check(mat.IsMat && !mat.IsNegative && mat.Points == ScreenOptions.CenteredPoints(), "New mat was not centered at one-third size in normal mode.");
             await store.SaveAsync("TEST", mat.Points, concave, mat.Id);
             options = ExperienceOptions.Parse(store.EnsureDisplays(["TEST"]));
             Check(options.PointsFor("TEST", mat.Id) == concave && JsonNode.Parse(File.ReadAllText(path))!["Custom"]!.GetValue<int>() == 23, "Mat persistence/startup lost added points or unrelated settings.");

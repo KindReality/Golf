@@ -57,7 +57,8 @@ internal static class LivePlayback
 
     private static bool ValidateMedia(string filename, int volume)
     {
-        if (string.IsNullOrWhiteSpace(filename) || filename != Path.GetFileName(filename) || filename.IndexOfAny(['/', '\\', ':']) >= 0 || volume is < 0 or > 100)
+        PhotoBooth.Media.MediaLibrary.Normalize(filename);
+        if (volume is < 0 or > 100)
             throw new ArgumentException("Invalid Live playback request.");
         var video = Videos.Contains(Path.GetExtension(filename));
         if (!video && !Audio.Contains(Path.GetExtension(filename))) throw new ArgumentException("Choose a video or audio file.");

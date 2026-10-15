@@ -2,6 +2,14 @@ namespace ExperienceX;
 
 internal static class PointEditing
 {
+    internal static PointOptions Insert(PointOptions shape, int edge, ScreenPoint point, bool video = false)
+    {
+        if (edge < 0 || edge >= shape.Vertices.Count) throw new ArgumentOutOfRangeException(nameof(edge));
+        var vertices = shape.Vertices.ToList();
+        vertices.Insert(edge + 1, point);
+        var corners = video ? (shape.MappingCornerIndices ?? new[] { 0, 1, 2, 3 }).Select(i => i > edge ? i + 1 : i).ToArray() : shape.MappingCornerIndices;
+        return shape with { Enabled=true, Vertices=vertices, MappingCornerIndices=corners };
+    }
     // Interaction order deliberately differs from polygon winding: UL, UR, BL, BR.
     public static ScreenPoint[] Points(PointOptions k) => k.Vertices.Count == 4 ? [k.TopLeft, k.TopRight, k.BottomLeft, k.BottomRight] : k.Vertices.ToArray();
     public static int BoundaryIndex(PointOptions k, int index) => k.Vertices.Count == 4 ? (index == 2 ? 3 : index == 3 ? 2 : index) : index;

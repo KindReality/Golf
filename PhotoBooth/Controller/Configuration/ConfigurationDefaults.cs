@@ -8,6 +8,7 @@ internal static class ConfigurationDefaults
         var options = ControllerOptions.Parse(text, build);
         var root = JsonNode.Parse(text)!.AsObject();
         var changed = false;
+        if (!root.Any(p => ControllerOptions.Same(p.Key, "ExperienceSupervisionEnabled"))) { root["ExperienceSupervisionEnabled"] = true; changed = true; }
         var existingPlaylists = root.FirstOrDefault(entry => ControllerOptions.Same(entry.Key, "Playlists")).Value as JsonArray;
         if (existingPlaylists is not null)
             foreach (var playlist in existingPlaylists.OfType<JsonObject>())

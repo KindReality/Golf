@@ -257,6 +257,37 @@ internal sealed class PointConfigurationStore(string path)
         return true;
     }), cancellation);
 
+    public Task ResetVideoAsync(string display, ScreenOptions expected, CancellationToken cancellation = default) => Task.Run(() => Update(root =>
+    {
+        cancellation.ThrowIfCancellationRequested();
+        var current = ExperienceOptions.Parse(root.ToJsonString());
+        var screen = current.ScreensFor(display).FirstOrDefault(s => s.Id == expected.Id);
+        if (!current.ConfigurationMode || screen is null || !screen.IsVideo || screen.Points != expected.Points ||
+            screen.Framing != expected.Framing || screen.Perspective != expected.Perspective ||
+            screen.Brightness != expected.Brightness || screen.BlackKey != expected.BlackKey)
+            throw new PointEditConflictException();
+        var entry = ScreenEntry(root, display, screen.Id);
+        entry["Framing"] = JsonSerializer.SerializeToNode(new VideoFramingOptions());
+        entry["Brightness"] = 100;
+        entry.Remove("Perspective");
+        entry.Remove("BlackKey"); // Restore the application's chroma-key defaults.
+        return true;
+    }), cancellation);
+
+    public Task SaveVideoFramingAsync(string display, ScreenOptions expected, VideoFramingOptions framing, CancellationToken cancellation = default) => Task.Run(() => Update(root =>
+    {
+        cancellation.ThrowIfCancellationRequested();
+        framing.Validate();
+        var current = ExperienceOptions.Parse(root.ToJsonString());
+        var screen = current.ScreensFor(display).FirstOrDefault(s => s.Id == expected.Id);
+        if (!current.ConfigurationMode || screen is null || !screen.IsVideo || screen.Framing != expected.Framing ||
+            screen.Points != expected.Points || screen.Perspective != expected.Perspective)
+            throw new PointEditConflictException();
+        if (screen.Framing == framing) return false;
+        ScreenEntry(root, display, screen.Id)["Framing"] = JsonSerializer.SerializeToNode(framing);
+        return true;
+    }), cancellation);
+
     public Task<string> ToggleMatNegativeAsync(string display, string screenId, CancellationToken cancellation = default) => Task.Run(() => Update(root =>
     {
         cancellation.ThrowIfCancellationRequested();
@@ -299,18 +330,14 @@ internal sealed class PointConfigurationStore(string path)
             var screen = current.ScreensFor(display).FirstOrDefault(s => change.ScreenId is null || s.Id == change.ScreenId);
             if (screen is null || !ids.Add(screen.Id) || screen.Points != change.Before)
                 throw new PointEditConflictException();
-            if (screen.IsLed)
-                LedGeometry.Validate(change.After, screen.IsLedArray);
-            else if (screen.IsPolygon)
-                change.After.ValidatePolygon();
-            else
-                change.After.Validate();
+            screen.ValidatePoints(change.After);
         }
         foreach (var change in changes)
         {
             var entry = ScreenEntry(root, display, change.ScreenId);
             var existing = entry["Points"] as JsonObject ?? new JsonObject();
             entry["Points"] = existing;
+            if (change.After.MappingCornerIndices is null) existing.Remove(nameof(PointOptions.MappingCornerIndices));
             foreach (var field in JsonSerializer.SerializeToNode(change.After)!.AsObject())
                 existing[field.Key] = field.Value?.DeepClone();
         }
@@ -354,6 +381,28 @@ internal sealed class PointConfigurationStore(string path)
                 added = added with { Points = LedGeometry.Initial(perspective.Type == "pixelArray") };
             }
             screens.Insert(ScreenOptions.InsertionIndex(current.ScreensFor(display), added), JsonSerializer.SerializeToNode(added));
+            return true;
+        });
+        return added!;
+    }, cancellation);
+    internal Task<ScreenOptions> PasteScreenAsync(string display, ScreenCopy copy, CancellationToken cancellation = default) => Task.Run(() =>
+    {
+        copy.Validate();
+        ScreenOptions? added = null;
+        Update(root =>
+        {
+            cancellation.ThrowIfCancellationRequested();
+            var current = ExperienceOptions.Parse(root.ToJsonString());
+            if (!current.ConfigurationMode || root["DisplayScreens"] is not JsonObject displays || displays[display] is not JsonArray screens)
+                throw new PointEditConflictException();
+            var existing = current.ScreensFor(display);
+            added = copy.Screen with
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Name = ScreenOptions.AvailableMediaName(copy.Screen.Name, existing),
+                DefaultName = ScreenOptions.AvailableDefaultName(existing)
+            };
+            screens.Insert(ScreenOptions.InsertionIndex(existing, added), JsonSerializer.SerializeToNode(added));
             return true;
         });
         return added!;
@@ -420,6 +469,18 @@ internal sealed class PointConfigurationStore(string path)
         perspective?.Validate();
         ScreenEntry(root, display, id)["Perspective"] = JsonSerializer.SerializeToNode(perspective);
         return screen.Perspective != perspective;
+    }));
+    public Task SelectMediaAsync(string display, ScreenOptions expected, string mediaFile) => Task.Run(() => Update(root =>
+    {
+        ScreenOptions.ValidateMediaFile(mediaFile);
+        var current = ExperienceOptions.Parse(root.ToJsonString());
+        var screen = current.ScreensFor(display).FirstOrDefault(s=>s.Id==expected.Id);
+        if (!current.ConfigurationMode || screen?.IsVideo!=true || screen.MediaFile!=expected.MediaFile || screen.Name!=expected.Name)
+            throw new PointEditConflictException();
+        var normalized=PhotoBooth.Media.MediaLibrary.Normalize(mediaFile,allowRoot:true);
+        if (screen.MediaFile==normalized) return false;
+        ScreenEntry(root,display,screen.Id)["MediaFile"]=normalized;
+        return true;
     }));
     public Task RenameScreenAsync(string display, string id, string expected, string name, string? mediaFile = null) => Task.Run(() => Update(root =>
     {

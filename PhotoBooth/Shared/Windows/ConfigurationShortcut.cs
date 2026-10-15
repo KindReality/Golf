@@ -9,15 +9,17 @@ internal sealed class ConfigurationShortcut : Forms.NativeWindow, IDisposable
     private const int HotkeyId = 0x5343;
     private readonly uint _enable = RegisterWindowMessage("HomeTechnologies.EnableConfiguration.v1");
     private readonly uint _focus = RegisterWindowMessage("HomeTechnologies.FocusApplication.v1");
+    private readonly uint _close = RegisterWindowMessage("HomeTechnologies.CloseApplication.v1");
     private readonly Func<bool> _configured;
     private readonly Action<bool>? _stateReceived;
     private readonly Action? _focusReceived;
+    private readonly Action? _closeReceived;
     private readonly Forms.Timer _retry = new() { Interval = 1000 };
     private bool _registered, _disposed;
     internal bool OwnsShortcut => _registered && !_disposed;
-    public ConfigurationShortcut(string application, Func<bool> configured, Action<bool> received, Action focus)
+    public ConfigurationShortcut(string application, Func<bool> configured, Action<bool> received, Action focus, Action? close = null)
     {
-        _configured = configured; _stateReceived = received; _focusReceived = focus;
+        _configured = configured; _stateReceived = received; _focusReceived = focus; _closeReceived = close;
         CreateHandle(new Forms.CreateParams { Caption = "HomeTechnologies.Configuration." + application });
         _retry.Tick += (_, _) => TryRegister();
         TryRegister(); _retry.Start();
@@ -25,7 +27,7 @@ internal sealed class ConfigurationShortcut : Forms.NativeWindow, IDisposable
     public void ToggleBoth() => SetBoth(!_configured());
     public void SetBoth(bool enabled)
     {
-        if (enabled) Grant("Controller");
+        if (enabled && Grant("Experience") == 0) Grant("Controller");
         PostMessage(new nint(0xffff), _enable, enabled ? 1 : 2, 0);
     }
     private static nint Grant(string application)
@@ -39,8 +41,14 @@ internal sealed class ConfigurationShortcut : Forms.NativeWindow, IDisposable
         var target = Grant(application);
         return target != 0 && PostMessage(target, _focus, 0, 0);
     }
-    private void TryRegister() { if (!_disposed && !_registered) _registered = RegisterHotKey(Handle, HotkeyId, 0x4007, 0x43); }
+    public static bool RequestClose(string application)
+    {
+        var target = FindWindow(null, "HomeTechnologies.Configuration." + application);
+        return target != 0 && PostMessage(target, RegisterWindowMessage("HomeTechnologies.CloseApplication.v1"), 0, 0);
+    }
+    private void TryRegister() { if (!_disposed && !_registered) _registered = RegisterHotKey(Handle, HotkeyId, 0x4006, 0x43); }
     public static bool ControllerRunning => FindWindow(null, "HomeTechnologies.Configuration.Controller") != 0;
+    public static bool ExperienceRunning => FindWindow(null, "HomeTechnologies.Configuration.Experience") != 0;
     public static bool ControllerFocused
     {
         get
@@ -59,9 +67,15 @@ internal sealed class ConfigurationShortcut : Forms.NativeWindow, IDisposable
     public static uint ForegroundProcessId { get { GetWindowThreadProcessId(GetForegroundWindow(),out var pid);return pid; } }
     protected override void WndProc(ref Forms.Message m)
     {
-        if (!_disposed && m.Msg == 0x312 && m.WParam == HotkeyId) { ToggleBoth(); return; }
+        if (!_disposed && m.Msg == 0x312 && m.WParam == HotkeyId)
+        {
+            var chord=m.LParam.ToInt64();
+            if (_registered && (chord & 0xffff)==6 && ((chord>>16)&0xffff)==0x43) ToggleBoth();
+            return;
+        }
         if (!_disposed && (uint)m.Msg == _enable) { _stateReceived?.Invoke(m.WParam != 2); return; }
         if (!_disposed && (uint)m.Msg == _focus) { _focusReceived?.Invoke(); return; }
+        if (!_disposed && (uint)m.Msg == _close) { _closeReceived?.Invoke(); return; }
         base.WndProc(ref m);
     }
     public void Dispose()

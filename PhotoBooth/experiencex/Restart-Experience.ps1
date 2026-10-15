@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$SourceDirectory, [switch]$ValidateOnly, [switch]$AutomaticUpdate)
+param([Parameter(Mandatory = $true)][string]$SourceDirectory, [switch]$ValidateOnly, [switch]$AutomaticUpdate, [switch]$StartIfNotRunning)
 
 # Runs with inbox Windows PowerShell 5.1; PowerShell 7 is not required on the target PC.
 $ErrorActionPreference = 'Stop'
@@ -85,7 +85,12 @@ try {
         if ($_.Exception -is [Threading.AbandonedMutexException] -or $_.Exception.InnerException -is [Threading.AbandonedMutexException]) { $ownsMutex = $true }
         else { throw }
     }
-    if (!$ownsMutex) { throw 'Another Experience restart is already in progress. Wait for it to finish.' }
+    if (!$ownsMutex) {
+        if ($StartIfNotRunning) { exit 0 }
+        throw 'Another Experience restart is already in progress. Wait for it to finish.'
+    }
+    # A watchdog must never replace an instance that appeared while it was launching.
+    if ($StartIfNotRunning -and @(Get-Process -Name ExperienceX -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session }).Count -gt 0) { exit 0 }
 
     if ($AutomaticUpdate) {
         . (Join-Path $PSScriptRoot 'Stage-ApplicationUpdate.ps1')
