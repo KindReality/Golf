@@ -11,8 +11,6 @@ internal sealed class ControlWindow : Form
 {
     private readonly string _path;
     private readonly Icon _applicationIcon;
-    private readonly NotifyIcon _notification;
-    private readonly ContextMenuStrip _notificationMenu = new();
     private readonly string? _templateDirectory;
     private readonly Label _identity = new() { AutoSize = true, Text = "Starting Controller…", Dock = DockStyle.Fill };
     private readonly ComboBox _playlists = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 250 };
@@ -28,23 +26,26 @@ internal sealed class ControlWindow : Form
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 250 };
     private ControllerHost? _host;
     private readonly PhotoBooth.Windows.ConfigurationShortcut _configurationShortcut;
-    private Button _configurationButton = null!, _editorButton = null!;
+    private ToolbarIconButton _configurationButton = null!, _backButton = null!;
+    private Button _editorButton = null!;
     private PerspectiveEditor? _editor;
     private LivePage? _live;
+    private ShowEditorPage? _showEditor;
+    private Button _showButton = null!;
     private LedPerspectiveEditor? _ledEditor;
     private readonly Panel _pages = new() { Dock = DockStyle.Fill };
     private Control _dashboard = null!;
-    private Button _liveButton = null!, _backButton = null!;
-    private readonly Button _restartButton = new() { Text = "Restart", AutoSize = true, Enabled = false };
-    private readonly Button _shutdownButton = new() { Text = "Shutdown", AutoSize = true, Enabled = false };
+    private Button _liveButton = null!;
+    private PowerToolbarButton _powerButton = null!;
+    private readonly ToolTip _toolbarTips = new();
     private PhotoBooth.Updates.BuildUpdateMonitor? _updates;
     private ExperienceProcessMonitor? _experience;
     private ActivityEntry? _latest;
     private bool _closing, _closed;
-    private bool _allowExit, _shutdownBoth, _hiddenToTray, _usePrimaryDisplay, _restarting;
+    private bool _allowExit, _shutdownBoth, _restarting;
     private long _nextDisplayCheck;
     private string? _displayTarget, _unavailableDisplay;
-    private (string Name, Rectangle WorkingArea)? _displayPlacement;
+    private (string Name, Rectangle Bounds)? _displayPlacement;
 
     public ControlWindow(string path, string? templateDirectory = null)
     {
@@ -55,12 +56,7 @@ internal sealed class ControlWindow : Form
             ?? throw new InvalidOperationException("The Controller icon is missing."))
             _applicationIcon = new Icon(icon);
         Icon = _applicationIcon;
-        _notification = new NotifyIcon { Icon = _applicationIcon, Text = "Home Technologies • Controller", ContextMenuStrip = _notificationMenu, Visible = true };
-        _notification.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) RestoreFromNotification(); };
-        _notificationMenu.Items.Add("Show Controller", null, (_, _) => RestoreFromNotification());
-        _notificationMenu.Items.Add("Restart", null, (_, _) => RestartController());
-        _notificationMenu.Items.Add("Shutdown", null, (_, _) => ShutdownBoth());
-        _notificationMenu.Items[1].Enabled = _notificationMenu.Items[2].Enabled = false;
+        ShowInTaskbar = true;
         Text = "Home Technologies • Controller";
         TopMost = true;
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -70,6 +66,7 @@ internal sealed class ControlWindow : Form
         ClientSize = new Size(1060, 760);
         MinimumSize = new Size(980, 660);
         StartPosition = FormStartPosition.Manual;
+        FormBorderStyle = FormBorderStyle.None;
         WindowState = FormWindowState.Normal;
         // Keep startup invisible until the configured display has been resolved.
         Opacity = 0;
@@ -90,23 +87,30 @@ internal sealed class ControlWindow : Form
         layout.RowStyles.Add(new(SizeType.Absolute, 152));
         layout.RowStyles.Add(new(SizeType.Percent, 100));
         layout.RowStyles.Add(new(SizeType.Absolute, 30));
-        var configuration = _configurationButton = new Button { Text = "Configuration mode", AutoSize = true };
-        DarkTheme.Button(configuration);
+        var configuration = _configurationButton = new ToolbarIconButton(ToolbarGlyph.Configure, "Enter configuration mode");
         configuration.Click += (_, _) => _configurationShortcut.SetBoth(_host?.Options.ConfigurationMode != true);
         var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Margin = Padding.Empty, Padding = new Padding(24, 8, 24, 0) };
         header.ColumnStyles.Add(new(SizeType.Percent, 100)); header.ColumnStyles.Add(new(SizeType.Absolute, 190));
-        header.RowStyles.Add(new(SizeType.Absolute, 46)); header.RowStyles.Add(new(SizeType.Absolute, 22)); header.RowStyles.Add(new(SizeType.Absolute, 44));
+        header.RowStyles.Add(new(SizeType.Absolute, 46)); header.RowStyles.Add(new(SizeType.Absolute, 22)); header.RowStyles.Add(new(SizeType.Absolute, 48));
         header.Controls.Add(new Label { Text = "Controller", Font = new Font("Segoe UI", 25, FontStyle.Bold), Dock = DockStyle.Fill, AutoSize = true, Margin = Padding.Empty }, 0, 0);
         header.Controls.Add(_connectionStatus, 1, 0);
         header.Controls.Add(_identity, 0, 1);
-        var navigation = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true, FlowDirection = FlowDirection.RightToLeft };
-        _editorButton = new Button { Text = "Perspectives", AutoSize = true, Enabled = false };
-        _liveButton = new Button { Text = "Live", AutoSize = true, Enabled = false };
-        _backButton = new Button { Text = "← Dashboard", AutoSize = true, Visible = false };
-        foreach (var button in new[] { _shutdownButton, _restartButton, configuration, _editorButton, _liveButton, _backButton }) { DarkTheme.Button(button); navigation.Controls.Add(button); }
-        _restartButton.Click += (_, _) => RestartController();
-        _shutdownButton.Click += (_, _) => ShutdownBoth();
+        var navigation = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = false, FlowDirection = FlowDirection.RightToLeft };
+        Button PageButton(string text)
+        {
+            var button = new Button { Text = text, AutoSize = false, Size = new(140, 40), Margin = new(3, 2, 3, 2), Enabled = false };
+            DarkTheme.Button(button); return button;
+        }
+        _editorButton = PageButton("Perspectives"); _liveButton = PageButton("Live"); _showButton = PageButton("Scenes");
+        _backButton = new(ToolbarGlyph.Return, "Return to dashboard") { Visible = false };
+        var hide = new ToolbarIconButton(ToolbarGlyph.Minimize, "Minimize Controller"); hide.Click += (_, _) => Close();
+        _powerButton = new(RestartBoth, ShutdownBoth);
+        navigation.Controls.AddRange([_powerButton, hide, configuration, _editorButton, _showButton, _liveButton, _backButton]);
+        _toolbarTips.SetToolTip(hide, "Minimize Controller to the taskbar");
+        _toolbarTips.SetToolTip(_backButton, "Return to dashboard");
+        _toolbarTips.SetToolTip(configuration, "Enter configuration mode (Ctrl+Shift+C)");
         _editorButton.Click += (_, _) => OpenPerspectives(); _liveButton.Click += (_, _) => OpenLive(); _backButton.Click += (_, _) => ShowDashboard();
+        _showButton.Click += (_, _) => OpenScenes();
         header.Controls.Add(navigation, 1, 2);
         header.SetColumnSpan(navigation, 2); header.SetColumn(navigation, 0);
         layout.RowStyles[0].Height = 0;
@@ -122,7 +126,7 @@ internal sealed class ControlWindow : Form
         layout.Controls.Add(footer, 0, 3); layout.SetColumnSpan(footer, 2);
         _dashboard = layout; _pages.Controls.Add(layout);
         var shell = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = Padding.Empty };
-        shell.RowStyles.Add(new(SizeType.Absolute, 124)); shell.RowStyles.Add(new(SizeType.Percent, 100));
+        shell.RowStyles.Add(new(SizeType.Absolute, 128)); shell.RowStyles.Add(new(SizeType.Percent, 100));
         shell.Controls.Add(header, 0, 0); shell.Controls.Add(_pages, 0, 1); Controls.Add(shell);
         _run.Click += (_, _) =>
         {
@@ -207,13 +211,18 @@ internal sealed class ControlWindow : Form
     {
         if (_host is null || _closing) return;
         var options = _host.Options;
-        _configurationButton.Text = options.ConfigurationMode ? "Exit configuration" : "Configuration mode";
-        _restartButton.Enabled = _updates is not null && !_restarting;
-        _shutdownButton.Enabled = !_restarting;
-        _notificationMenu.Items[1].Enabled = _restartButton.Enabled;
-        _notificationMenu.Items[2].Enabled = _shutdownButton.Enabled;
+        var configurationGlyph = options.ConfigurationMode ? ToolbarGlyph.Play : ToolbarGlyph.Configure;
+        if (_configurationButton.Glyph != configurationGlyph)
+        {
+            _configurationButton.Glyph = configurationGlyph;
+            _configurationButton.AccessibleName = options.ConfigurationMode ? "Exit configuration mode" : "Enter configuration mode";
+            _toolbarTips.SetToolTip(_configurationButton, _configurationButton.AccessibleName + " (Ctrl+Shift+C)");
+        }
+        _powerButton.RestartEnabled = _updates is not null && !_restarting;
+        _powerButton.ShutdownEnabled = !_restarting;
         _editorButton.Enabled = options.ConfigurationMode; _liveButton.Enabled = true;
-        if (!options.ConfigurationMode && _editor is not null) ShowDashboard();
+        _showButton.Enabled = options.ConfigurationMode;
+        if (!options.ConfigurationMode && (_editor is not null || _showEditor?.Visible == true)) ShowDashboard();
         ApplyDisplayPlacement(options);
         _connectionStatus.Text = "●  NETWORK ACTIVE";
         _identity.Text = $"{options.EffectiveDeviceName} • {options.Build.Environment} • Events {options.UdpEventsPort} • Commands {options.UdpCommandsPort}";
@@ -265,25 +274,24 @@ internal sealed class ControlWindow : Form
     private void ApplyDisplayPlacement(ControllerOptions options)
     {
         var target = ControllerDisplaySelection.Target(options);
-        if (!string.Equals(_displayTarget, target, StringComparison.OrdinalIgnoreCase)) _usePrimaryDisplay = false;
         var now = Environment.TickCount64;
         if (string.Equals(_displayTarget, target, StringComparison.OrdinalIgnoreCase) && now < _nextDisplayCheck) return;
         _displayTarget = target;
         _nextDisplayCheck = now + 1000;
         var displays = Screen.AllScreens;
-        var selectedName = _usePrimaryDisplay ? Screen.PrimaryScreen?.DeviceName : ControllerDisplaySelection.Select(options, displays.Select(display => display.DeviceName).ToArray(), Screen.PrimaryScreen?.DeviceName);
+        var selectedName = ControllerDisplaySelection.Select(options, displays.Select(display => display.DeviceName).ToArray(), Screen.PrimaryScreen?.DeviceName);
         var selected = displays.FirstOrDefault(display => display.DeviceName == selectedName);
         if (selected is null) return;
         var missing = target is not null && !displays.Any(display => string.Equals(display.DeviceName, target, StringComparison.OrdinalIgnoreCase));
         if (missing && !string.Equals(_unavailableDisplay, target, StringComparison.OrdinalIgnoreCase))
             _host!.Log.Warning("ControllerDisplayUnavailable", $"Display {target} unavailable; using {selected.DeviceName}", new { RequestedDisplay = options.DefaultDisplayName, ResolvedDisplay = target, FallbackDisplay = selected.DeviceName });
         _unavailableDisplay = missing ? target : null;
-        var placement = (selected.DeviceName, selected.WorkingArea);
+        var placement = (selected.DeviceName, selected.Bounds);
         if (_displayPlacement == placement) return;
         _displayPlacement = placement;
         WindowState = FormWindowState.Normal;
-        MinimumSize = new Size(Math.Min(980, selected.WorkingArea.Width), Math.Min(660, selected.WorkingArea.Height));
-        Bounds = selected.WorkingArea;
+        MinimumSize = new Size(Math.Min(980, selected.Bounds.Width), Math.Min(660, selected.Bounds.Height));
+        Bounds = selected.Bounds;
         _host!.Log.Info("ControllerWindowPositioned", $"Controller window on {selected.DeviceName}", new { RequestedDisplay = options.DefaultDisplayName, Display = selected.DeviceName, Bounds = new { Left, Top, Width, Height }, WindowState = WindowState.ToString() });
     }
 
@@ -293,15 +301,14 @@ internal sealed class ControlWindow : Form
         e.Cancel = true;
         if (!_allowExit && e.CloseReason is CloseReason.UserClosing or CloseReason.TaskManagerClosing)
         {
-            _hiddenToTray = true; Hide();
-            _host?.Log.Info("ControllerHiddenToNotificationArea", "Controller continues running in the notification area");
+            WindowState = FormWindowState.Minimized;
+            _host?.Log.Info("ControllerMinimized", "Controller continues running in the taskbar");
             return;
         }
         if (_closing) return;
         _closing = true;
         _run.Enabled = _cancel.Enabled = _activate.Enabled = false;
-        _restartButton.Enabled = _shutdownButton.Enabled = false;
-        _notification.Visible = false;
+        _powerButton.RestartEnabled = _powerButton.ShutdownEnabled = false;
         _refresh.Stop();
         if (_host is null) return; // Startup owns the eventual close if it is still in progress.
         try
@@ -316,22 +323,22 @@ internal sealed class ControlWindow : Form
         Close();
     }
 
-    internal void RestoreFromNotification()
+    internal void RestoreFromTaskbar()
     {
         if (_closing || _closed) return;
-        _hiddenToTray = false; _usePrimaryDisplay = true;
-        if (_host is not null) _displayTarget = ControllerDisplaySelection.Target(_host.Options);
         Show(); WindowState = FormWindowState.Normal;
         _displayPlacement = null; _nextDisplayCheck = 0;
         if (_host is not null) ApplyDisplayPlacement(_host.Options);
-        else if (Screen.PrimaryScreen is { } display) Bounds = display.WorkingArea;
+        else if (Screen.PrimaryScreen is { } display) Bounds = display.Bounds;
         Activate(); Focus();
-        _host?.Log.Info("ControllerRestoredFromNotificationArea", "Controller restored on the primary display");
+        _host?.Log.Info("ControllerRestored", "Controller restored from the taskbar");
     }
-    private void RestartController()
+    private void RestartBoth()
     {
         if (_closing || _restarting || _updates is null) return;
-        _restarting = true; RefreshState(); _updates.RequestRestart();
+        _restarting = true; RefreshState();
+        _host?.Log.Info("ApplicationsRestartRequested", "Restarting Controller and Experience on this computer");
+        _updates.RequestRestart(restartExperience: true);
     }
     internal void ShutdownBoth()
     {
@@ -368,8 +375,7 @@ internal sealed class ControlWindow : Form
     private void FocusEditor()
     {
         if (_closing) return;
-        if (_hiddenToTray) { RestoreFromNotification(); return; }
-        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        if (WindowState == FormWindowState.Minimized) { RestoreFromTaskbar(); return; }
         Activate(); Focus();
     }
     private void CloseEditors()
@@ -379,18 +385,25 @@ internal sealed class ControlWindow : Form
         editor?.Close(); editor?.Dispose();
     }
     internal void ShowDashboard()
-    { CloseEditors(); if (_live is not null) _live.Hide(); _dashboard.Show(); _dashboard.BringToFront(); _backButton.Visible = false; }
+    { CloseEditors(); _showEditor?.Hide(); if (_live is not null) _live.Hide(); _dashboard.Show(); _dashboard.BringToFront(); _backButton.Visible = false; }
+    internal void OpenScenes()
+    {
+        if (_host?.Options.ConfigurationMode != true) return;
+        CloseEditors(); _dashboard.Hide(); _live?.Hide(); _showEditor ??= new(_host);
+        if (_showEditor.Parent is null) _pages.Controls.Add(_showEditor);
+        _showEditor.Show(); _showEditor.BringToFront(); _showEditor.RefreshState(); _backButton.Visible = true;
+    }
     internal void OpenLive()
     {
         if (_host is null) return;
-        CloseEditors(); _dashboard.Hide(); _live ??= new(_host);
+        CloseEditors(); _showEditor?.Hide(); _dashboard.Hide(); _live ??= new(_host);
         if (_live.Parent is null) _pages.Controls.Add(_live);
         _live.Show(); _live.BringToFront(); _live.ActivatePage(); _backButton.Visible = true;
     }
     internal void OpenPerspectives()
     {
         if (_host?.Options.ConfigurationMode != true) return;
-        CloseEditors(); _dashboard.Hide(); _live?.Hide();
+        CloseEditors(); _showEditor?.Hide(); _dashboard.Hide(); _live?.Hide();
         _editor = new(_host, OpenLed, () => _configurationShortcut.SwitchTo("Experience")) { TopLevel = false, FormBorderStyle = FormBorderStyle.None, Dock = DockStyle.Fill, MinimumSize = Size.Empty };
         _pages.Controls.Add(_editor); _editor.Show(); _editor.BringToFront(); _backButton.Visible = true;
     }
@@ -417,7 +430,7 @@ internal sealed class ControlWindow : Form
     }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _notification.Visible = false; _notification.Dispose(); _notificationMenu.Dispose(); _configurationShortcut.Dispose(); CloseEditors(); _live?.Dispose(); _refresh.Dispose(); }
+        if (disposing) { _toolbarTips.Dispose(); _configurationShortcut.Dispose(); CloseEditors(); _live?.Dispose(); _showEditor?.Dispose(); _refresh.Dispose(); }
         base.Dispose(disposing);
         if (disposing) _applicationIcon.Dispose();
     }

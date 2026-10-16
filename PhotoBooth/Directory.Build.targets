@@ -1,4 +1,12 @@
 <Project>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Camera' or '$(MSBuildProjectName)' == 'Experience' or '$(MSBuildProjectName)' == 'ExperienceX' or '$(MSBuildProjectName)' == 'Controller'">
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+    <Copyright>Copyright (C) 2026 Michael Saft</Copyright>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'Camera' or '$(MSBuildProjectName)' == 'Experience' or '$(MSBuildProjectName)' == 'ExperienceX' or '$(MSBuildProjectName)' == 'Controller'">
+    <None Include="$(MSBuildThisFileDirectory)..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)..\README.md" Link="LICENSE-NOTICE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <PropertyGroup>
     <!-- Environment variables are exposed as MSBuild properties. -->
     <PhotoBoothOneDriveRoot Condition="'$(PhotoBoothOneDriveRoot)' == ''">$(OneDrive)</PhotoBoothOneDriveRoot>

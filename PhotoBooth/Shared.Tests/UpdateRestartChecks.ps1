@@ -26,7 +26,14 @@ class Fixture {
         if ($LASTEXITCODE -ne 0) { throw 'Could not build isolated executable.' }
         Copy-Item -LiteralPath (Join-Path $workspace "$project\$script") -Destination $source
         Copy-Item -LiteralPath (Join-Path $workspace 'Shared\Updates\Stage-ApplicationUpdate.ps1') -Destination $source
-        $names = @(($application+'.exe'), ($application+'.dll'), ($application+'.deps.json'), ($application+'.runtimeconfig.json'), 'appsettings.defaults.json', $script, 'Stage-ApplicationUpdate.ps1', 'runtimes\win-x64\native\dependency.dll')
+        $programs = Join-Path $fixture 'Start Menu\Programs'
+        $shortcutName = if ($application -eq 'Controller') { 'Controller' } else { 'Experience' }
+        $shortcutPath = Join-Path $programs ('Saft Technologies\'+$shortcutName+'.lnk')
+        $helperText = [IO.File]::ReadAllText((Join-Path $workspace 'Shared\Windows\StartMenuShortcut.ps1'))
+        $helperText = $helperText.Replace("[Environment]::GetFolderPath('Programs')", "'"+$programs.Replace("'","''")+"'")
+        [IO.File]::WriteAllText((Join-Path $source 'StartMenuShortcut.ps1'), $helperText)
+        $command = [IO.Path]::ChangeExtension($script, '.cmd')
+        $names = @(($application+'.exe'), ($application+'.dll'), ($application+'.deps.json'), ($application+'.runtimeconfig.json'), 'appsettings.defaults.json', $script, $command, 'Stage-ApplicationUpdate.ps1', 'StartMenuShortcut.ps1', 'runtimes\win-x64\native\dependency.dll')
         if ($application -eq 'Controller') { $names += 'appsettings.environment.json' }
         foreach ($name in $names) {
             $path = Join-Path $source $name
@@ -59,6 +66,8 @@ class Fixture {
         }
         $first = Run-Restart
         if ($first.Code -ne 0) { throw $first.Output }
+        if (!(Test-Path -LiteralPath $shortcutPath -PathType Leaf)) { throw 'Manual restart did not create a Start Menu shortcut.' }
+        Remove-Item -LiteralPath $shortcutPath -Force
         $firstId = [int][IO.File]::ReadAllText((Join-Path $cache 'started.txt'))
         [IO.File]::WriteAllText((Join-Path $source ($application+'.dll')), 'version-two')
         [IO.File]::WriteAllText((Join-Path $source 'runtimes\win-x64\native\dependency.dll'), 'version-two')
@@ -70,6 +79,15 @@ class Fixture {
         [IO.File]::WriteAllText((Join-Path $source 'runtimes\win-x64\native\dependency.dll'), 'version-two')
         $complete = Run-Restart -AutomaticUpdate
         if ($complete.Code -ne 0) { throw $complete.Output }
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        try {
+            if ($shortcut.Arguments -cne ('/d /s /c ""'+(Join-Path $source $command)+'""') -or
+                $shortcut.WorkingDirectory -ine $source) { throw 'Automatic restart shortcut points to a temporary stage instead of the original source.' }
+        } finally {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut)
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+        }
         $secondId = [int][IO.File]::ReadAllText((Join-Path $cache 'started.txt'))
         if ($secondId -eq $firstId -or (Get-Process -Id $firstId -ErrorAction SilentlyContinue)) { throw 'Old executable was not restarted.' }
         foreach ($name in @(($application+'.dll'), 'runtimes\win-x64\native\dependency.dll')) {

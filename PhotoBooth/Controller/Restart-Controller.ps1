@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$SourceDirectory, [switch]$ValidateOnly, [switch]$AutomaticUpdate)
+param([Parameter(Mandatory = $true)][string]$SourceDirectory, [switch]$ValidateOnly, [switch]$AutomaticUpdate, [switch]$RestartExperience)
 
 # Runs with inbox Windows PowerShell 5.1; PowerShell 7 is not required on the target PC.
 $ErrorActionPreference = 'Stop'
@@ -90,6 +90,25 @@ try {
     }
     if (!$ownsMutex) { throw 'Another Controller restart is already in progress. Wait for it to finish.' }
 
+    $experienceSource = $null
+    $experienceScript = $null
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if ($RestartExperience) {
+        # Resolve before staging replaces $source. Validate Experience before stopping Controller.
+        $experienceSource = Join-Path ([IO.Path]::GetDirectoryName($source)) 'ExperienceX'
+        $experienceScript = Join-Path $experienceSource 'Restart-Experience.ps1'
+        if (!(Test-Path -LiteralPath $experienceScript -PathType Leaf)) { throw 'Experience restart script is missing from the sibling ExperienceX build folder. Wait for OneDrive sync.' }
+        Write-Host 'Checking the Experience build before restarting both applications...'
+        & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $experienceScript -SourceDirectory $experienceSource -AutomaticUpdate -ValidateOnly
+        if ($LASTEXITCODE -ne 0) { throw 'Experience startup checks failed; both applications were left running.' }
+    }
+
+    # Use the original OneDrive source, never the temporary automatic-update stage.
+    try {
+        . (Join-Path $PSScriptRoot 'StartMenuShortcut.ps1')
+        New-SaftStartMenuShortcut -SourceDirectory $source -ApplicationName 'Controller' -RestartCommand 'Restart-Controller.cmd' -IconPath (Join-Path $source 'Controller.exe')
+    } catch { Write-Warning ('Could not repair the Start Menu shortcut: '+$_.Exception.Message) }
+
     if ($AutomaticUpdate) {
         . (Join-Path $PSScriptRoot 'Stage-ApplicationUpdate.ps1')
         $stage = New-VerifiedApplicationStage -Source $source -Application 'Controller'
@@ -143,6 +162,14 @@ public static class SaftControllerLifetime {
         if ((Get-FileSha256 -LiteralPath (Join-Path $source $name)) -ne
             (Get-FileSha256 -LiteralPath (Join-Path $destination $name))) { throw "Copy verification failed for $name. Wait for OneDrive sync and retry." }
     }
+    $experienceRestartFailed = $false
+    if ($RestartExperience) {
+        # Controller (including its watchdog) is stopped; restart Experience before relaunching it.
+        Write-Host 'Restarting Experience...'
+        & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $experienceScript -SourceDirectory $experienceSource -AutomaticUpdate
+        $experienceRestartFailed = $LASTEXITCODE -ne 0
+        if ($experienceRestartFailed) { Write-Warning 'Experience restart failed. Controller will still be relaunched; see Experience logs/UpdateRestart.log.' }
+    }
     $executable = Join-Path $destination 'Controller.exe'
     Write-Host "Starting $executable..."
     $application = Start-Process -FilePath $executable -WorkingDirectory $destination -WindowStyle Normal -PassThru
@@ -151,6 +178,7 @@ public static class SaftControllerLifetime {
     }
     Write-Host "Controller is running from $destination (PID $($application.Id)). OneDrive files are free for updates."
     if ($updateLog) { [IO.File]::AppendAllText($updateLog, ([DateTime]::UtcNow.ToString('o') + " Started Controller PID $($application.Id).`r`n")) }
+    if ($experienceRestartFailed) { throw 'Controller is running again, but Experience restart failed. Check Experience logs/UpdateRestart.log.' }
     exit 0
 }
 catch {

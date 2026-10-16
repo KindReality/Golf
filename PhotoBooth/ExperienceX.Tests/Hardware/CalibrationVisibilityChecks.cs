@@ -25,7 +25,7 @@ internal static class CalibrationVisibilityChecks
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         await completion.Task.WaitAsync(TimeSpan.FromSeconds(15));
-        Console.WriteLine("Production GPU readback passed faint unselected video fills, stronger selected fills, polygon clipping, mat behavior, persistent corner orbs and removal when configuration mode exits.");
+        Console.WriteLine("Production GPU readback passed selected video/mat grids, red labels and points, translucent blue unselected points, white selection flashes, green save flashes, polygon clipping and configuration exit.");
     }
 
     private static void Check()
@@ -57,13 +57,15 @@ internal static class CalibrationVisibilityChecks
                 }
                 finally { graphics.Context.Unmap(staging, 0); }
             }
-            void CornersVisible(byte[] pixels)
+            void CornersVisible(byte[] pixels, bool selected = false)
             {
-                foreach (var (x, y) in new[] { (1, 1), (638, 1), (1, 358), (638, 358) })
+                foreach (var (x, y) in new[] { (3, 3), (636, 3), (3, 356), (636, 356) })
                 {
                     int offset = (y * 640 + x) * 4;
-                    if (pixels[offset + 3] < 100 || pixels[offset + 2] <= pixels[offset])
-                        throw new Exception("An unselected corner orb was hidden or not red.");
+                    if (pixels[offset + 3] < 70 || (selected ? pixels[offset + 2] <= pixels[offset] : pixels[offset] <= pixels[offset + 2]))
+                        throw new Exception("A corner orb was hidden or did not match its screen's selection color.");
+                    if (!selected && pixels[offset + 3] > 160)
+                        throw new Exception("An unselected blue corner orb was not semi-transparent.");
                 }
             }
             overlay.Configure(options);
@@ -75,7 +77,28 @@ internal static class CalibrationVisibilityChecks
             if (unselected[centerOffset + 3] < 8 || unselected[centerOffset + 3] > 15 || unselected[centerOffset] <= unselected[centerOffset + 2])
                 throw new Exception("Unselected video screen did not have a faint blue fill while idle.");
             overlay.SelectScreen(true);
+            // Render-worker visibility updates arrive more than once during selection/dragging.
+            // They must not cancel the selection flash or restart it continuously.
+            overlay.Show(-1);
+            Thread.Sleep(110);
+            var selectionFlash = Render();
+            void CheckFlash(byte[] pixels, bool saved)
+            {
+                foreach (var (x, y) in new[] { (18, 18), (621, 18), (18, 341), (621, 341) })
+                {
+                    int at=(y*640+x)*4;
+                    int blue=pixels[at], green=pixels[at+1], red=pixels[at+2];
+                    if(pixels[at+3]<45 || (saved ? green<red+15 || green<blue+15 || green>130 : Math.Abs(red-green)>30 || Math.Abs(red-blue)>30))
+                        throw new Exception(saved ? "Save did not flash all points dark green." : "Selection did not flash all points white.");
+                }
+            }
+            CheckFlash(selectionFlash, saved:false);
+            overlay.SelectScreen(false);
+            CornersVisible(Render());
+            overlay.SelectScreen(true);
+            Thread.Sleep(300);
             var filled = Render();
+            CornersVisible(filled, selected:true);
             if (filled[centerOffset + 3] < 30 || filled[centerOffset + 3] > 60 || filled[centerOffset] <= filled[centerOffset + 2])
                 throw new Exception("Selected screen did not have a mostly transparent blue fill.");
             var hintOffset=(330*640+320)*4;
@@ -85,7 +108,7 @@ internal static class CalibrationVisibilityChecks
             var submenu = Render();
             if(submenu[hintOffset+3]>60)
                 throw new Exception("Normal framing instructions remained behind the submenu.");
-            CornersVisible(submenu);
+            CornersVisible(submenu, selected:true);
             overlay.SuppressHelp(false);
             if(Render()[hintOffset+3]<150)
                 throw new Exception("Normal framing instructions did not return after closing the submenu.");
@@ -104,6 +127,16 @@ internal static class CalibrationVisibilityChecks
             if(caption.Skip((210*640+210)*4).Take(220*4).SequenceEqual(filled.Skip((210*640+210)*4).Take(220*4)))
                 throw new Exception("Media/folder caption did not appear beneath the selected screen name.");
             SavePreview(caption,"selected-media-folder-caption.png");
+            if(!Enumerable.Range(140,95).SelectMany(row=>Enumerable.Range(180,280).Select(x=>(row*640+x)*4))
+                .Any(at=>caption[at+2]>100 && caption[at+2]>caption[at]*3))
+                throw new Exception("Selected screen name/media caption was not red.");
+            overlay.FlashPoint(0,true);Thread.Sleep(110);
+            CheckFlash(Render(),saved:true);
+            overlay.SelectScreen(true);overlay.Show(-1);Thread.Sleep(190);
+            CornersVisible(Render(),selected:true);
+            overlay.Flash(1,true);Thread.Sleep(110);
+            CheckFlash(Render(),saved:true);
+            Thread.Sleep(190);
             overlay.SetMediaCaption(null);Thread.Sleep(110);Render();
             var videoOptions=options;
             options=options with{DisplayScreens=new(){["TEST"]=[new(){Type="mat"}]}};
@@ -112,6 +145,24 @@ internal static class CalibrationVisibilityChecks
             byte[] HintArea(byte[] pixels)=>Enumerable.Range(240,96).SelectMany(row=>pixels.Skip((row*640+100)*4).Take(440*4)).ToArray();
             if(HintArea(matHint).SequenceEqual(HintArea(filled)))throw new Exception("Switching to a mat reused the video-only HUD.");
             SavePreview(matHint,"selected-mat-hint.png");
+            overlay.SuppressHelp(true);
+            options=options with{CalibrationGridEnabled=true};
+            var matGrid=Render();
+            if(Enumerable.Range(50,90).Sum(row=>Enumerable.Range(60,520).Count(x=>
+                matGrid[(row*640+x)*4+3]>matHint[(row*640+x)*4+3]+25))<300)
+                throw new Exception("Selected mat did not show its calibration grid.");
+            SavePreview(matGrid,"selected-mat-grid.png");
+            var concave=new PointOptions{Enabled=true,Vertices=[new(.1,.1),new(.5,.45),new(.9,.1),new(.9,.9),new(.1,.9)]};
+            options=options with{DisplayScreens=new(){["TEST"]=[new(){Type="mat",Points=concave}]}};
+            var concaveGrid=Render();
+            if(concaveGrid[(55*640+320)*4+3]>2 || concaveGrid[(110*640+166)*4+3]<55)
+                throw new Exception("Mat grid escaped a concave outline or failed to fill its interior.");
+            var triangle=concave with{Vertices=[new(.1,.1),new(.9,.1),new(.5,.9)]};
+            options=options with{DisplayScreens=new(){["TEST"]=[new(){Type="mat",Points=triangle}]}};
+            var triangleGrid=Render();
+            if(triangleGrid[(110*640+60)*4+3]>2 || triangleGrid[(110*640+268)*4+3]<55)
+                throw new Exception("Triangular mat grid did not stay within its outline.");
+            options=videoOptions with{DisplayScreens=new(){["TEST"]=[new(){Type="mat"}]}};
             overlay.SuppressHelp(true);
             if(Render()[hintOffset+3]>60)throw new Exception("Mat action HUD remained visible behind a submenu.");
             overlay.SuppressHelp(false);

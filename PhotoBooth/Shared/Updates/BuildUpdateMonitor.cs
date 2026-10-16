@@ -19,7 +19,7 @@ public sealed class BuildUpdateMonitor : IAsyncDisposable
     private readonly object _shutdownGate = new();
     private Task? _shutdownTask;
     public event Action<string>? ManualRestartFailed;
-    public void RequestRestart() => Interlocked.Exchange(ref _manualRestartRequested, 1);
+    public void RequestRestart(bool restartExperience = false) => Interlocked.Exchange(ref _manualRestartRequested, restartExperience ? 2 : 1);
 
     public BuildUpdateMonitor(string application, string sourceDirectory, string? runtimeDirectory = null)
     {
@@ -46,7 +46,9 @@ public sealed class BuildUpdateMonitor : IAsyncDisposable
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(1), _stop.Token).ConfigureAwait(false);
-                manual = Interlocked.Exchange(ref _manualRestartRequested, 0) != 0;
+                var restart = Interlocked.Exchange(ref _manualRestartRequested, 0);
+                manual = restart != 0;
+                var restartExperience = manual && restart == 2 && _application == "Controller";
                 if (!manual && (!_watchBuild || clock.Elapsed < retryAt)) continue;
                 var candidate = BuildUpdatePackage.BinaryFingerprint(_source, _application);
                 if (!manual && candidate == _running) { _stability.Reset(); _lastWarning = null; continue; }
@@ -64,7 +66,8 @@ public sealed class BuildUpdateMonitor : IAsyncDisposable
                 };
                 foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
                     "-SourceDirectory", _source, "-AutomaticUpdate" }) start.ArgumentList.Add(argument);
-                Telemetry.Info(manual ? "ApplicationRestartRequested" : "BuildUpdateRestartRequested", new { Source = _source, Application = _application, BinaryFingerprint = candidate });
+                if (restartExperience) start.ArgumentList.Add("-RestartExperience");
+                Telemetry.Info(manual ? "ApplicationRestartRequested" : "BuildUpdateRestartRequested", new { Source = _source, Application = _application, RestartExperience = restartExperience, BinaryFingerprint = candidate });
                 using var process = Process.Start(start) ?? throw new IOException("Could not start the restart script.");
                 // Disposal cancels this wait when the script asks the current app to close.
                 // The external restart process continues through copy and relaunch.

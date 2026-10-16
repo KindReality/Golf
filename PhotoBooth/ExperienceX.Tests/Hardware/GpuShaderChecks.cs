@@ -178,7 +178,7 @@ internal static class GpuShaderChecks
         using var target = device.CreateTexture2D(new Texture2DDescription(Format.B8G8R8A8_UNorm, w, h, 1, 1, BindFlags.RenderTarget));
         using var staging = device.CreateTexture2D(new Texture2DDescription(Format.B8G8R8A8_UNorm, w, h, 1, 1, BindFlags.None, ResourceUsage.Staging, CpuAccessFlags.Read));
         using var rtv = device.CreateRenderTargetView(target);
-        using var ps = device.CreatePixelShader(shader("CalibrationPS.cso"));
+        using var ps = device.CreatePixelShader(CalibrationOptimizationChecks.ReferenceShader());
         using var constants = device.CreateBuffer((uint)Marshal.SizeOf<OverlayData>(), BindFlags.ConstantBuffer);
         context.OMSetRenderTargets(rtv);
         context.OMSetBlendState(null);

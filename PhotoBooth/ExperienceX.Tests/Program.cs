@@ -4,6 +4,15 @@ internal static class TestSuites
 {
     public static async Task RunAsync(string[] arguments)
     {
+        if (arguments.SequenceEqual(["--calibration-performance"])) { await CalibrationOptimizationChecks.Run(); await CalibrationVisibilityChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--renderer-safety"])) { RendererSafetyChecks.Run(); await RendererSafetyHardwareChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--renderer-soak"])) { await RendererEditingSoakChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--software-video"])) { await ConfigurationServiceChecks.Run(); await SoftwareVideoHardwareChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--software-video-loop"])) { VideoLoopChecks.Run(); await VideoLoopHardwareChecks.Run(softwareVideoDecoding: true); return; }
+        if (arguments.SequenceEqual(["--software-video-soak"])) { await RendererEditingSoakChecks.Run(softwareVideoDecoding: true); return; }
+        if (arguments.SequenceEqual(["--renderer-diagnostics"])) { RendererProgressChecks.Run(); await RendererDiagnosticsChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--renderer-capture"])) { await RendererCaptureChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--taskbar"])) { await TaskbarChecks.Run(); return; }
         if (arguments.SequenceEqual(["--video-outline"]))
         {
             await VideoOutlineChecks.Run(); await VideoOutlineHardwareChecks.Run();

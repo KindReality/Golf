@@ -67,6 +67,17 @@ internal sealed class ConfigurationService : IAsyncDisposable
     }
 
     public Task SetConfigurationModeAsync(bool enabled) => EditAsync(root => root["ConfigurationMode"] = enabled);
+    public Task SaveShowAsync(ShowConfiguration expected, ShowConfiguration next) => EditAsync(root =>
+    {
+        var current = ControllerOptions.Parse(root.ToJsonString(), _environment);
+        if (!current.ConfigurationMode) throw new InvalidOperationException("Enable configuration mode before saving the show.");
+        if (ShowConfiguration.From(current).Signature != expected.Signature)
+            throw new InvalidOperationException("Scenes, playlists or triggers changed elsewhere. Reload before saving; your draft is retained.");
+        next.Validate(current);
+        root["Scenes"] = System.Text.Json.JsonSerializer.SerializeToNode(next.Scenes);
+        root["Playlists"] = System.Text.Json.JsonSerializer.SerializeToNode(next.Playlists);
+        root["Triggers"] = System.Text.Json.JsonSerializer.SerializeToNode(next.Triggers);
+    });
     public Task SavePerspectivesAsync(PhotoBooth.Networking.PerspectiveDefinition[] expected, PhotoBooth.Networking.PerspectiveDefinition[] next) => EditAsync(root =>
     {
         var current = ControllerOptions.Parse(root.ToJsonString(), _environment);

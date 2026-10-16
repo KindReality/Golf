@@ -33,9 +33,9 @@ internal static class ScreenNameLabel
         using var bitmap = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppArgb);
         using (var graphics = Graphics.FromImage(bitmap))
         using (var font = new Font("Segoe UI", FontSize(width, height), FontStyle.Regular, GraphicsUnit.Pixel))
-        using (var brush = new SolidBrush(Color.FromArgb(240, 8, 65, 170)))
+        using (var brush = new SolidBrush(Color.FromArgb(240, 255, 20, 36)))
         using (var subtitleFont=new Font("Segoe UI",FontSize(width,height)*.72f,FontStyle.Regular,GraphicsUnit.Pixel))
-        using (var subtitleBrush=new SolidBrush(Color.FromArgb(240,80,165,240)))
+        using (var subtitleBrush=new SolidBrush(Color.FromArgb(240,255,20,36)))
         using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
         {
             graphics.Clear(Color.Transparent);

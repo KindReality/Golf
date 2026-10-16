@@ -75,7 +75,14 @@ try {
         }
     }
 
-    if ($ValidateOnly) { Write-Host 'Experience build and runtime are ready.'; exit 0 }
+    if ($ValidateOnly) {
+        if ($AutomaticUpdate) {
+            . (Join-Path $PSScriptRoot 'Stage-ApplicationUpdate.ps1')
+            $stage = New-VerifiedApplicationStage -Source $source -Application 'ExperienceX'
+        }
+        Write-Host 'Experience build and runtime are ready.'
+        exit 0
+    }
 
     $session = (Get-Process -Id $PID).SessionId
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -91,6 +98,12 @@ try {
     }
     # A watchdog must never replace an instance that appeared while it was launching.
     if ($StartIfNotRunning -and @(Get-Process -Name ExperienceX -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session }).Count -gt 0) { exit 0 }
+
+    # Use the original OneDrive source, never the temporary automatic-update stage.
+    try {
+        . (Join-Path $PSScriptRoot 'StartMenuShortcut.ps1')
+        New-SaftStartMenuShortcut -SourceDirectory $source -ApplicationName 'Experience' -RestartCommand 'Restart-Experience.cmd' -IconPath (Join-Path $source 'ExperienceX.exe')
+    } catch { Write-Warning ('Could not repair the Start Menu shortcut: '+$_.Exception.Message) }
 
     if ($AutomaticUpdate) {
         . (Join-Path $PSScriptRoot 'Stage-ApplicationUpdate.ps1')

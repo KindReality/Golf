@@ -28,6 +28,15 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
         get; init;
     }
     public bool CalibrationGridEnabled { get; init; } = true;
+    public RendererRecoveryOptions RendererRecovery { get; init; } = new();
+    // Diagnostic A/B switch. Rendering remains on D3D11; an application restart applies changes.
+    public bool SoftwareVideoDecoding { get; init; }
+    public bool GraphicsDebugLayerEnabled { get; init; } =
+#if DEBUG
+        true;
+#else
+        false;
+#endif
     public double PointHitDiameterPercent { get; init; } = 5;
     public Dictionary<string, List<ScreenOptions>> DisplayScreens { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, PhotoBooth.Networking.ControllerSharedDefinitions> ControllerDefinitions { get; init; } = new();
@@ -49,6 +58,8 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
 
     public void Validate()
     {
+        if (RendererRecovery is null) throw new ArgumentException("RendererRecovery must be an object.");
+        RendererRecovery.Validate();
         ValidateNetwork();
         if (InventoryPort is < 1 or > 65535) throw new ArgumentException("InventoryPort must be between 1 and 65535.");
         if (Visualization is null) throw new ArgumentException("Visualization must be an object.");

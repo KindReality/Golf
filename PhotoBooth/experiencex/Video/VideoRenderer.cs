@@ -17,12 +17,17 @@ internal sealed class VideoRenderer : IDisposable
     private readonly RendererMailbox _commands = new(1024);
     private readonly AutoResetEvent _wake = new(false);
     private readonly GraphicsResources _graphics;
+    private readonly CalibrationLayer _calibrationLayer = new();
+    private readonly Action _drawCalibration;
+    private readonly RendererProgress _progress;
+    internal RendererProgress Progress => _progress;
+    internal RenderHealth Diagnostics => _progress.Snapshot();
     private readonly bool _toolsOnly;
     private bool _toolsVisible = true, _helpSuppressed;
     private readonly List<DisplayScreenTrack> _tracks = [];
     private readonly VideoStopHistory _stops = new();
     private readonly Dictionary<string,string?> _mediaCaptions = new();
-    private ExperienceOptions _options;
+    private volatile ExperienceOptions _options;
     private ScreenMediaCatalog _mediaCatalog;
     private bool _displayAvailable = true;
     private volatile bool _shutdown;
@@ -30,6 +35,7 @@ internal sealed class VideoRenderer : IDisposable
     private volatile RendererState _state = RendererState.Starting;
     private volatile string? _requestId;
     private bool _framePermit, _needsRedraw, _wasAnimating;
+    private readonly PresentationDeadline _presentationDeadline = new();
     internal bool Stopped => !_thread.IsAlive;
     internal long TransformComputationCount => _tracks.Sum(t => t.TransformComputations);
     public RendererState State => _state;
@@ -42,15 +48,19 @@ internal sealed class VideoRenderer : IDisposable
     }
 
     public VideoRenderer(nint hwnd, int width, int height, ExperienceOptions options, string display,
-        Action hideAfterFailure, Action? beforePresent = null, ScreenMediaCatalog? mediaCatalog = null, bool toolsOnly = false)
+        Action hideAfterFailure, Action? beforePresent = null, ScreenMediaCatalog? mediaCatalog = null, bool toolsOnly = false,
+        Action<RenderHealth, string>? captureDiagnostics = null)
     {
         _display = display;
+        _drawCalibration = DrawCalibration;
         _toolsOnly = toolsOnly;
         _options = options;
         _mediaCatalog = mediaCatalog ?? ScreenMediaCatalog.Empty;
         _hideAfterFailure = hideAfterFailure;
         _beforePresent = beforePresent;
-        _graphics = new(hwnd, width, height, display);
+        _progress = new(display, () => _commands.Count, captureDiagnostics ?? ((health, reason) => _ = Task.Run(() => RendererDiagnosticCapture.CaptureAsync(health, reason))),
+            stallSeconds: () => RendererProgress.WarningTimeout(_options.RendererRecovery.StallTimeoutSeconds));
+        _graphics = new(hwnd, width, height, display, _progress, options.GraphicsDebugLayerEnabled);
         _thread = new(Run)
         {
             IsBackground = true,
@@ -97,7 +107,7 @@ internal sealed class VideoRenderer : IDisposable
             var track = Track(screen.Id);
             if (track is null)
             {
-                track = new DisplayScreenTrack(_graphics, _display, screen, _options, () => _wake.Set(), Draw);
+                track = new DisplayScreenTrack(_graphics, _display, screen, _options, () => _wake.Set(), Draw, _progress);
                 _tracks.Add(track); // Register ownership immediately, including partial reconciliation failures.
             }
             track.Configure(screen, _options);
@@ -194,12 +204,21 @@ internal sealed class VideoRenderer : IDisposable
         return completion.Task.WaitAsync(TimeSpan.FromSeconds(3));
     }
     public void Resize(int width, int height) => Enqueue("Resize", () => { _graphics.Resize(width, height); _needsRedraw = true; });
+    internal void SetPresentationSuspended(bool suspended)
+    {
+        if (_progress.IsSuspended == suspended) return;
+        _progress.Suspend(suspended);
+        try { _wake.Set(); } catch (ObjectDisposedException) { }
+    }
     private void Run()
     {
-        bool mediaStarted = false;
-        CoInitializeEx(0, 0);
+        _progress.RegisterThread(Environment.CurrentManagedThreadId, GetCurrentThreadId());
+        using var loopOperation = _progress.Begin("RenderLoop");
+        bool mediaStarted = false, comStarted = false;
         try
         {
+            Marshal.ThrowExceptionForHR(CoInitializeEx(0, 0));
+            comStarted = true;
             MediaFactory.MFStartup().CheckError();
             mediaStarted = true;
             _graphics.Initialize();
@@ -209,14 +228,16 @@ internal sealed class VideoRenderer : IDisposable
             WaitHandle[] waits = [_wake, _graphics.Latency!];
             while (!_shutdown)
             {
+                _progress.Beat();
                 for (int count = 0; count < RendererMailbox.Capacity && !_shutdown && _commands.TryTake(out var action); count++)
                     try
                     {
+                        using var operation = _progress.Begin("RendererCommand");
                         action();
                     }
                     catch (Exception ex)
                     {
-                        if (IsDeviceFailure(ex))
+                        if (IsRendererFailure(ex))
                             throw;
                         Telemetry.Error("DisplayRequestFailed", ex, new
                         {
@@ -227,32 +248,42 @@ internal sealed class VideoRenderer : IDisposable
                     break;
                 foreach (var track in _tracks)
                     if (track.StopInterrupted()) _needsRedraw = true;
+                if (_progress.IsSuspended)
+                {
+                    _presentationDeadline.Reset();
+                    using (var operation = _progress.Begin("SuspendedWait")) _wake.WaitOne(100);
+                    continue;
+                }
                 var animating = _tracks.Any(t => _toolsVisible ? t.Animating : t.ContentAnimating);
                 var playing = _tracks.Any(t => t.IsVideoOpen);
                 if (!playing && !animating)
                 {
+                    _presentationDeadline.Reset();
                     if (_needsRedraw || _wasAnimating)
                         Draw();
                     var held = _tracks.FirstOrDefault(t => t.IsOpen);
                     _state = held?.State ?? RendererState.Idle;
                     _requestId = held?.RequestId;
-                    _wake.WaitOne();
+                    using (var operation = _progress.Begin("IdleWait")) _wake.WaitOne();
                     continue;
                 }
                 if (!_framePermit && _graphics.Latency!.WaitOne(0))
                     _framePermit = true;
-                if (!_framePermit && WaitHandle.WaitAny(waits, 100) == 1)
-                    _framePermit = true;
+                if (!_framePermit)
+                    using (var operation = _progress.Begin("FramePermitWait"))
+                        if (WaitHandle.WaitAny(waits, 100) == 1) _framePermit = true;
+                _presentationDeadline.Check(System.Diagnostics.Stopwatch.GetTimestamp(), _framePermit, _progress.IsSuspended);
                 if (!_framePermit)
                     continue;
                 foreach (var track in _tracks.Where(t => t.IsOpen))
                     try
                     {
+                        using var operation = _progress.Begin("VideoTick", track.Screen.Id);
                         track.Tick();
                     }
                     catch (Exception ex)
                     {
-                        if (IsDeviceFailure(ex))
+                        if (IsRendererFailure(ex))
                             throw;
                         Telemetry.Error("ScreenRenderingFailed", ex, new
                         {
@@ -287,42 +318,57 @@ internal sealed class VideoRenderer : IDisposable
             _commands.Close();
             foreach (var track in _tracks)
                 Cleanup(track);
+            Cleanup(_calibrationLayer);
             Cleanup(_graphics);
             if (mediaStarted)
                 MediaFactory.MFShutdown();
-            CoUninitialize();
+            if (comStarted) CoUninitialize();
             _wake.Dispose();
+            _progress.Dispose();
         }
     }
     private void Draw()
     {
-        if (!_framePermit && !_graphics.Latency!.WaitOne(2000))
-            throw new TimeoutException("DXGI did not make a presentation buffer available.");
-        _framePermit = false;
+        if (_progress.IsSuspended) return;
+        using var drawOperation = _progress.Begin("DrawLayers");
+        using (var operation = _progress.Begin("PresentationBufferWait"))
+            if (!_framePermit && !_graphics.Latency!.WaitOne(2000))
+                throw new GraphicsPresentationTimeoutException("DXGI did not make a presentation buffer available.");
+        // An exception before Present has not consumed the available buffer. Keep its permit
+        // so a recoverable screen/overlay failure cannot strand the next cleanup or request.
+        _framePermit = true;
         _graphics.BeginFrame(_toolsOnly ? new Vortice.Mathematics.Color4(0,0,0,0) : DisplayBackground.For(_display, _options));
         // Video and mats share the persisted back-to-front order. G-Force is an external window beneath this surface.
         // Its owned inverse mat is always the bottom internal layer, even after an external config reorder.
-        if (!_toolsOnly) foreach (var track in _tracks.Where(t => t.Screen.IsVisualization)) track.DrawMask();
+        if (!_toolsOnly) foreach (var track in _tracks.Where(t => t.Screen.IsVisualization))
+            using (var operation = _progress.Begin("DrawVisualizationMask", track.Screen.Id)) track.DrawMask();
         var cutouts = !_toolsOnly && _tracks.Any(t => t.Screen.IsMat);
         if (cutouts) _graphics.BeginScreenLayers();
         foreach (var track in _tracks.Where(t => !_toolsOnly && !t.Screen.IsVisualization))
         {
-            track.DrawVideo();
-            track.DrawMask();
+            using (var operation = _progress.Begin("DrawVideo", track.Screen.Id)) track.DrawVideo();
+            using (var operation = _progress.Begin("DrawMat", track.Screen.Id)) track.DrawMask();
         }
         if (cutouts) _graphics.FinishScreenLayers();
         // Tools are drawn after all content, so overlapping video cannot obscure editing handles.
-        if (_toolsVisible)
-        {
-            foreach (var track in _tracks.Where(t => !t.SelectedScreen)) track.DrawOverlay();
-            foreach (var track in _tracks.Where(t => t.SelectedScreen)) track.DrawOverlay();
-        }
-        _beforePresent?.Invoke();
-        _graphics.SwapChain.Present(1, PresentFlags.None).CheckError();
+        _calibrationLayer.Draw(_graphics, _needsRedraw, _toolsVisible && _tracks.Any(t => t.CalibrationVisible), _drawCalibration);
+        if (_beforePresent is not null)
+            using (var operation = _progress.Begin("BeforePresentCallback")) _beforePresent();
+        using (var operation = _progress.Begin("Present")) _graphics.SwapChain.Present(1, PresentFlags.None).CheckError();
+        _framePermit = false;
+        _progress.Presented();
+        _graphics.ReportDebugMessages();
         foreach (var track in _tracks)
             track.Presented();
         _needsRedraw = false;
         _wasAnimating = _tracks.Any(t => _toolsVisible ? t.Animating : t.ContentAnimating);
+    }
+    private void DrawCalibration()
+    {
+        foreach (var track in _tracks.Where(t => !t.SelectedScreen))
+            using (var operation = _progress.Begin("DrawOverlay", track.Screen.Id)) track.DrawOverlay();
+        foreach (var track in _tracks.Where(t => t.SelectedScreen))
+            using (var operation = _progress.Begin("DrawOverlay", track.Screen.Id)) track.DrawOverlay();
     }
     private void Cleanup(IDisposable resource)
     {
@@ -333,6 +379,7 @@ internal sealed class VideoRenderer : IDisposable
         catch (Exception ex) { Telemetry.Warning("RendererCleanupFailed", new { DisplayName = _display, Reason = ex.Message }); }
     }
     private static bool IsDeviceFailure(Exception ex) => unchecked((uint)ex.HResult) is 0x887A0005 or 0x887A0006 or 0x887A0007 or 0x887A0020;
+    private static bool IsRendererFailure(Exception ex) => ex is GraphicsPresentationTimeoutException || IsDeviceFailure(ex);
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposeRequested, 1) == 0)
@@ -345,12 +392,19 @@ internal sealed class VideoRenderer : IDisposable
             catch (ObjectDisposedException) { }
         }
         if (_thread.IsAlive && !_thread.Join(TimeSpan.FromSeconds(5)))
+        {
             Telemetry.Warning("RendererShutdownTimedOut", new
             {
                 DisplayName = _display,
                 TimeoutSeconds = 5
             });
+            _progress.ShutdownTimedOut();
+            // Give the external helper a bounded opportunity to capture before process exit.
+            try { RendererDiagnosticCapture.CaptureAsync(_progress.Snapshot(), "ShutdownTimedOut").Wait(TimeSpan.FromSeconds(5)); }
+            catch (Exception ex) { Telemetry.Warning("RendererShutdownDiagnosticFailed", new { DisplayName = _display, Reason = ex.Message }); }
+        }
     }
     [DllImport("ole32.dll")] private static extern int CoInitializeEx(nint reserved, uint flags);
     [DllImport("ole32.dll")] private static extern void CoUninitialize();
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
 }

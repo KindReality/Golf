@@ -47,8 +47,8 @@ internal static class CalibrationConfirmationChecks
             surface.Confirm = _ => Task.FromResult(false);
             editor.Begin(surface, 0.2, 0.1);
             editor.Move(surface, 0.3, 0.1);
-            if (await editor.FinishAsync(surface) || surface.WhiteFlashes != 0)
-                throw new Exception("Unapplied local settings produced a white success flash.");
+            if (await editor.FinishAsync(surface) || surface.SaveFlashes != 0)
+                throw new Exception("Unapplied local settings produced a green success flash.");
             var expected = PointEditing.Move(current.PointsFor("DISPLAY1"), 0, 0.35, 0.1);
             var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             surface.Confirm = value => value == expected ? pending.Task : Task.FromResult(true);
@@ -67,7 +67,7 @@ internal static class CalibrationConfirmationChecks
             };
             File.WriteAllText(path, JsonSerializer.Serialize(current));
             pending.SetResult(true);
-            if (await saving || surface.WhiteFlashes != 0)
+            if (await saving || surface.SaveFlashes != 0)
                 throw new Exception("Superseded local save produced a false confirmation.");
             surface.Confirm = _ => Task.FromResult(true);
             // A remote change invalidates local undo history, so Undo cannot overwrite it.
@@ -115,7 +115,7 @@ internal static class CalibrationConfirmationChecks
     private sealed class Surface : IPointSurface
     {
         public string DisplayName => "DISPLAY1"; public int PixelWidth => 1920; public int PixelHeight => 1080;
-        public List<int> Masks = []; public int WhiteFlashes;
+        public List<int> Masks = []; public int SaveFlashes;
         public Func<PointOptions, Task<bool>> Confirm = _ => Task.FromResult(true);
         public void ShowCalibration(int selected)
         {
@@ -132,7 +132,7 @@ internal static class CalibrationConfirmationChecks
         public void FlashCalibration(int point, bool success)
         {
             if (success)
-                WhiteFlashes++;
+                SaveFlashes++;
         }
         public void FlashCalibrationPoints(int mask) => Masks.Add(mask);
         public Task<bool> ConfirmCalibrationAsync(PointOptions expected) => Confirm(expected);

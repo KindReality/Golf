@@ -132,8 +132,8 @@ internal static class MatHardwareChecks
             options = options with { ConfigurationMode = false }; overlay.Configure(options); overlay.FlashPoint(37, true);
             Thread.Sleep(100);
             graphics.BeginFrame(new(0, 0, 0, 0)); mat.Draw(many); overlay.Draw(graphics, options, "TEST", new(), "mask"); pixels = Read();
-            if (pixels[At(x, y, 0)] < 100 || pixels[At(x, y, 2)] < 100)
-                throw new Exception("Save confirmation for point 38 was truncated by a 32-bit corner mask.");
+            if (pixels[At(x, y, 1)] < 80 || pixels[At(x, y, 1)] < pixels[At(x, y, 0)] + 20 || pixels[At(x, y, 1)] < pixels[At(x, y, 2)] + 20)
+                throw new Exception("Dark-green save confirmation for point 38 was truncated by a 32-bit corner mask.");
         }
         finally { MediaFactory.MFShutdown(); }
     }

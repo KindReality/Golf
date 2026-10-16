@@ -6,8 +6,14 @@ public partial class App : System.Windows.Application
     private ExperienceHost? _host;
     private Task? _shutdown;
     private PhotoBooth.Updates.BuildUpdateMonitor? _updates;
+    private RendererStallRecovery? _stallRecovery;
     protected override void OnStartup(System.Windows.StartupEventArgs e)
     {
+        if (e.Args.FirstOrDefault() == RendererDiagnosticCapture.HelperArgument)
+        {
+            Shutdown(RendererDiagnosticCapture.RunHelper(e.Args));
+            return;
+        }
         _instance = SingleInstanceLease.TryAcquire("PhotoBooth.ExperienceX.SingleInstance");
         if (_instance is null)
         {
@@ -62,6 +68,8 @@ public partial class App : System.Windows.Application
         {
             _host.Start();
             _updates = new PhotoBooth.Updates.BuildUpdateMonitor("ExperienceX", System.IO.Path.GetDirectoryName(configurationPath)!);
+            _stallRecovery = new(() => _host.RendererHealth, () => _host.RecoveryOptions, () => _updates.RequestRestart());
+            _updates.ManualRestartFailed += _ => _stallRecovery?.RestartFailed();
             _updates.ManualRestartFailed += reason => Dispatcher.BeginInvoke(new Action(() => _host?.ReportRestartFailure(reason)));
             _host.FocusExperience();
         }
@@ -74,6 +82,7 @@ public partial class App : System.Windows.Application
     }
     private async Task ShutdownAsync(bool cancelPendingRestart = false)
     {
+        _stallRecovery?.Dispose();
         try
         {
             if (_updates is not null) await _updates.StopAsync(cancelPendingRestart);

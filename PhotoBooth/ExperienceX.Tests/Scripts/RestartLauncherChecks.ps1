@@ -30,6 +30,10 @@ class Fixture {
         Copy-Item -LiteralPath (Join-Path $workspace ('experiencex\'+$name)) -Destination $source
     }
     Copy-Item -LiteralPath (Join-Path $workspace 'Shared\Networking\NetworkAccess.ps1') -Destination $source
+    $programs = Join-Path $fixture 'Start Menu\Programs'
+    $helper = [IO.File]::ReadAllText((Join-Path $workspace 'Shared\Windows\StartMenuShortcut.ps1'))
+    $helper = $helper.Replace("[Environment]::GetFolderPath('Programs')", "'"+$programs.Replace("'","''")+"'")
+    [IO.File]::WriteAllText((Join-Path $source 'StartMenuShortcut.ps1'), $helper)
     # Verify hashing without PowerShell's Get-FileHash, including literal paths and file closure.
     $launcherPath = Join-Path $source 'Restart-Experience.ps1'
     $tokens = $null; $parseErrors = $null

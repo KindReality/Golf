@@ -274,6 +274,8 @@ internal sealed class ExperienceHost : IAsyncDisposable
     internal nint HotkeyWindowHandle => _hotkeys.Handle;
     internal int[] VisualizationProcessIds => _displays.VisualizationProcessIds;
     internal IEnumerable<MainWindow> DisplayWindows => _displays.Windows;
+    internal RenderHealth[] RendererHealth => _displays.RendererHealth;
+    internal RendererRecoveryOptions RecoveryOptions => _options.RendererRecovery;
     internal IPointSurface? SelectedScreen => _calibration.SelectedScreen;
 
     public ExperienceHost(Dispatcher dispatcher, string path, Func<bool>? hotkeysFocused = null)
@@ -373,7 +375,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
             Telemetry.Info("VideoFramingSaved", new { DisplayName = display, ScreenName = screen.Name, ScreenId = screen.Id, framing.Zoom, framing.CenterX, framing.CenterY, framing.RotationDegrees, Perspective = screen.Perspective?.Name });
         };
         _audioPoll.Tick += (_, _) => _tasks.Run(PollAudioAsync, "Audio inventory");
-        Telemetry.SetHealthProvider(() => _health);
+        Telemetry.SetHealthProvider(() => new { State = _health, Renderers = _displays.RendererHealth });
     }
     public void Start()
     {

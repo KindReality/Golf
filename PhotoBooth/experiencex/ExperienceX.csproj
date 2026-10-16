@@ -10,6 +10,7 @@
     <Compile Include="..\Shared\Updates\*.cs" Link="Updates\%(Filename)%(Extension)" />
     <None Include="..\Shared\Networking\NetworkAccess.ps1" Link="NetworkAccess.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\Shared\Updates\Stage-ApplicationUpdate.ps1" Link="Stage-ApplicationUpdate.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\Shared\Windows\StartMenuShortcut.ps1" Link="StartMenuShortcut.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Compile Include="..\Shared\Configuration\*.cs" Link="Configuration\Shared\%(Filename)%(Extension)" />
     <Compile Include="..\Shared\Appearance\*.cs" Link="Appearance\%(Filename)%(Extension)" />
     <Compile Include="..\Shared\Networking\*.cs" Link="Networking\Shared\%(Filename)%(Extension)" />
@@ -33,8 +34,11 @@
     <None Update="appsettings.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
     <None Update="Install-Experience.cmd;Install-Experience.ps1;Restart-Experience.cmd;Restart-Experience.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Shaders\VideoVS.cso" />
+    <EmbeddedResource Include="..\Shared\Appearance\Application.ico" Link="Assets\Application.ico" LogicalName="ExperienceX.Assets.Application.ico" />
     <EmbeddedResource Include="Shaders\VideoPS.cso" />
-    <EmbeddedResource Include="Shaders\CalibrationPS.cso" />
+    <EmbeddedResource Include="Shaders\CalibrationStaticPS.cso" />
+    <EmbeddedResource Include="Shaders\CalibrationPointPS.cso" />
+    <EmbeddedResource Include="Shaders\CalibrationCompositePS.cso" />
     <EmbeddedResource Include="Shaders\MaskVS.cso" />
     <EmbeddedResource Include="Shaders\MaskPS.cso" />
     <EmbeddedResource Include="Shaders\PolygonVS.cso" />

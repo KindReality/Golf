@@ -9,6 +9,8 @@ namespace ExperienceX;
 internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _calibration) : IAsyncDisposable
 {
     private readonly Dictionary<string, MainWindow> _windows = new(StringComparer.OrdinalIgnoreCase);
+    private MainWindow[] _healthWindows = [];
+    internal RenderHealth[] RendererHealth => Volatile.Read(ref _healthWindows).Select(w => w.RendererHealth).OfType<RenderHealth>().ToArray();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly VisualizationManager _visualizations = new();
     private readonly LedOutputManager _leds = new();
@@ -100,6 +102,7 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
             window.SaveFramingRequested = (screen, framing, token) => SaveFramingRequested?.Invoke(window.DisplayName, screen, framing, token) ??
                 Task.FromException(new InvalidOperationException("Video framing persistence is unavailable."));
             _windows.Add(screen.DeviceName, window);
+            Volatile.Write(ref _healthWindows, _windows.Values.ToArray());
             window.FormClosing += (_, args) =>
             {
                 if (_disposed)
@@ -174,5 +177,6 @@ internal sealed class DisplayManager(Dispatcher _dispatcher, PointCalibration _c
         await _visualizations.DisposeAsync();
         await Task.WhenAll(_windows.Values.Select(window => window.ShutdownWindowAsync()));
         _windows.Clear();
+        Volatile.Write(ref _healthWindows, []);
     }
 }

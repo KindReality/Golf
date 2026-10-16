@@ -15,6 +15,7 @@ internal sealed class DisplayScreenTrack : IDisposable
     private readonly PolygonMesh _videoOutline;
     private readonly Action _present;
     private readonly MediaEngineSession _media;
+    private readonly RendererProgress? _progress;
     private readonly CalibrationOverlay _overlay = new();
     private readonly PlaybackMetrics _metrics = new();
     private readonly VideoPlaybackTimeline _timeline = new();
@@ -57,7 +58,7 @@ internal sealed class DisplayScreenTrack : IDisposable
     public bool Animating => _overlay.Animating(_options) || _stillImage && _alpha < 1;
     internal bool ContentAnimating => _stillImage && _alpha < 1;
     public long TransformComputations => _transforms.Computations + _overlayTransforms.Computations;
-    public DisplayScreenTrack(GraphicsResources graphics, string display, ScreenOptions screen, ExperienceOptions options, Action wake, Action present)
+    public DisplayScreenTrack(GraphicsResources graphics, string display, ScreenOptions screen, ExperienceOptions options, Action wake, Action present, RendererProgress? progress = null)
     {
         _graphics = graphics;
         _mask = new(graphics);
@@ -65,8 +66,9 @@ internal sealed class DisplayScreenTrack : IDisposable
         _display = display;
         Screen = screen;
         _options = options;
+        _progress = progress;
         _present = present;
-        _media = new(wake);
+        _media = new(wake, progress, screen.Id);
         _createVideoTexture = CreateVideoTexture;
         try
         {
@@ -168,6 +170,7 @@ internal sealed class DisplayScreenTrack : IDisposable
         var looping = VideoLoopIdentity.For(path, _display, request);
         if (_media.IsOpen && !_timeline.Stopping && looping is not null && _loopIdentity == looping)
         {
+            _progress?.ContinueVideo(Screen.Id, request);
             var previousRequestId = RequestId;
             var previousPriority = _priority;
             _priority = request.VideoPriority;
@@ -195,13 +198,16 @@ internal sealed class DisplayScreenTrack : IDisposable
         _timeline.Reset(request.Loop);
         _metrics.Reset();
         _opening.Restart();
-        _media.Open(path, request, _graphics.DeviceManager);
+        _progress?.StartVideo(Screen, path, request, _options.SoftwareVideoDecoding);
+        _media.Open(path, request, _graphics.DeviceManager, _options.SoftwareVideoDecoding);
         Telemetry.Info("VideoOpening", new
         {
             Path = path,
             DisplayName = _display,
             ScreenName = Screen.Name,
             Muted = request.Mute,
+            _options.SoftwareVideoDecoding,
+            FrameTransfer = _options.SoftwareVideoDecoding ? "SoftwareWicUpload" : "DxgiSurface",
             request.Loop,
             request.IsAmbient,
             SurfaceOpacity = 0
@@ -219,9 +225,9 @@ internal sealed class DisplayScreenTrack : IDisposable
         if (_media.TryGetFrame(out var timestamp) && timestamp != _metrics.LastTimestamp)
         {
             _graphics.Context.PSUnsetShaderResource(0);
-            using var surface = _texture!.QueryInterface<IDXGISurface>();
-            _media.TransferFrame(surface, _videoWidth, _videoHeight);
+            _media.TransferFrame(_graphics, _texture!, _videoWidth, _videoHeight);
             _metrics.Transferred(timestamp);
+            _progress?.FrameTransferred(Screen.Id);
             if (!_timeline.Started && _media.Position > 0)
             {
                 Draw(0);
@@ -229,6 +235,7 @@ internal sealed class DisplayScreenTrack : IDisposable
                 _timeline.Start();
                 _metrics.BeginPlayback();
                 _state.TransitionTo(RendererState.Playing);
+                _progress?.Playing(Screen.Id);
                 Telemetry.Info("VideoPlaybackConfirmed", new
                 {
                     DisplayName = _display,
@@ -248,6 +255,7 @@ internal sealed class DisplayScreenTrack : IDisposable
             return;
         }
         var position = _media.Position;
+        _progress?.Position(Screen.Id, position);
         if (_loop && position < _lastPosition - .05)
         {
             _loops++;
@@ -305,11 +313,12 @@ internal sealed class DisplayScreenTrack : IDisposable
         if (Screen.IsMask) _mask.Draw(_overlay.Preview ?? Screen.Points, Screen.IsVisualization || Screen.IsNegative, cutout: Screen.IsMat);
     }
     internal bool SelectedScreen => _overlay.SelectedScreen;
+    internal bool CalibrationVisible => _overlay.Visible(_options);
     public void DrawOverlay()
     {
         _overlay.SetMediaCaption(Screen.IsVideo ? _mediaCaption ?? _binding?.RelativePath ?? Screen.MediaFile ?? _playbackMedia : null);
         if (_overlay.Visible(_options))
-            _overlay.Draw(_graphics, _options, _display, _overlayTransforms, Screen.Id);
+            _overlay.Draw(_graphics, _options, _display, _overlayTransforms, Screen.Id, Screen);
     }
     public void Presented()
     {
@@ -327,7 +336,11 @@ internal sealed class DisplayScreenTrack : IDisposable
             Vortice.Direct3D11.BindFlags.RenderTarget | Vortice.Direct3D11.BindFlags.ShaderResource));
         _view = _graphics.Device.CreateShaderResourceView(_texture);
     }
-    private void Report() => _metrics.Report(_graphics, _media, _display, RequestId, _alpha, TransformComputations, Screen.Name);
+    private void Report()
+    {
+        using var operation = _progress?.Begin("PlaybackStatistics", Screen.Id);
+        _metrics.Report(_graphics, _media, _display, RequestId, _alpha, TransformComputations, Screen.Name);
+    }
     internal bool StopInterrupted()
     {
         if (_priority?.IsInterrupted != true) return false;
@@ -336,9 +349,12 @@ internal sealed class DisplayScreenTrack : IDisposable
     }
     public void Complete(string reason)
     {
+        using var operation = _progress?.Begin("CompletePlayback:"+reason, Screen.Id);
+        _progress?.Stopping(Screen.Id);
         try { CompleteCore(reason); }
         finally
         {
+            if (!IsOpen) _progress?.EndVideo(Screen.Id);
             _priority?.Dispose();
             _priority = null;
             _loopIdentity = null;
@@ -354,35 +370,46 @@ internal sealed class DisplayScreenTrack : IDisposable
             RequestId = null;
             return;
         }
-        Draw(0);
-        _present();
-        _graphics.CommitAndWait();
-        var flushResult = DwmFlush();
-        Telemetry.Info("VideoTransparentFramePresented", new
+        try
         {
-            DisplayName = _display,
-            ScreenName = Screen.Name,
-            SurfaceOpacity = 0,
-            PositionSeconds = _media.Position,
-            DwmFlushResult = flushResult
-        }, RequestId);
-        if (!_stillImage) Report();
-        Telemetry.Info("PlaybackStopped", new
+            Draw(0);
+            // A hidden/disconnected window or a failed GPU must not be asked to present cleanup.
+            if (reason is not ("Error" or "DisplayUnavailable" or "Shutdown") && _graphics.CanPresent)
+            {
+                _present();
+                _graphics.CommitAndWait();
+                int flushResult;
+                using (var operation = _progress?.Begin("DwmFlush", Screen.Id)) flushResult = DwmFlush();
+                Telemetry.Info("VideoTransparentFramePresented", new
+                {
+                    DisplayName = _display, ScreenName = Screen.Name, SurfaceOpacity = 0,
+                    PositionSeconds = _lastPosition, DwmFlushResult = flushResult
+                }, RequestId);
+                if (!_stillImage) Report();
+            }
+        }
+        finally
         {
-            DisplayName = _display,
-            ScreenName = Screen.Name,
-            SurfaceOpacity = 0,
-            PositionSeconds = _media.Position,
-            Reason = reason
-        }, RequestId);
-        _media.Dispose();
-        _stillImage = false;
-        _state.TransitionTo(RendererState.Idle);
-        _alpha = 0;
-        RequestId = null;
+            // Always attempt decoder cleanup, even if presentation or statistics failed.
+            // A native shutdown that itself hangs is handled by process-level recovery.
+            try { _media.Dispose(); }
+            finally
+            {
+                Telemetry.Info("PlaybackStopped", new
+                {
+                    DisplayName = _display, ScreenName = Screen.Name, SurfaceOpacity = 0,
+                    PositionSeconds = _lastPosition, Reason = reason
+                }, RequestId);
+                _stillImage = false;
+                _state.TransitionTo(RendererState.Idle);
+                _alpha = 0;
+                RequestId = null;
+            }
+        }
     }
     public void Dispose()
     {
+        using var operation = _progress?.Begin("DisposeScreen", Screen.Id);
         _priority?.Dispose();
         _priority = null;
         _media.Dispose();
@@ -392,6 +419,7 @@ internal sealed class DisplayScreenTrack : IDisposable
         _graphics.Context.PSUnsetShaderResource(0);
         _view?.Dispose();
         _texture?.Dispose();
+        _progress?.EndVideo(Screen.Id);
     }
     [DllImport("dwmapi.dll")] private static extern int DwmFlush();
 }

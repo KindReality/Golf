@@ -10,7 +10,7 @@ using Forms = System.Windows.Forms;
 
 internal static class VideoLoopHardwareChecks
 {
-    public static async Task Run()
+    public static async Task Run(bool softwareVideoDecoding = false)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
@@ -30,7 +30,7 @@ internal static class VideoLoopHardwareChecks
                     var commands = ((IPEndPoint)first.Client.LocalEndPoint!).Port; var events = ((IPEndPoint)second.Client.LocalEndPoint!).Port;
                     first.Dispose(); second.Dispose();
                     var display = Forms.Screen.PrimaryScreen!.DeviceName;
-                    var options = new ExperienceOptions { DeveloperMode = true, DeviceName = "loop-client", MediaDiscovery = new() { Enabled = false },
+                    var options = new ExperienceOptions { DeveloperMode = true, DeviceName = "loop-client", SoftwareVideoDecoding = softwareVideoDecoding, MediaDiscovery = new() { Enabled = false },
                         VideoDirectory = Path.GetDirectoryName(video)!, UdpCommandsPort = commands, UdpEventsPort = events,
                         DisplayBackgrounds = Forms.Screen.AllScreens.ToDictionary(s => s.DeviceName, _ => new DisplayBackgroundOptions { IsTransparent = true }),
                         TransitionInSeconds = .5, TransitionOutSeconds = 3, DisplayScreens = new() { [display] = [new() { Id = "a", Name = "screen1" }] } };
@@ -67,7 +67,7 @@ internal static class VideoLoopHardwareChecks
                     await Send("controller-a", "future", Play()); await Task.Delay(250);
                     if ((await Read()).RequestId != "replacement") throw new Exception("A reordered canceled play request replaced the active loop.");
                     var repeated = await Until(s => s.Loops >= 1 && s.RequestId == "replacement" && s.Opacity == 1, 80);
-                    Console.WriteLine($"Native looping repeated with {repeated.Frames} transferred frames; surface opacity remained 1.");
+                    Console.WriteLine($"Native looping repeated with {repeated.Frames} transferred frames; surface opacity remained 1; software decoding={softwareVideoDecoding}.");
                     await Send("controller-a", "stop-current", Stop("replacement"));
                     var fading = await Until(s => s.State == RendererState.FadingOut && s.Opacity is > .2 and < .9);
                     if (fading.Frames <= repeated.Frames) throw new Exception("Video stopped decoding before becoming transparent.");

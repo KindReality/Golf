@@ -65,6 +65,7 @@ internal sealed class PlaybackMetrics
         {
             DisplayName = display,
             ScreenName = screenName,
+            media.SoftwareVideoDecoding,
             TransferredVideoFrames = TransferredFrames,
             MediaEngineFramesRendered = decodedFramesRendered,
             MediaEngineFramesDropped = decoderFramesDropped,

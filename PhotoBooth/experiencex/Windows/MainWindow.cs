@@ -9,6 +9,7 @@ namespace ExperienceX;
 public sealed class MainWindow : Forms.Form, IPointSurface
 {
     private readonly string _display;
+    private readonly System.Drawing.Icon _applicationIcon;
     private ConfigurationSubmenu _submenu;
     internal ConfigurationSubmenu Submenu => _submenu;
     internal event Action? CancelSubmenuRequested;
@@ -32,7 +33,8 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     }
     // Form's base constructor calls CreateParams before this constructor assigns the supplied options.
     private ExperienceOptions _options = new();
-    private VideoRenderer? _renderer;
+    private volatile VideoRenderer? _renderer;
+    internal RenderHealth? RendererHealth => _renderer?.Diagnostics;
     private LedCalibrationWindow? _ledTools;
     private bool _recoveringLedTools;
     private readonly Dictionary<string,PointOptions> _ledPreviews = new();
@@ -171,8 +173,12 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         });
         _modifierPoll.Tick += (_, _) => PollModifierFraming();
         Text = "ExperienceX — " + display;
+        using (var icon = typeof(MainWindow).Assembly.GetManifestResourceStream("ExperienceX.Assets.Application.ico")
+            ?? throw new InvalidOperationException("The Experience icon is missing."))
+            _applicationIcon = new System.Drawing.Icon(icon);
+        Icon = _applicationIcon;
         FormBorderStyle = options.DeveloperMode ? Forms.FormBorderStyle.Sizable : Forms.FormBorderStyle.None;
-        ShowInTaskbar = options.DeveloperMode;
+        ShowInTaskbar = true;
         TopMost = !options.DeveloperMode;
         StartPosition = Forms.FormStartPosition.Manual;
     }
@@ -192,9 +198,11 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     {
         if (_closing)
             return;
+        _renderer?.SetPresentationSuspended(!_available || WindowState == Forms.FormWindowState.Minimized);
         var screen = Forms.Screen.AllScreens.FirstOrDefault(s => s.DeviceName.Equals(_display, StringComparison.OrdinalIgnoreCase));
         if (screen is null)
         {
+            _renderer?.SetPresentationSuspended(true);
             if (_available)
             {
                 _framing.Cancel("DisplayUnavailable");
@@ -216,6 +224,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             Bounds = bounds;
         var restored = !_available;
         _available = true;
+        _renderer?.SetPresentationSuspended(WindowState == Forms.FormWindowState.Minimized);
         if (restored) _renderer?.SetDisplayAvailable(true);
         if (_renderer?.State == RendererState.Failed)
         {
@@ -517,7 +526,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             Text = surface.ScreenName,
             MaxLength = 80,
             Font = new System.Drawing.Font("Segoe UI", ScreenNameLabel.FontSize(ClientSize.Width, ClientSize.Height), System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Pixel),
-            ForeColor = System.Drawing.Color.FromArgb(8, 65, 170),
+            ForeColor = System.Drawing.Color.FromArgb(255, 20, 36),
             BackColor = System.Drawing.Color.FromArgb(200, 225, 255),
             TextAlign = Forms.HorizontalAlignment.Center,
             Bounds = new(Math.Clamp(bounds.X, 0, Math.Max(0, ClientSize.Width - bounds.Width)), Math.Clamp(bounds.Y, 0, Math.Max(0, ClientSize.Height - bounds.Height)), bounds.Width, bounds.Height)
@@ -792,5 +801,6 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     {
         if (disposing) { _modifierPoll?.Dispose(); _modifierFraming?.Cancel("WindowDisposed"); }
         base.Dispose(disposing);
+        if (disposing) _applicationIcon.Dispose();
     }
 }

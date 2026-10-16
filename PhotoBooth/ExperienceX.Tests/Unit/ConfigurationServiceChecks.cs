@@ -96,6 +96,14 @@ internal static class ConfigurationServiceChecks
                     await service.ReloadAsync();
                     if (service.Current.UdpCommandsPort != 22222)
                         throw new Exception("Corrected config was not accepted.");
+                    var decoding = JsonNode.Parse(File.ReadAllText(path))!;
+                    decoding["SoftwareVideoDecoding"] = true;
+                    decoding["TransitionInSeconds"] = 2;
+                    File.WriteAllText(path, decoding.ToJsonString());
+                    await service.ReloadAsync();
+                    if (service.Current.SoftwareVideoDecoding || service.Current.TransitionInSeconds != 2 ||
+                        !JsonNode.Parse(File.ReadAllText(path))!["SoftwareVideoDecoding"]!.GetValue<bool>())
+                        throw new Exception("Decode mode changed without restart, lost the requested setting, or blocked unrelated live configuration.");
                     await service.DisposeAsync();
                     var count = changes;
                     migrated["configurationMode"] = false;
@@ -103,6 +111,13 @@ internal static class ConfigurationServiceChecks
                     await Task.Delay(150);
                     if (changes != count)
                         throw new Exception("Stopped watcher delivered configuration changes.");
+                    File.WriteAllText(path, decoding.ToJsonString());
+                    await using (var restarted = new ConfigurationService(dispatcher,path,()=>["TEST"]))
+                    {
+                        restarted.LoadInitial();
+                        if (!restarted.Current.SoftwareVideoDecoding) throw new Exception("Restart did not apply software decode mode.");
+                    }
+                    Console.WriteLine("Passed decoding-mode restart requirement while preserving other live settings and the requested configuration.");
                     var future = "{\"ConfigurationVersion\":999}";
                     try
                     {

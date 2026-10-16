@@ -67,7 +67,7 @@ internal sealed class TopmostGuard : IDisposable
             SetWindowPos(_handle, new IntPtr(-2), 0, 0, 0, 0, 0x0013);
             return;
         }
-        if (_disposed || (!force && !_isActive()) || !IsWindowVisible(_handle))
+        if (_disposed || (!force && !_isActive()) || !IsWindowVisible(_handle) || IsIconic(_handle))
             return;
         if (!force && (GetWindowLongPtr(_handle, -20).ToInt64() & 8) != 0 && !HasCoveringWindow())
             return;

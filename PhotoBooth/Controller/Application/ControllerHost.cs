@@ -31,6 +31,12 @@ internal sealed class ControllerHost : IAsyncDisposable
     public ControllerOptions Options => Volatile.Read(ref _options);
     public string ConfigurationPath => _configuration.Path;
     public Task SetConfigurationModeAsync(bool value) => _configuration.SetConfigurationModeAsync(value);
+    public async Task SaveShowAsync(ShowConfiguration expected, ShowConfiguration next)
+    {
+        await _configuration.SaveShowAsync(expected, next);
+        Log.Info("ShowConfigurationSaved", "Saved scenes, playlists and triggers; running storyboards retain their settings", new
+        { Scenes = next.Scenes.Select(s => s.Name).ToArray(), Playlists = next.Playlists.Select(p => new { p.Name, p.Type, Items = p.Items.Length }).ToArray(), Triggers = next.Triggers.Select(t => t.Name).ToArray() });
+    }
     public async Task SavePerspectivesAsync(PerspectiveDefinition[] expected, PerspectiveDefinition[] next)
     {
         await _configuration.SavePerspectivesAsync(expected, next);

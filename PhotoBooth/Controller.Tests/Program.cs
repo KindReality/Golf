@@ -24,7 +24,10 @@ internal static class Program
     {
         try
         {
-            if(args.SequenceEqual(["--experience-process"])) ExperienceProcessChecks.Run().GetAwaiter().GetResult();
+            if(args.SequenceEqual(["--toolbar"])) ToolbarChecks.Run();
+            else if(args.SequenceEqual(["--restart-scope"])) RestartScopeChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--show-editor"])) { ShowEditorChecks.Run().GetAwaiter().GetResult(); ShowEditorPageChecks.Run().GetAwaiter().GetResult(); }
+            else if(args.SequenceEqual(["--experience-process"])) ExperienceProcessChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--perspective-create"])) PerspectiveCreationChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--roles"])) RolePlaylistChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--perspective-shortcuts"])) PerspectiveShortcutChecks.Run().GetAwaiter().GetResult();
@@ -450,27 +453,47 @@ internal static class Program
             {
                 var controls = Descendants(window).ToArray(); var run = controls.OfType<Button>().Single(b => b.Text == "Run playlist"); var cancel = controls.OfType<Button>().Single(b => b.Text == "Cancel selected"); var activate = controls.OfType<Button>().Single(b => b.Text == "Activate scene");
                 await UntilAsync(() => run.Enabled && activate.Enabled); Check(window.Visible && controls.OfType<Label>().Any(l => l.Text.Contains("Development")), "Monitoring window shows identity and environment");
-                var restart = controls.OfType<Button>().Single(b => b.Text == "Restart"); var shutdown = controls.OfType<Button>().Single(b => b.Text == "Shutdown");
-                Check(restart.Parent == shutdown.Parent && shutdown.Left > restart.Left && shutdown.Top == restart.Top, "Restart and Shutdown are adjacent horizontal controls");
-                window.Close();
-                Check(!window.Visible && !window.IsDisposed, "Window close hides to the notification area without stopping Controller");
-                window.RestoreFromNotification();
-                Check(window.Visible && window.ShowInTaskbar && window.Bounds == Screen.PrimaryScreen!.WorkingArea && window.WindowState == FormWindowState.Normal, "Notification restore shows the normal window on the primary display");
-                Check(window.WindowState == FormWindowState.Normal && window.Opacity == 1 && window.Bounds == Screen.PrimaryScreen!.WorkingArea, "Controller starts at the primary display's full working area without maximizing");
+                var power = controls.OfType<PowerToolbarButton>().Single();
+                Check(power.MenuButton.Enabled && power.ShutdownItem.Enabled && power.Menu.Items.Cast<ToolStripItem>().Select(i => i.Text).SequenceEqual(["Restart", "Shutdown"]), "Power menu exposes Restart and Shutdown with correct startup availability");
+                controls.OfType<ToolbarIconButton>().Single(b => b.Glyph == ToolbarGlyph.Minimize).PerformClick();
+                Check(window.Visible && window.ShowInTaskbar && window.WindowState == FormWindowState.Minimized && !window.IsDisposed, "Minimize keeps Controller running with its taskbar entry");
+                await Task.Delay(1250);
+                Check(window.WindowState == FormWindowState.Minimized, "Display polling leaves Controller minimized");
+                window.RestoreFromTaskbar();
+                Check(window.Visible && window.ShowInTaskbar && window.Bounds == Screen.PrimaryScreen!.Bounds && window.WindowState == FormWindowState.Normal, "Taskbar restore shows Controller full screen on the primary display");
+                Check(window.FormBorderStyle == FormBorderStyle.None && window.Opacity == 1 && window.Bounds == Screen.PrimaryScreen!.Bounds, "Controller starts as a borderless full-screen workspace");
                 if (Screen.AllScreens.FirstOrDefault(display => !display.Primary) is { } secondary)
                 {
                     ConfigurationDefaults.Write(path, JsonSerializer.Serialize(settings with { DefaultDisplayName = "Presentation", DisplayAliases = new() { ["Presentation"] = secondary.DeviceName } }, ControllerOptions.Json));
-                    await UntilAsync(() => window.Bounds == secondary.WorkingArea);
+                    await UntilAsync(() => window.Bounds == secondary.Bounds);
                     Check(window.WindowState == FormWindowState.Normal, "Live Controller display alias edits reposition the normal window");
-                    window.Close(); window.RestoreFromNotification();
+                    window.Close();
+                    Check(window.Visible && window.ShowInTaskbar && window.WindowState == FormWindowState.Minimized, "Closing Controller minimizes instead of hiding or exiting");
+                    window.RestoreFromTaskbar();
                     await Task.Delay(1250);
-                    Check(window.Bounds == Screen.PrimaryScreen!.WorkingArea, $"Notification restore remains on primary even when configuration selects another display (actual {window.Bounds}, expected {Screen.PrimaryScreen.WorkingArea})");
+                    Check(window.Bounds == secondary.Bounds, "Taskbar restore retains the configured display");
                     ConfigurationDefaults.Write(path, JsonSerializer.Serialize(settings, ControllerOptions.Json));
-                    await UntilAsync(() => window.Bounds == Screen.PrimaryScreen!.WorkingArea);
+                    await UntilAsync(() => window.Bounds == Screen.PrimaryScreen!.Bounds);
                     Check(true, "Clearing Controller display selection returns the window to the primary display");
                 }
                 var scenes = controls.OfType<ComboBox>().Single(c => c.Items.Contains("second")); scenes.SelectedItem = "second"; activate.PerformClick(); await UntilAsync(() => controls.OfType<Label>().Any(l => l.Text == "Scene: second • Active")); Check(true, "Native scene selector activates a scene");
                 run.PerformClick(); var running = controls.OfType<ListView>().Single(l => l.Columns[0].Text == "Playlist"); await UntilAsync(() => running.Items.Count == 1); running.Items[0].Selected = true; await UntilAsync(() => cancel.Enabled); cancel.PerformClick(); await UntilAsync(() => running.Items.Count == 0); Check(true, "Native Run and Cancel controls work");
+                var current = ControllerOptions.Parse(File.ReadAllText(path), Development);
+                ConfigurationDefaults.Write(path, JsonSerializer.Serialize(current with { ConfigurationMode = true }, ControllerOptions.Json));
+                var scenesButton = controls.OfType<Button>().Single(b => b.Text == "Scenes"); await UntilAsync(() => scenesButton.Enabled);
+                var liveButton = controls.OfType<Button>().Single(b => b.Text == "Live"); var perspectivesButton = controls.OfType<Button>().Single(b => b.Text == "Perspectives");
+                Check(scenesButton.Parent == liveButton.Parent && scenesButton.Top == liveButton.Top && scenesButton.Top == perspectivesButton.Top, "Scenes, Live and Perspectives share horizontal navigation");
+                Check(scenesButton.Size == liveButton.Size && scenesButton.Size == perspectivesButton.Size && !scenesButton.AutoSize && !liveButton.AutoSize && !perspectivesButton.AutoSize, "Live, Scenes and Perspectives have identical fixed button sizes");
+                var configuration = controls.OfType<ToolbarIconButton>().Single(b => b.Glyph == ToolbarGlyph.Play);
+                Check(configuration.Text.Length == 0 && configuration.AccessibleName == "Exit configuration mode", "Configuration mode presents the themed play icon to exit");
+                scenesButton.PerformClick(); var page = Descendants(window).OfType<ShowEditorPage>().Single();
+                Check(page.Visible && page.Parent?.TopLevelControl == window && window.OwnedForms.Length == 0, "Scenes editor is embedded in the full-screen Controller window");
+                var sceneName = Descendants(page).OfType<TextBox>().Single(c => c.AccessibleName == "Scene name"); sceneName.Text = "Unsaved scene name";
+                window.OpenLive(); window.OpenScenes();
+                Check(Descendants(page).OfType<TextBox>().Single(c => c.AccessibleName == "Scene name").Text == "Unsaved scene name" && page.HasUnsavedChanges && ControllerOptions.Parse(File.ReadAllText(path), Development).Scenes[0].Name == "idle", "Switching pages retains a draft without saving or activating it");
+                var back = controls.OfType<ToolbarIconButton>().Single(b => b.Glyph == ToolbarGlyph.Return);
+                Check(back.Visible && back.AccessibleName == "Return to dashboard", "Editor navigation presents the turning return arrow");
+                back.PerformClick(); Check(!page.Visible && !back.Visible, "Turning return arrow opens Dashboard");
                 if (Environment.GetEnvironmentVariable("CONTROLLER_WINDOW_SNAPSHOT") is { Length: > 0 } snapshot) { using var bitmap = new Bitmap(window.Width, window.Height); window.DrawToBitmap(bitmap, new Rectangle(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(snapshot); }
             }
             catch (Exception ex) { failure = ex; }

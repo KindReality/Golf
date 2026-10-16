@@ -1,6 +1,6 @@
 cbuffer Overlay : register(b0) {
     float4 screen; // width, height, monotonic animation time, overlay opacity
-    float4 selection; // selected index, flash corner bitmask, flash progress (-1 when inactive), success
+    float4 selection; // selected index, flash corner bitmask, progress (-1 when inactive), kind: 0 failed, 1 saved, 2 selected
     float4 grid; // grid enabled, label texture width/height, label enabled
     float4 row0,row1,row2;
     float4 label; // center in pixels, selected polygon opacity, point count
@@ -11,6 +11,7 @@ Texture2D labelTexture : register(t0);
 StructuredBuffer<float4> polygonPoints : register(t1); // normalized XY, flash enabled, interaction index
 Texture2D hintTexture : register(t2);
 SamplerState labelSampler : register(s0);
+cbuffer Region : register(b1) { float4 region; } // static-cache origin XY, point index Z
 struct Vertex { float4 position : SV_Position; float2 uv : TEXCOORD0; };
 float4 Over(float4 back,float4 front) {return front+back*(1-front.a);}
 float DistanceToLine(float2 p,float2 a,float2 b) {
@@ -38,9 +39,8 @@ float Number(float2 p,uint value) {
 float4 PointAt(int i) {
     return polygonPoints[i];
 }
-float4 PSMain(Vertex input) : SV_Target {
+float4 StaticAt(float2 p) {
     float2 dimensions=screen.xy;
-    float2 p=input.uv*dimensions;
     int count=(int)label.w;
     float distance=1e10;
     bool inside=false;
@@ -69,13 +69,10 @@ float4 PSMain(Vertex input) : SV_Target {
         float alpha=max(stem,ring)*screen.w;
         color=Over(color,float4(azure*alpha,alpha));
     }
-    float3 position=float3(input.uv,1);
-    float divisor=dot(row2.xyz,position);
-    float2 uv=float2(dot(row0.xyz,position),dot(row1.xyz,position))/max(divisor,0.000001);
     if(label.z>0 && inside)
         color=Over(float4(azure*label.z,label.z),color);
     if(grid.x>0 && inside) {
-        float3 position=float3(input.uv,1);
+        float3 position=float3(p/dimensions,1);
         float divisor=dot(row2.xyz,position);
         float2 uv=float2(dot(row0.xyz,position),dot(row1.xyz,position))/max(divisor,0.000001);
         if(all(uv>=0) && all(uv<=1)) {
@@ -91,7 +88,12 @@ float4 PSMain(Vertex input) : SV_Target {
         color=Over(color,labelTexture.SampleLevel(labelSampler,(p-labelStart)/grid.yz,0));
     if(hint.w>0 && all(p>=hint.xy) && all(p<hint.xy+hint.zw))
         color=Over(color,hintTexture.SampleLevel(labelSampler,(p-hint.xy)/hint.zw,0));
-    [loop] for(int i=0;i<count;i++) {
+    return color;
+}
+float4 PointAtPixel(float2 p,int i) {
+    float2 dimensions=screen.xy;
+    float3 azure=float3(0.05,0.55,1);
+    float4 color=0;
         float4 vertexData=PointAt(i);
         float2 corner=vertexData.xy*(dimensions-1);
         int index=(int)vertexData.w;
@@ -100,10 +102,10 @@ float4 PSMain(Vertex input) : SV_Target {
         float d=length(local);
         float sphere=1-smoothstep(0.78,1,d);
         float glow=0.22*exp(-d*d/1.6);
-        float alpha=saturate(0.7*sphere+glow)*screen.w;
+        float alpha=saturate(0.7*sphere+glow)*screen.w*(grid.w>0?1:0.5);
         float light=0.35+0.65*saturate(dot(normalize(float3(local,sqrt(saturate(1-dot(local,local))))),normalize(float3(-0.4,-0.5,0.8))));
         float highlight=exp(-dot(local-float2(-0.27,-0.32),local-float2(-0.27,-0.32))*40)*0.7;
-        float3 hue=index==(int)selection.x?azure:float3(1,0.08,0.14);
+        float3 hue=grid.w>0 && index!=(int)selection.x?float3(1,0.08,0.14):azure;
         if(selection.x != -2) color=Over(color,float4(saturate(hue*light+highlight)*alpha,alpha));
         if (index==(int)selection.x) {
             float2 label=clamp(corner+float2(24,-22),float2(12,12),dimensions-12);
@@ -124,9 +126,11 @@ float4 PSMain(Vertex input) : SV_Target {
         }
         if (vertexData.z>0 && selection.z>=0 && selection.z<=1) {
             float flash=sin(selection.z*3.14159265)*exp(-dot(p-corner,p-corner)/2500)*0.85;
-            float3 flashColor=selection.w>0?float3(1,1,1):float3(1,0.04,0.04);
+            float3 flashColor=selection.w>1.5?float3(1,1,1):selection.w>0.5?float3(0.025,0.38,0.12):float3(1,0.04,0.04);
             color=Over(color,float4(flashColor*flash,flash));
         }
-    }
     return color;
 }
+float4 StaticPS(Vertex input) : SV_Target { return StaticAt(input.position.xy+region.xy); }
+float4 PointPS(Vertex input) : SV_Target { return PointAtPixel(input.position.xy,(int)region.z); }
+float4 CompositePS(Vertex input) : SV_Target { return labelTexture.SampleLevel(labelSampler,input.uv,0); }

@@ -150,11 +150,17 @@ internal sealed class ConfigurationService : IAsyncDisposable
                     var next = ExperienceOptions.Parse(json);
                     if (next.DeveloperMode != _options.DeveloperMode)
                         Telemetry.Warning("DeveloperModeRestartRequired");
+                    if (next.GraphicsDebugLayerEnabled != _options.GraphicsDebugLayerEnabled)
+                        Telemetry.Warning("GraphicsDebugLayerRestartRequired");
+                    if (next.SoftwareVideoDecoding != _options.SoftwareVideoDecoding)
+                        Telemetry.Warning("VideoDecodingRestartRequired", new { RequestedSoftwareVideoDecoding = next.SoftwareVideoDecoding });
                     Changing?.Invoke(next);
                     var previous = _options;
                     _options = next with
                     {
-                        DeveloperMode = _options.DeveloperMode
+                        DeveloperMode = _options.DeveloperMode,
+                        GraphicsDebugLayerEnabled = _options.GraphicsDebugLayerEnabled,
+                        SoftwareVideoDecoding = _options.SoftwareVideoDecoding
                     };
                     _loadedConfiguration = json;
                     Changed?.Invoke(previous, _options);
@@ -184,6 +190,9 @@ internal sealed class ConfigurationService : IAsyncDisposable
         _options.DefaultAudioDevice,
         _options.AudioDevices,
         _options.DeveloperMode,
+        _options.GraphicsDebugLayerEnabled,
+        _options.SoftwareVideoDecoding,
+        _options.RendererRecovery,
         _options.UdpCommandsPort,
         _options.UdpEventsPort,
         _options.DeviceName,

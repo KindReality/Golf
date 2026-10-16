@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO;
 using System.Numerics;
 using System.Reflection;
@@ -7,6 +6,7 @@ using Microsoft.Win32.SafeHandles;
 using PhotoBooth.Diagnostics;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
+using Vortice.Direct3D11.Debug;
 using Vortice.DirectComposition;
 using Vortice.DXGI;
 using Vortice.Mathematics;
@@ -15,7 +15,7 @@ using Vortice.MediaFoundation;
 namespace ExperienceX;
 
 // Created and disposed on the render worker. No UI thread may touch these resources.
-internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, string _display) : IDisposable
+internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, string _display, RendererProgress? progress = null, bool debugLayer = false) : IDisposable
 {
     private ID3D11Device _device = null!;
     private ID3D11DeviceContext _context = null!;
@@ -28,6 +28,8 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     private ID3D11VertexShader _vs = null!;
     public ID3D11VertexShader VertexShader => _vs;
     private ID3D11PixelShader _ps = null!;
+    private ID3D11PixelShader _calibrationCompositePs = null!;
+    internal ID3D11RenderTargetView CurrentTarget { get; private set; } = null!;
     private ID3D11Buffer _constants = null!;
     private ID3D11SamplerState _sampler = null!;
     private ID3D11BlendState _videoBlend = null!;
@@ -44,11 +46,16 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     private ID3D11InputLayout _polygonLayout = null!;
     private ID3D11RasterizerState _polygonRasterizer = null!;
     private IMFDXGIDeviceManager _deviceManager = null!;
+    private ID3D11InfoQueue? _infoQueue;
+    private long _nextDebugReport;
+    private readonly HashSet<MessageId> _reportedMessages = [];
+    internal bool CanPresent => progress?.IsSuspended != true;
+    internal RendererProgress.OperationScope? Operation(string name) => progress?.Begin(name, progress.OperationScreenId);
     private ID3D11Texture2D? _videoTexture;
     private ID3D11ShaderResourceView? _videoView;
-    public ID3D11Device Device => _device;
-    public ID3D11DeviceContext Context => _context;
-    public IDXGISwapChain2 SwapChain => _swapChain;
+    public ID3D11Device Device { get { AssertOwnerThread(); return _device; } }
+    public ID3D11DeviceContext Context { get { AssertOwnerThread(); return _context; } }
+    public IDXGISwapChain2 SwapChain { get { AssertOwnerThread(); return _swapChain; } }
     public EventWaitHandle? Latency => _latency;
     public IDCompositionDevice Composition => _composition;
     public ID3D11SamplerState Sampler => _sampler;
@@ -66,9 +73,18 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     public void Initialize()
     {
         _ownerThread = Environment.CurrentManagedThreadId;
-        Vortice.Direct3D11.D3D11.D3D11CreateDevice(null, DriverType.Hardware,
-            DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport, [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0],
-            out _device, out _context).CheckError();
+        var flags = DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport;
+        var result = Vortice.Direct3D11.D3D11.D3D11CreateDevice(null, DriverType.Hardware,
+            flags | (debugLayer ? DeviceCreationFlags.Debug : 0), [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0], out _device, out _context);
+        if (debugLayer && unchecked((uint)result.Code) == 0x887A002D)
+        {
+            Telemetry.Warning("GraphicsDebugLayerUnavailable", new { DisplayName = _display, Reason = "Windows Graphics Tools is not installed; using the normal device." });
+            result = Vortice.Direct3D11.D3D11.D3D11CreateDevice(null, DriverType.Hardware, flags,
+                [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0], out _device, out _context);
+            debugLayer = false;
+        }
+        result.CheckError();
+        if (debugLayer) { _infoQueue = _device.QueryInterface<ID3D11InfoQueue>(); _infoQueue.MessageCountLimit = 128; }
         using (var multithread = _device.QueryInterface<ID3D11Multithread>())
             multithread.SetMultithreadProtected(true);
         using var dxgi = _device.QueryInterface<IDXGIDevice>();
@@ -100,6 +116,7 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         _composition.Commit().CheckError();
         _vs = _device.CreateVertexShader(Shader("VideoVS.cso"));
         _ps = _device.CreatePixelShader(Shader("VideoPS.cso"));
+        _calibrationCompositePs = _device.CreatePixelShader(Shader("CalibrationCompositePS.cso"));
         _constants = _device.CreateBuffer((uint)Marshal.SizeOf<Constants>(), BindFlags.ConstantBuffer);
         _sampler = _device.CreateSamplerState(new SamplerDescription(Filter.MinMagMipLinear, TextureAddressMode.Clamp));
         _videoBlend = CreateVideoBlendState(_device);
@@ -146,6 +163,7 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
 
     public void Resize(int width, int height)
     {
+        using var operation = progress?.Begin("ResizeBuffers");
         AssertOwnerThread();
         if (_width == width && _height == height)
             return;
@@ -190,12 +208,13 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     public void BeginFrame(Color4 background)
     {
         AssertOwnerThread();
-        _context.OMSetRenderTargets(_rtv!);
-        _context.ClearRenderTargetView(_rtv!, background);
+        using (var operation = Operation("BindDisplayTarget")) BindTarget(_rtv!);
+        using (var operation = Operation("ClearDisplayTarget")) _context.ClearRenderTargetView(_rtv!, background);
     }
     // Mats erase only the ordered media layers. Background and the owned G-Force mask stay below this target.
     internal void BeginScreenLayers()
     {
+        using var operation = Operation("PrepareScreenLayers");
         AssertOwnerThread();
         _context.PSUnsetShaderResource(0);
         if (_screenLayers is null)
@@ -205,13 +224,14 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
             _screenLayersTarget = _device.CreateRenderTargetView(_screenLayers);
             _screenLayersView = _device.CreateShaderResourceView(_screenLayers);
         }
-        _context.OMSetRenderTargets(_screenLayersTarget!);
+        BindTarget(_screenLayersTarget!);
         _context.ClearRenderTargetView(_screenLayersTarget!, new Color4(0, 0, 0, 0));
     }
     internal void FinishScreenLayers()
     {
+        using var operation = Operation("CompositeScreenLayers");
         AssertOwnerThread();
-        _context.OMSetRenderTargets(_rtv!);
+        BindTarget(_rtv!);
         DrawLayer(_screenLayersView, 1, CompositeOptions, FullDisplay, CompositeKey, sourceAlpha: true);
         _context.PSUnsetShaderResource(0);
     }
@@ -222,11 +242,31 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
         _screenLayersTarget?.Dispose(); _screenLayersTarget = null;
         _screenLayers?.Dispose(); _screenLayers = null;
     }
+    internal void BindTarget(ID3D11RenderTargetView target)
+    {
+        AssertOwnerThread();
+        _context.OMSetRenderTargets(target);
+        CurrentTarget = target;
+    }
+    internal void CompositeCalibration(ID3D11ShaderResourceView view, System.Drawing.Rectangle bounds)
+    {
+        AssertOwnerThread();
+        _context.RSSetViewport(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+        _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+        _context.IASetInputLayout(null);
+        _context.VSSetShader(_vs);
+        _context.PSSetShader(_calibrationCompositePs);
+        _context.PSSetShaderResource(0, view);
+        _context.PSSetSampler(0, _sampler);
+        _context.OMSetBlendState(_videoBlend);
+        try { _context.Draw(3, 0); }
+        finally { _context.PSUnsetShaderResource(0); _context.OMSetBlendState(null); }
+    }
     public void DrawLayer(ID3D11ShaderResourceView? view, double opacity, ExperienceOptions options, (Vector4, Vector4, Vector4) transform, BlackKeyOptions? blackKey = null, bool sourceAlpha = false, double brightness = 100, PhotoBooth.Networking.PerspectiveRectangle? perspective = null, VideoFramingOptions? framing = null, double screenAspect = 1, PolygonMesh? outline = null)
     {
         AssertOwnerThread();
 
-        _context.OMSetBlendState(_videoBlend);
+        using (var operation = Operation("BindVideoBlendState")) _context.OMSetBlendState(_videoBlend);
         if (view is not null && opacity > 0)
         {
             var key = blackKey ?? options.BlackKey;
@@ -246,7 +286,8 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
             };
             data.Aspect.Z = sourceAlpha ? 1 : 0;
             data.Aspect.W = (float)(brightness / 100);
-            _context.UpdateSubresource(in data, _constants);
+            using (var operation = Operation("UploadVideoConstants")) _context.UpdateSubresource(in data, _constants);
+            using var pipelineOperation = Operation("BindVideoPipeline");
             _context.RSSetViewport(0, 0, _width, _height);
             _context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
             _context.IASetInputLayout(outline is null ? null : _polygonLayout);
@@ -255,12 +296,12 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
             _context.PSSetConstantBuffer(0, _constants);
             _context.PSSetSampler(0, _sampler);
             _context.PSSetShaderResource(0, view);
-            if (outline is null) _context.Draw(3, 0);
+            if (outline is null) { using var operation = Operation("DrawVideoTriangles"); _context.Draw(3, 0); }
             else
             {
                 _context.RSSetState(_polygonRasterizer);
                 _context.IASetVertexBuffer(0,outline.Vertices!,8);
-                _context.Draw((uint)outline.Count,0);
+                using (var operation = Operation("DrawVideoPolygon")) _context.Draw((uint)outline.Count,0);
                 _context.IASetVertexBuffer(0,null!,0);
                 _context.IASetInputLayout(null);
                 _context.RSSetState(null);
@@ -269,6 +310,7 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     }
     internal void DrawMask(ID3D11Buffer vertices, int count, bool cutout)
     {
+        using var operation = Operation("DrawMaskTriangles");
         AssertOwnerThread();
         _context.PSUnsetShaderResource(0);
         _context.OMSetBlendState(cutout ? _cutoutBlend : null);
@@ -286,19 +328,34 @@ internal sealed class GraphicsResources(nint _hwnd, int _width, int _height, str
     }
     public void CommitAndWait()
     {
-        _composition.Commit().CheckError();
-        _composition.WaitForCommitCompletion().CheckError();
+        AssertOwnerThread();
+        using (var operation = progress?.Begin("CompositionCommit")) _composition.Commit().CheckError();
+        using (var operation = progress?.Begin("CompositionCommitWait")) _composition.WaitForCommitCompletion().CheckError();
     }
-    [Conditional("DEBUG")]
     private void AssertOwnerThread()
     {
         if (_ownerThread != 0 && Environment.CurrentManagedThreadId != _ownerThread)
             throw new InvalidOperationException("Graphics resources must remain on the render worker.");
     }
+    internal void ReportDebugMessages()
+    {
+        AssertOwnerThread();
+        if (_infoQueue is null || Environment.TickCount64 < _nextDebugReport) return;
+        _nextDebugReport = Environment.TickCount64 + 1000;
+        using var operation = Operation("ReadGraphicsValidationMessages");
+        var count = Math.Min(_infoQueue.NumStoredMessages, 128UL);
+        for (ulong i = 0; i < count; i++)
+        {
+            var message = _infoQueue.GetMessage(i);
+            if (message.Severity is MessageSeverity.Warning or MessageSeverity.Error or MessageSeverity.Corruption && _reportedMessages.Add(message.Id))
+                Telemetry.Warning("GraphicsValidationMessage", new { DisplayName = _display, Severity = message.Severity.ToString(), Id = message.Id.ToString(), message.Description });
+        }
+        _infoQueue.ClearStoredMessages();
+    }
     public void Dispose()
     {
         AssertOwnerThread();
-        IDisposable?[] resources = [_screenLayersView, _screenLayersTarget, _screenLayers, _videoView, _videoTexture, _rtv, _polygonRasterizer, _polygonLayout, _maskPs, _maskVs, _polygonVideoVs, _cutoutBlend, _videoBlend, _sampler, _constants, _ps, _vs, _latency, _visual, _target, _composition, _swapChain, _deviceManager, _context, _device];
+        IDisposable?[] resources = [_infoQueue, _screenLayersView, _screenLayersTarget, _screenLayers, _videoView, _videoTexture, _rtv, _polygonRasterizer, _polygonLayout, _maskPs, _maskVs, _polygonVideoVs, _calibrationCompositePs, _cutoutBlend, _videoBlend, _sampler, _constants, _ps, _vs, _latency, _visual, _target, _composition, _swapChain, _deviceManager, _context, _device];
         foreach (var resource in resources)
             try
             {
