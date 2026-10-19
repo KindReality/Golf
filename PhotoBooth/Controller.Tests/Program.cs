@@ -24,7 +24,13 @@ internal static class Program
     {
         try
         {
-            if(args.SequenceEqual(["--toolbar"])) ToolbarChecks.Run();
+            if(args.SequenceEqual(["--scene-playlists"])) ScenePlaylistChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--dashboard-clear"])) DashboardClearChecks.Run().GetAwaiter().GetResult();
+            else if(args.Length == 2 && args[0] == "--serial-firmware") SerialDiscoveryChecks.CheckFirmware(args[1]);
+            else if(args.SequenceEqual(["--serial-discovery"])) SerialDiscoveryChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--random-audio"])) RandomAudioChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--playlist-lifecycle"])) PlaylistLifecycleChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--toolbar"])) ToolbarChecks.Run();
             else if(args.SequenceEqual(["--restart-scope"])) RestartScopeChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--show-editor"])) { ShowEditorChecks.Run().GetAwaiter().GetResult(); ShowEditorPageChecks.Run().GetAwaiter().GetResult(); }
             else if(args.SequenceEqual(["--experience-process"])) ExperienceProcessChecks.Run().GetAwaiter().GetResult();
@@ -92,7 +98,7 @@ internal static class Program
             try { Valid(invalidDisplay); } catch (ArgumentException) { rejected = true; }
             Check(rejected, "Invalid Controller display configuration is rejected");
         }
-        Check(defaults.Playlists[0].Name == "default-ambient" && defaults.Scenes[0].AmbientPlaylist == "default-ambient" &&
+        Check(defaults.Playlists.Any(p => p.Name == "default-ambient") && defaults.Scenes[0].AmbientPlaylist == "default-ambient" &&
             defaults.Playlist("default-video").Items[0].Commands[0].Device == "*" &&
             ControllerOptions.Text(defaults.Playlist("default-video").Items[0].Commands[0].Payload, "screen") == "*", "Default ambient/video names target every device and video screen");
         var probe = BroadcastEnvelope.Parse(ControllerDiscovery.Request(new() { DeviceName = "experience-alias" }, "probe-id"));
@@ -104,7 +110,7 @@ internal static class Program
         Check(ControllerOptions.Parse("{}", Development).UdpSendAttempts == 1, "One best-effort send is the Controller default");
         var populated = ConfigurationDefaults.Populate("{}", Development);
         var seed = ControllerOptions.Parse(populated, Development);
-        Check(seed.Scenes.Length == 1 && seed.Scenes[0].AmbientPlaylist == "default-ambient" && seed.Scenes[0].ActivatingPlaylist is null && seed.Scenes[0].DeactivatingPlaylist is null && seed.Playlist(seed.Scenes[0].AmbientPlaylist, "ambient").Items.Length == 0, "Missing scenes create one scene with an empty default ambient playlist");
+        Check(seed.Scenes.Length == 2 && seed.Scenes[0].AmbientPlaylist == "default-ambient" && seed.Scenes[0].ActivatingPlaylist is null && seed.Scenes[0].DeactivatingPlaylist is null && seed.Playlist(seed.Scenes[0].AmbientPlaylist, "ambient").Items.Length == 0, "Missing scenes create idle/active scenes with empty ambient playlists");
         var seededSource = ConfigurationDefaults.Populate(source, Development);
         Check(ConfigurationDefaults.Populate(populated, Development) == populated && ConfigurationDefaults.Populate(seededSource, Development) == seededSource &&
             ControllerOptions.Parse(seededSource, Development).Scenes.SequenceEqual(defaults.Scenes) && Guid.TryParse(seed.ControllerId,out _), "Default population creates a permanent controller ID, is idempotent and preserves configured scenes");
@@ -120,7 +126,7 @@ internal static class Program
         {
             var path = Path.Combine(directory, "appsettings.json"); File.WriteAllText(path, "{}");
             await using (var service = new ConfigurationService(path, Development, new(), _ => Task.CompletedTask))
-                Check(service.Initial.Scenes.Length == 1 && ControllerOptions.Parse(File.ReadAllText(path), Development).Scenes.Length == 1, "Startup saves synthesized configuration");
+                Check(service.Initial.Scenes.Length == 2 && ControllerOptions.Parse(File.ReadAllText(path), Development).Scenes.Length == 2, "Startup saves synthesized configuration");
 
             var application = Path.GetDirectoryName(MachineConfigurationFiles.Resolve("Controller", directory, "ALPHA"))!;
             Directory.CreateDirectory(application);
@@ -139,7 +145,7 @@ internal static class Program
                 Check(File.ReadAllText(local) == preservedMachineConfiguration, "Template updates preserve existing hostname Controller settings");
             var other = MachineConfigurationFiles.Resolve("Controller", directory, "LAPTOPMSPIN");
             await using (var service = new ConfigurationService(other, Production, new(), _ => Task.CompletedTask, application))
-                Check(service.Initial.DeviceName == "new-default" && service.Initial.Scenes.Length == 1, "Another hostname independently receives the current defaults and startup population");
+                Check(service.Initial.DeviceName == "new-default" && service.Initial.Scenes.Length == 2, "Another hostname independently receives the current defaults and startup population");
             Check(File.ReadAllText(template) == "{\"DeviceName\":\"new-default\"}" && File.ReadAllText(local) == preservedMachineConfiguration, "Startup population changes neither the template nor another hostname file");
             File.Delete(template);
             await using (var service = new ConfigurationService(local, Development, new(), _ => Task.CompletedTask, application))
@@ -162,7 +168,7 @@ internal static class Program
         Bad(Options(Board("a", Item("x") with { Commands = [new() { Playlist = "b" }] }), Board("b", Item("x") with { Commands = [new() { Playlist = "a" }] })));
         Bad(Options(Board("a", Item("x"), Item("X"))));
         Bad(Options() with { Scenes = [new() { Name = "bad", AmbientPlaylist = "missing" }] });
-        Bad(Options(Board("a", Item("x") with { Commands = [Command() with { Transport = "arduino", Device = "missing" }] })));
+        Bad(Options(Board("a", Item("x") with { Commands = [Command() with { Transport = "arduino", Device = "*" }] })));
         foreach (var text in invalid)
         {
             bool rejected = false; try { ControllerOptions.Parse(text, Development); } catch (Exception ex) when (ex is ArgumentException or JsonException) { rejected = true; }
@@ -229,7 +235,7 @@ internal static class Program
             var sends = recorder.Sends.ToArray();
             Check(sends.Select(s => s.Command.Device).SequenceEqual(["shared", "free", "shared"]) && Stopwatch.GetElapsedTime(sends[0].At, sends[2].At).TotalMilliseconds >= 107, "Cooling storyboard items wait; unrelated items run freely");
         }
-        await TriggerTestsAsync(); await SceneTestsAsync(); await VideoLoopTestsAsync();
+        await TriggerTestsAsync(); await SceneTestsAsync(); await VideoLoopTestsAsync(); await PlaylistLifecycleChecks.Run();
     }
     private static async Task VideoLoopTestsAsync()
     {
@@ -264,8 +270,8 @@ internal static class Program
         {
             scenes.Start(); await UntilAsync(() => recorder.Sends.Count == 1); scenes.Request("other");
             await UntilAsync(() => scenes.Snapshot() is { Active: "other", Phase: "Active" });
-            Check(recorder.Sends.Count == 2 && ControllerOptions.Text(recorder.Sends.Last().Command.Payload, "playbackRequestId") == recorder.Sends.First().RequestId,
-                "Interrupted activation sends cleanup after an in-flight loop send and does not send its remaining loop");
+            Check(recorder.Sends.Count == 4 && recorder.Sends.Take(2).All(s => SceneVideoLoops.IsLoop(s.Command)) && recorder.Sends.Skip(2).Select(s => ControllerOptions.Text(s.Command.Payload, "playbackRequestId")).SequenceEqual(recorder.Sends.Take(2).Select(s => s.RequestId)),
+                "Activation finishes both loop commands before scene-exit cleanup");
         }
     }
     private static async Task TriggerTestsAsync()
@@ -338,7 +344,7 @@ internal static class Program
         {
             scenes.Start(); await UntilAsync(() => scenes.Snapshot().Phase == "Active"); scenes.Request("b"); await UntilAsync(() => recorder.Sends.Any(s => s.Command.Device == "b-entry"));
             Check(!scenes.Request("b"), "Repeat transition destinations are ignored"); scenes.Request("c"); await UntilAsync(() => scenes.Snapshot() is { Active: "c", Phase: "Active" }); await Task.Delay(180);
-            var devices = recorder.Sends.Select(s => s.Command.Device).ToArray(); Check(devices.Contains("b-exit") && !devices.Contains("b-late") && Array.IndexOf(devices, "b-exit") < Array.IndexOf(devices, "c-entry"), "Interrupting activation cleans up the partially activated scene");
+            var devices = recorder.Sends.Select(s => s.Command.Device).ToArray(); Check(devices.Contains("b-late") && Array.IndexOf(devices, "b-late") < Array.IndexOf(devices, "b-exit") && Array.IndexOf(devices, "b-exit") < Array.IndexOf(devices, "c-entry"), "New scene requests wait for activation to finish before deactivating");
         }
         recorder = new();
         var random = RandomItem("same", 20, 60, 45); options = Valid(Options(Ambient("shared", random), Ambient("empty")) with { Scenes = [new() { Name = "one", AmbientPlaylist = "shared" }, new() { Name = "two", AmbientPlaylist = "empty" }, new() { Name = "three", AmbientPlaylist = "shared" }] });
@@ -413,12 +419,12 @@ internal static class Program
             using var sender = new UdpClient(AddressFamily.InterNetwork);
             var packet = BroadcastEnvelope.Create(new() { DeviceName = "sensor" }, "event", host.Options.EffectiveDeviceName, new { input = "front", @event = "proximity.enter" }, "network-root");
             await sender.SendAsync(packet, new IPEndPoint(IPAddress.Loopback, host.Options.UdpEventsPort)); await sender.SendAsync(packet, new IPEndPoint(IPAddress.Loopback, host.Options.UdpEventsPort));
-            await UntilAsync(() => host.Log.Snapshot().Any(e => e.Message == "Finished demo"));
-            Check(host.Log.Snapshot().Count(e => e.Message == "Started demo") == 1, "Real UDP duplicate events do not restart a playlist");
+            await UntilAsync(() => host.Log.Snapshot().Any(e => e.Message == "Playlist finished: demo"));
+            Check(host.Log.Snapshot().Count(e => e.Message == "Playlist started: demo") == 1, "Real UDP duplicate events do not restart a playlist");
             Check(host.Log.Snapshot().Any(e => e.Message.StartsWith("CommandFailed")) && host.Log.Snapshot().Any(e => e.Message == "demo/udp → udp"), "Missing serial hardware fails best effort and the following UDP command runs");
             await UntilAsync(() => host.ArduinoStatus.Any(s => !s.Connected && s.Status != "Connecting")); Check(true, "Missing serial hardware appears in monitoring status");
             await host.Engine.Run("scene-change").Completion; await UntilAsync(() => host.Scenes.Snapshot() is { Active: "second", Phase: "Active" });
-            Check(host.Log.Snapshot().Count(e => e.Message == "Scene: second") == 1, "Broadcast scene command applies locally once; UDP echo is suppressed");
+            Check(host.Log.Snapshot().Count(e => e.Message == "Scene active: second") == 1, "Broadcast scene command applies locally once; UDP echo is suppressed");
             packet = BroadcastEnvelope.Create(new() { DeviceName = "remote" }, "command", host.Options.EffectiveDeviceName, new { command = "scene", value = "idle" }, "remote-scene");
             await sender.SendAsync(packet, new IPEndPoint(IPAddress.Loopback, host.Options.UdpCommandsPort)); await UntilAsync(() => host.Scenes.Snapshot() is { Active: "idle", Phase: "Active" });
             Check(true, "Real remote scene command selects a scene");
@@ -435,7 +441,7 @@ internal static class Program
             };
             File.WriteAllText(path, JsonSerializer.Serialize(selfChanging, ControllerOptions.Json)); await UntilAsync(() => host.Options.Scenes[0].Name == "redirect");
             host.Scenes.Request("redirect"); await UntilAsync(() => host.Log.Snapshot().Any(e => e.Message == "Started switch-on-entry") && host.Scenes.Snapshot() is { Active: "second", Phase: "Active" }); await Task.Delay(180);
-            Check(!host.Log.Snapshot().Any(e => e.Message == "switch-on-entry/must-cancel → must-cancel"), "A scene-changing activation cancels its remaining items and still delivers the new scene locally offline");
+            Check(host.Log.Snapshot().Any(e => e.Message == "switch-on-entry/must-cancel → must-cancel"), "A scene-changing activation completes its remaining items and then delivers the new scene locally offline");
         }
         finally { Telemetry.Stop(); Directory.Delete(directory, true); }
     }

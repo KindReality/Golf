@@ -14,6 +14,8 @@ internal static class VideoPriorityHardwareChecks
     public static async Task Run()
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var previousNetwork = Environment.GetEnvironmentVariable(LocalTestNetwork.Variable);
+        Environment.SetEnvironmentVariable(LocalTestNetwork.Variable, "127.0.0.3");
         var thread = new Thread(() =>
         {
             var dispatcher = Dispatcher.CurrentDispatcher;
@@ -21,148 +23,141 @@ internal static class VideoPriorityHardwareChecks
             dispatcher.BeginInvoke(new Action(async () =>
             {
                 var folder = Path.Combine(Path.GetTempPath(), "ExperienceX-priority-" + Guid.NewGuid().ToString("N"));
-                Directory.CreateDirectory(folder);
-                var passed = false;
+                Directory.CreateDirectory(folder); var passed = false;
                 try
                 {
                     var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../.."));
-                    var fixture = Environment.GetEnvironmentVariable("EXPERIENCEX_PRIORITY_TEST_VIDEO") ?? Path.Combine(root, ".tools", "screen-media-fixture.mp4");
-                    if (!File.Exists(fixture)) throw new FileNotFoundException("Provide EXPERIENCEX_PRIORITY_TEST_VIDEO for native priority checks.", fixture);
-                    var video = Path.Combine(folder, "Sample.mp4");
-                    File.Copy(fixture, video);
+                    var fixture = Environment.GetEnvironmentVariable("EXPERIENCEX_PRIORITY_TEST_VIDEO") ?? Path.Combine(root, ".tools", "priority-fixture.mp4");
+                    if (!File.Exists(fixture)) throw new FileNotFoundException("Provide a short (about two-second) EXPERIENCEX_PRIORITY_TEST_VIDEO for native priority checks.", fixture);
+                    File.Copy(fixture, Path.Combine(folder, "Sample.mp4")); File.Copy(fixture, Path.Combine(folder, "Other.mp4"));
                     await File.WriteAllTextAsync(Path.Combine(folder, "Broken.mp4"), "Not a video");
-                    var audio = Path.Combine(folder, "Silence.wav");
-                    using (var writer = new WaveFileWriter(audio, WaveFormat.CreateIeeeFloatWaveFormat(48000, 2)))
+                    using (var writer = new WaveFileWriter(Path.Combine(folder, "Silence.wav"), WaveFormat.CreateIeeeFloatWaveFormat(48000, 2)))
                         writer.WriteSamples(new float[48000 * 2 * 90], 0, 48000 * 2 * 90);
-                    var commands = FreeUdpPort();
-                    var events = FreeUdpPort();
+                    var commands = FreeUdpPort(); var events = FreeUdpPort();
                     var displays = Forms.Screen.AllScreens.Select(screen => screen.DeviceName).ToArray();
-                    var first = Forms.Screen.PrimaryScreen!.DeviceName;
-                    var second = displays.FirstOrDefault(display => display != first) ?? first;
+                    var first = Forms.Screen.PrimaryScreen!.DeviceName; var second = displays.FirstOrDefault(display => display != first) ?? first;
                     var screens = displays.ToDictionary(display => display, _ => new List<ScreenOptions>());
-                    screens[first].Add(new() { Id = "a", Name = "screen1" });
-                    screens[second].Add(new() { Id = "b", Name = "screen2" });
+                    screens[first].Add(new() { Id = "a", Name = "screen1" }); screens[second].Add(new() { Id = "b", Name = "screen2" });
                     var options = new ExperienceOptions
                     {
                         DeveloperMode = true, DeviceName = "priority-client", MediaDiscovery = new() { Enabled = false },
-                        VideoDirectory = Path.GetDirectoryName(video)!, AudioDirectory = folder,
-                        UdpCommandsPort = commands, UdpEventsPort = events, InventoryPort = FreeTcpPort(),
+                        VideoDirectory = folder, AudioDirectory = folder, UdpCommandsPort = commands, UdpEventsPort = events, InventoryPort = FreeTcpPort(),
                         DisplayBackgrounds = displays.ToDictionary(display => display, _ => new DisplayBackgroundOptions { IsTransparent = true }),
                         DisplayScreens = screens, TransitionInSeconds = .05, TransitionOutSeconds = .1
                     };
                     var config = JsonSerializer.SerializeToNode(options)!;
                     config["Telemetry"] = JsonSerializer.SerializeToNode(new TelemetryOptions { Directory = Path.Combine(folder, "logs") });
-                    var configPath = Path.Combine(folder, "appsettings.json");
-                    await File.WriteAllTextAsync(configPath, config.ToJsonString());
+                    var configPath = Path.Combine(folder, "appsettings.json"); await File.WriteAllTextAsync(configPath, config.ToJsonString());
                     Telemetry.Start("PriorityTests", configPath);
-                    var targetCount = 0;
                     await using (var host = new ExperienceHost(dispatcher, configPath))
                     {
                         host.Start();
                         async Task<ScreenPlaybackSnapshot[]> Read()
                         {
-                            var windows = host.DisplayWindows.Where(window => window.DisplayName == first || window.DisplayName == second).ToArray();
-                            if (windows.Any(window => window.Renderer!.State == RendererState.Starting)) return [];
-                            if (windows.Any(window => window.Renderer!.State == RendererState.Failed)) throw new Exception("A test display renderer failed. See " + folder);
-                            ScreenPlaybackSnapshot[][] snapshots;
-                            try { snapshots = await Task.WhenAll(windows.Select(window => window.Renderer!.SnapshotAsync())); }
-                            catch (TimeoutException) { return []; } // Native SetSource/Load can temporarily occupy the worker.
-                            return snapshots.SelectMany(items => items).Where(item => item.Id is "a" or "b").ToArray();
+                            var windows = host.DisplayWindows.Where(w => w.DisplayName == first || w.DisplayName == second).ToArray();
+                            if (windows.Any(w => w.Renderer!.State == RendererState.Starting)) return [];
+                            if (windows.Any(w => w.Renderer!.State == RendererState.Failed)) throw new Exception("A display renderer failed. See " + folder);
+                            try { return (await Task.WhenAll(windows.Select(w => w.Renderer!.SnapshotAsync()))).SelectMany(s => s).Where(s => s.Id is "a" or "b").ToArray(); }
+                            catch (TimeoutException) { return []; }
                         }
                         async Task<ScreenPlaybackSnapshot[]> Until(Func<ScreenPlaybackSnapshot[], bool> ready, int seconds = 15)
                         {
                             var clock = Stopwatch.StartNew();
-                            while (clock.Elapsed.TotalSeconds < seconds)
-                            {
-                                var items = await Read();
-                                if (items.Length == 2 && ready(items)) return items;
-                                await Task.Delay(25);
-                            }
-                            throw new TimeoutException("Video priority did not reach expected state: " + JsonSerializer.Serialize(await Read()));
+                            while (clock.Elapsed.TotalSeconds < seconds) { var items = await Read(); if (items.Length == 2 && ready(items)) return items; await Task.Delay(20); }
+                            throw new TimeoutException("Video priority state: " + JsonSerializer.Serialize(await Read()));
                         }
-                        async Task Send(string id, object body, bool ambient)
+                        async Task Send(string id, object body, CommandPriority priority = CommandPriority.Medium)
                         {
                             var sender = new BroadcastOptions { DeviceName = "priority-controller", UdpCommandsPort = commands, UdpEventsPort = events, UdpSendAttempts = 1 };
-                            var context = new CommandContext { Scene = "test", Playlist = ambient ? "ambient" : "normal", Item = id, IsAmbient = ambient };
-                            await UdpBroadcastSender.SendAsync(BroadcastEnvelope.Create(sender, "command", options.DeviceName, body, id, context: context), sender);
+                            await UdpBroadcastSender.SendAsync(BroadcastEnvelope.Create(sender, "command", options.DeviceName, body, id, priority: priority), sender);
                         }
-                        object Play(string screen, bool loop = true) => new { experience = "video", value = Path.GetFileName(video), screen, loop, mute = true };
+                        object Play(string screen, string file = "Sample.mp4", bool loop = false) => new { experience = "video", value = file, screen, loop, mute = true };
                         object Stop(string id) => new { experience = "video", command = "stop", playbackRequestId = id };
+                        ScreenPlaybackSnapshot A(ScreenPlaybackSnapshot[] items) => items.Single(i => i.Id == "a");
+                        ScreenPlaybackSnapshot B(ScreenPlaybackSnapshot[] items) => items.Single(i => i.Id == "b");
+                        var targetA = first + "/screen1"; var targetB = second + "/screen2";
                         var endpoints = AudioManager.ReadInventory();
-                        targetCount = AudioDeviceSelection.Resolve(new() { AudioDevice = "*" }, options, endpoints.Devices, endpoints.DefaultId).Devices.Length;
-                        if (targetCount == 0) throw new Exception("Native priority checks require at least one audio output.");
-                        await Send("ambient-audio", new { experience = "audio", value = "Silence.wav", audioDevice = "*", mute = true }, true);
+                        var targetCount = AudioDeviceSelection.Resolve(new() { AudioDevice = "*" }, options, endpoints.Devices, endpoints.DefaultId).Devices.Length;
+                        if (targetCount == 0) throw new Exception("Native priority checks require an audio output.");
+                        await Send("low-audio", new { experience = "audio", value = "Silence.wav", audioDevice = "*", mute = true }, CommandPriority.Low);
                         await Until(_ => host.AudioPlaybackCount == targetCount);
-                        await Send("normal-audio", new { experience = "audio", value = "Silence.wav", audioDevice = "*", mute = true }, false);
+                        await Send("high-audio", new { experience = "audio", value = "Silence.wav", audioDevice = "*", mute = true }, CommandPriority.High);
                         await Until(_ => host.AudioPlaybackCount == targetCount * 2);
-                        await Send("ambient-initial", Play("*"), true);
-                        var initial = await Until(items => items.All(item => item.RequestId == "ambient-initial" && item.Frames > 2 && item.Opacity > .9));
-                        await Send("ambient-repeat", Play("*"), true);
-                        await Until(items => items.All(item => item.RequestId == "ambient-repeat" && item.Frames > initial.Single(previous => previous.Id == item.Id).Frames && item.Opacity > .9));
 
-                        await Send("normal-a", Play(first + "/screen1"), false);
-                        await Until(items => items.Single(item => item.Id == "a").RequestId == "normal-a" && items.Single(item => item.Id == "a").Frames > 2 && items.Single(item => item.Id == "b").RequestId is null);
-                        var promoted = (await Read()).Single(item => item.Id == "a");
-                        Check(promoted.Frames > initial.Single(item => item.Id == "a").Frames && promoted.Opacity > .9, "Promoting an identical ambient loop restarted it or faded it.");
-                        await Send("normal-a-repeat", Play(first + "/screen1"), false);
-                        await Until(items => items.Single(item => item.Id == "a").RequestId == "normal-a-repeat" && items.Single(item => item.Id == "a").Frames > promoted.Frames && items.Single(item => item.Id == "a").Opacity > .9);
-                        await Send("stop-old-a", Stop("normal-a"), false);
-                        await Send("ambient-blocked", Play(second + "/screen2"), true);
-                        await Task.Delay(250);
-                        var protectedState = await Read();
-                        Check(protectedState.Single(item => item.Id == "a").RequestId == "normal-a-repeat" && protectedState.Single(item => item.Id == "b").RequestId is null, "Ambient video or a superseded stop interrupted normal playback, or ambient started on another display.");
-                        await Send("normal-b", Play(second + "/screen2"), false);
-                        await Until(items => items.Single(item => item.Id == "a").RequestId == "normal-a-repeat" && items.Single(item => item.Id == "b").RequestId == "normal-b" && items.All(item => item.Frames > 2));
-                        await Send("stop-a", Stop("normal-a-repeat"), false);
-                        await Until(items => items.Single(item => item.Id == "a").RequestId is null);
-                        await Send("ambient-still-blocked", Play(first + "/screen1"), true);
-                        await Task.Delay(250);
-                        Check((await Read()).Single(item => item.Id == "a").RequestId is null, "Ambient resumed before the last normal video ended.");
-                        await Send("stop-b", Stop("normal-b"), false);
-                        await Until(items => items.All(item => item.RequestId is null));
-                        await Send("ambient-after-stop", Play("*"), true);
-                        await Until(items => items.All(item => item.RequestId == "ambient-after-stop" && item.Frames > 2));
+                        await Send("background", Play("*", loop: true));
+                        var start = await Until(i => i.All(s => s.RequestId == "background" && s.Frames > 4 && s.Opacity > .9));
+                        await Send("repeat", Play("*", loop: true));
+                        await Until(i => i.All(s => s.RequestId == "repeat" && s.Frames > start.Single(p => p.Id == s.Id).Frames && s.Opacity > .9));
+                        await Send("foreground", Play(targetA, "Other.mp4"));
+                        await Until(i => A(i).RequestId == "foreground" && A(i).Frames > 3 && B(i).RequestId == "repeat");
+                        await Send("blocked", Play(targetA), CommandPriority.Low);
+                        await Send("latest-background", Play(targetA, loop: true));
+                        await Task.Delay(150);
+                        Check(A(await Read()).RequestId == "foreground", "A lower-priority background interrupted the foreground video.");
+                        await Until(i => A(i).RequestId == "latest-background" && A(i).Frames > 3 && B(i).RequestId == "repeat");
+                        Console.WriteLine("PASS Foreground finishes; latest background resumes on its screen; another screen continues.");
 
-                        await Send("normal-once", Play(first + "/screen1", false), false);
-                        await Until(items => items.Single(item => item.Id == "a").RequestId == "normal-once" && items.Single(item => item.Id == "a").Frames > 2);
-                        await Until(items => items.All(item => item.RequestId is null), 60);
-                        await Send("ambient-after-eof", Play("*"), true);
-                        await Until(items => items.All(item => item.RequestId == "ambient-after-eof" && item.Frames > 2));
-                        await Send("normal-invalid", new { experience = "video", value = "Broken.mp4", screen = first + "/screen1", mute = true }, false);
-                        await Until(items => items.All(item => item.RequestId is null), 25);
-                        await Send("ambient-after-error", Play("*"), true);
-                        await Until(items => items.All(item => item.RequestId == "ambient-after-error" && item.Frames > 2));
-                        Check(host.AudioPlaybackCount == targetCount * 2, "Video priority stopped ambient or normal audio.");
+                        var before = A(await Read());
+                        await Send("same-one-shot", Play(targetA));
+                        var continued = A(await Until(i => A(i).RequestId == "same-one-shot" && A(i).Frames > before.Frames));
+                        Check(continued.Opacity > .9, "Same-video one-shot faded the existing loop.");
+                        await Until(i => A(i).RequestId == "latest-background" && A(i).Loops > continued.Loops);
+                        Console.WriteLine("PASS Same media is promoted without reopen, keeps looping, and releases priority at a natural wrap.");
+
+                        await Send("high", Play(targetA, "Other.mp4"), CommandPriority.High);
+                        await Until(i => A(i).RequestId == "high" && A(i).Frames > 3);
+                        await Send("medium-blocked", Play(targetA));
+                        await Send("other-screen", Play(targetB, "Other.mp4"));
+                        await Until(i => A(i).RequestId == "high" && B(i).RequestId == "other-screen" && B(i).Frames > 2);
+                        await Send("stop-background", Stop("latest-background"));
+                        await Until(i => A(i).RequestId is null && B(i).RequestId == "repeat");
+                        await Task.Delay(250); Check(A(await Read()).RequestId is null, "Stopped scene background returned after foreground completion.");
+                        Console.WriteLine("PASS High blocks Medium only on that screen; scene cleanup prevents obsolete background resumption.");
+
+                        await Send("once", Play(targetA));
+                        var once = A(await Until(i => A(i).RequestId == "once" && A(i).Frames > 3));
+                        await Send("same-once", Play(targetA));
+                        await Until(i => A(i).RequestId == "same-once" && A(i).Frames > once.Frames && A(i).Opacity > .9);
+                        await Send("promote-loop", Play(targetA, loop: true));
+                        await Until(i => A(i).RequestId == "promote-loop" && A(i).Loops >= 1 && A(i).Frames > once.Frames);
+                        await Send("stop-old", Stop("once"));
+                        await Task.Delay(150); Check(A(await Read()).RequestId == "promote-loop", "A stale stop interrupted promoted playback.");
+                        await Send("stop-new", Stop("promote-loop"));
+                        await Until(i => A(i).RequestId is null);
+                        await Send("broken", Play(targetA, "Broken.mp4"));
+                        await Until(i => A(i).RequestId is null, 25);
+                        await Send("after-error", Play(targetA, loop: true));
+                        await Until(i => A(i).RequestId == "after-error" && A(i).Frames > 3);
+                        Check(host.AudioPlaybackCount == targetCount * 2, "Video priority stopped mixed audio.");
                     }
                     Telemetry.Stop();
-                    var logs = Directory.EnumerateFiles(Path.Combine(folder, "logs", "PriorityTests"), "*.jsonl").SelectMany(File.ReadAllLines).Select(line => JsonDocument.Parse(line)).ToArray();
+                    var lines = Directory.EnumerateFiles(Path.Combine(folder, "logs", "PriorityTests"), "*.jsonl").SelectMany(File.ReadAllLines).Select(line => JsonDocument.Parse(line)).ToArray();
                     try
                     {
-                        Check(logs.Any(log => log.RootElement.GetProperty("Event").GetString() == "AmbientVideoRequestSkipped"), "Missing ambient suppression telemetry.");
-                        Check(logs.Any(log => log.RootElement.GetProperty("Event").GetString() == "PlaybackStopped" && log.RootElement.GetProperty("Data").GetProperty("Reason").GetString() == "NormalVideoPriority"), "Missing ambient interruption telemetry.");
-                        Check(!logs.Any(log => log.RootElement.GetProperty("Event").GetString() == "VideoOpening" && log.RootElement.GetProperty("RequestId").GetString() is "ambient-repeat" or "normal-a" or "normal-a-repeat"), "An identical looping request reopened the decoder.");
+                        bool Has(string name) => lines.Any(l => l.RootElement.GetProperty("Event").GetString() == name);
+                        Check(Has("VideoRequestSkippedLowerPriority") && Has("VideoBackgroundResumed"), "Missing priority or background telemetry.");
+                        Check(!lines.Any(l => l.RootElement.GetProperty("Event").GetString() == "VideoOpening" && l.RootElement.GetProperty("RequestId").GetString() is "same-one-shot" or "same-once" or "promote-loop"), "Continuing the same video reopened a decoder.");
+                        Check(lines.Count(l => l.RootElement.GetProperty("Event").GetString() == "VideoOpening" && l.RootElement.GetProperty("RequestId").GetString() == "repeat") == 1,
+                            "The repeated loop should open only once, when screen2 resumes after Other.mp4 ends.");
                     }
-                    finally { foreach (var log in logs) log.Dispose(); }
-                    Console.WriteLine($"Passed native UDP video priority across {displays.Length} displays, repeated-loop continuity/promotion, overlapping normal videos, stop/EOF recovery, and uninterrupted ambient/normal audio on {targetCount} outputs.");
-                    passed = true;
-                    completion.SetResult();
+                    finally { foreach (var line in lines) line.Dispose(); }
+                    Console.WriteLine("PASS Native UDP per-screen priorities, natural completion/background resumption, same-file continuity, loop promotion, stop cleanup and audio mixing.");
+                    passed = true; completion.SetResult();
                 }
                 catch (Exception ex) { completion.SetException(ex); }
                 finally
                 {
-                    Telemetry.Stop();
-                    if (passed) Directory.Delete(folder, true);
-                    else Console.WriteLine("Priority test diagnostics retained: " + folder);
+                    Telemetry.Stop(); if (passed) Directory.Delete(folder, true); else Console.WriteLine("Priority diagnostics: " + folder);
                     dispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
                 }
             }));
             Dispatcher.Run();
         }) { IsBackground = true };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        await completion.Task.WaitAsync(TimeSpan.FromSeconds(100));
+        thread.SetApartmentState(ApartmentState.STA); thread.Start();
+        try { await completion.Task.WaitAsync(TimeSpan.FromSeconds(100)); }
+        finally { Environment.SetEnvironmentVariable(LocalTestNetwork.Variable, previousNetwork); }
     }
     private static int FreeUdpPort() { using var socket = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)); return ((IPEndPoint)socket.Client.LocalEndPoint!).Port; }
     private static int FreeTcpPort() { using var socket = new TcpListener(IPAddress.Loopback, 0); socket.Start(); return ((IPEndPoint)socket.LocalEndpoint).Port; }
-    private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+    private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
 }

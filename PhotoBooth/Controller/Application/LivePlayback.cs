@@ -26,7 +26,7 @@ internal static class LivePlayback
     public static LivePlan BuildRoles(BroadcastOptions options, ExperiencePeer[] peers, IEnumerable<string> selection, string filename, int volume, bool muteVideo)
     {
         var video = ValidateMedia(filename, volume);
-        var roles = string.Join(",", RoleList.Parse(string.Join(",", selection)));
+        var roles = string.Join(",", RoleList.ParseTargets(string.Join(",", selection)));
         if (roles.Length == 0) return new([], []);
         var commands = new List<byte[]>(); var skipped = new List<string>();
         foreach (var peer in peers)

@@ -20,6 +20,8 @@ internal sealed class ControlWindow : Form
     private readonly Label _connectionStatus = new() { Text = "CONNECTING", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight };
     private readonly Button _run = new() { Text = "Run playlist", AutoSize = true, Enabled = false };
     private readonly Button _cancel = new() { Text = "Cancel selected", AutoSize = true, Enabled = false };
+    private readonly Button _clearRunning = new() { Text = "Clear", Name = "ClearRunningPlaylists", AccessibleName = "Clear running playlists", Enabled = false, Size = new(76, 30) };
+    private readonly Button _clearActivity = new() { Text = "Clear", Name = "ClearActivityFeed", AccessibleName = "Clear activity feed", Enabled = false, Size = new(76, 30) };
     private readonly ListView _hardware = List("Device", "Port", "Status");
     private readonly ListView _running = List("Playlist", "Owner", "Elapsed ms", "Remaining");
     private readonly ListView _activity = List("Time", "Level", "Activity");
@@ -80,6 +82,9 @@ internal sealed class ControlWindow : Form
         DarkTheme.Button(_activate, true);
         DarkTheme.Button(_run, true);
         DarkTheme.Button(_cancel);
+        DarkTheme.Button(_clearRunning); DarkTheme.Button(_clearActivity);
+        _toolbarTips.SetToolTip(_clearRunning, "Stop all running playlists immediately without scene deactivation");
+        _toolbarTips.SetToolTip(_clearActivity, "Clear the activity feed");
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 18, 24, 12), ColumnCount = 2, RowCount = 4, BackColor = DarkTheme.Background };
         layout.ColumnStyles.Add(new(SizeType.Percent, 42));
         layout.ColumnStyles.Add(new(SizeType.Percent, 58));
@@ -119,9 +124,9 @@ internal sealed class ControlWindow : Form
         var devices = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = Padding.Empty };
         devices.RowStyles.Add(new(SizeType.Percent, 50)); devices.RowStyles.Add(new(SizeType.Percent, 50));
         devices.Controls.Add(ListCard("HARDWARE", "Arduino devices and available serial ports", _hardware, new Padding(0, 0, 8, 12)), 0, 0);
-        devices.Controls.Add(ListCard("RUNNING PLAYLISTS", "Live execution across scenes and triggers", _running, new Padding(0, 0, 8, 0)), 0, 1);
+        devices.Controls.Add(ListCard("RUNNING PLAYLISTS", "Live execution across scenes and triggers", _running, new Padding(0, 0, 8, 0), _clearRunning), 0, 1);
         layout.Controls.Add(devices, 0, 2);
-        layout.Controls.Add(ListCard("ACTIVITY FEED", "Events, commands and scene transitions", _activity, new Padding(8, 0, 0, 0)), 1, 2);
+        layout.Controls.Add(ListCard("ACTIVITY FEED", "Events, commands and scene transitions", _activity, new Padding(8, 0, 0, 0), _clearActivity), 1, 2);
         var footer = DarkTheme.Caption("HOME TECHNOLOGIES  /  CONTROL SYSTEMS"); footer.Font = new Font("Segoe UI", 8);
         layout.Controls.Add(footer, 0, 3); layout.SetColumnSpan(footer, 2);
         _dashboard = layout; _pages.Controls.Add(layout);
@@ -143,6 +148,14 @@ internal sealed class ControlWindow : Form
             if (_running.SelectedItems.Count == 1 && _running.SelectedItems[0].Tag is string id) _host?.Engine.Cancel(id);
         };
         _running.SelectedIndexChanged += (_, _) => _cancel.Enabled = !_closing && _running.SelectedItems.Count == 1;
+        _clearActivity.Click += (_, _) =>
+        {
+            _host?.Log.Clear(); _latest = null; _activity.Items.Clear();
+        };
+        _clearRunning.Click += (_, _) =>
+        {
+            _host?.ClearRunningPlaylists(); RefreshState();
+        };
         _refresh.Tick += (_, _) => RefreshState();
         Shown += StartAsync;
         FormClosing += StopAsync;
@@ -163,14 +176,17 @@ internal sealed class ControlWindow : Form
         else content.SetColumnSpan(status, 2);
         card.Controls.Add(content); return card;
     }
-    private static DarkCard ListCard(string title, string subtitle, ListView list, Padding margin)
+    internal static DarkCard ListCard(string title, string subtitle, ListView list, Padding margin, Button? clear = null)
     {
         var card = new DarkCard { Margin = margin };
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, BackColor = DarkTheme.Surface };
-        layout.RowStyles.Add(new(SizeType.Absolute, 22)); layout.RowStyles.Add(new(SizeType.Absolute, 24)); layout.RowStyles.Add(new(SizeType.Percent, 100));
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Margin = Padding.Empty, BackColor = DarkTheme.Surface };
+        layout.ColumnStyles.Add(new(SizeType.Percent, 100)); layout.ColumnStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.Absolute, clear is null ? 22 : 34)); layout.RowStyles.Add(new(SizeType.Absolute, 24)); layout.RowStyles.Add(new(SizeType.Percent, 100));
         layout.Controls.Add(DarkTheme.Caption(title), 0, 0);
+        if (clear is not null) { clear.Margin = Padding.Empty; clear.Anchor = AnchorStyles.Top | AnchorStyles.Right; layout.Controls.Add(clear, 1, 0); }
         var description = DarkTheme.Caption(subtitle); description.Font = new Font("Segoe UI", 9);
         layout.Controls.Add(description, 0, 1); layout.Controls.Add(list, 0, 2);
+        layout.SetColumnSpan(description, 2); layout.SetColumnSpan(list, 2);
         card.Controls.Add(layout); return card;
     }
     protected override void OnHandleCreated(EventArgs e)
@@ -210,6 +226,7 @@ internal sealed class ControlWindow : Form
     private void RefreshState()
     {
         if (_host is null || _closing) return;
+        _clearRunning.Enabled = _clearActivity.Enabled = true;
         var options = _host.Options;
         var configurationGlyph = options.ConfigurationMode ? ToolbarGlyph.Play : ToolbarGlyph.Configure;
         if (_configurationButton.Glyph != configurationGlyph)
@@ -240,10 +257,12 @@ internal sealed class ControlWindow : Form
             var status = statuses.FirstOrDefault(s => s.Name.Equals(device.Name, StringComparison.OrdinalIgnoreCase));
             _hardware.Items.Add(new ListViewItem([device.Name, device.Port, device.Enabled ? status?.Status ?? "Connecting" : "Disabled"]));
         }
+        foreach (var status in statuses.Where(s => !options.Arduinos.Any(a => a.Port.Equals(s.Port, StringComparison.OrdinalIgnoreCase))))
+            _hardware.Items.Add(new ListViewItem([status.Name, status.Port, status.Status]));
         try
         {
-            foreach (var port in SerialPort.GetPortNames().Where(p => !options.Arduinos.Any(a => a.Port.Equals(p, StringComparison.OrdinalIgnoreCase))))
-                _hardware.Items.Add(new ListViewItem(["Unassigned", port, "Configure an Arduino alias to connect"]));
+            foreach (var port in SerialPort.GetPortNames().Where(p => !statuses.Any(s => s.Port.Equals(p, StringComparison.OrdinalIgnoreCase)) && !options.Arduinos.Any(a => a.Port.Equals(p, StringComparison.OrdinalIgnoreCase))))
+                _hardware.Items.Add(new ListViewItem(["Unassigned", port, options.ArduinoDiscovery.Enabled ? "Automatic discovery uses USB serial ports only" : "USB discovery disabled"]));
         }
         catch (Exception ex) { _host.Log.Error("SerialInventoryFailed", ex); }
         if (_hardware.Items.Count == 0) _hardware.Items.Add(new ListViewItem(["No serial devices", "", "UDP remains active"]));

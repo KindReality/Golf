@@ -12,8 +12,11 @@ internal sealed class PlaylistEditorView : UserControl
     private readonly ControllerOptions _options;
     private readonly ExperiencePeer[] _peers;
     private readonly string[] _media;
+    private readonly string[] _serialDevices;
     private readonly Action _changed;
     private readonly TextBox _name;
+    private readonly TextBox _duration;
+    private readonly ComboBox _audioOutputMode;
     private readonly Label _error = new() { AutoSize = true, ForeColor = DarkTheme.Error, Dock = DockStyle.Top };
     private readonly ListView _items = List("Item", "Timing (ms)", "Commands");
     private readonly PlaylistTimingView _timing = new();
@@ -28,14 +31,21 @@ internal sealed class PlaylistEditorView : UserControl
     private List<PlaylistCommand> _commandValues = [];
     private int _item = -1, _command = -1, _dragItem = -1;
     private bool _loading;
-    internal PlaylistEditorView(PlaylistOptions playlist, ShowConfiguration show, ControllerOptions options, ExperiencePeer[] peers, string[] media, string[] uses, Action changed)
+    internal PlaylistEditorView(PlaylistOptions playlist, ShowConfiguration show, ControllerOptions options, ExperiencePeer[] peers, string[] media, string[] uses, Action changed, string[]? serialDevices = null)
     {
         _value = playlist; _show = show; _options = options; _peers = peers; _media = media; _changed = changed;
+        _serialDevices = serialDevices ?? [];
         Dock = DockStyle.Fill; BackColor = DarkTheme.Background;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Margin = Padding.Empty };
-        layout.RowStyles.Add(new(SizeType.Absolute, 84)); layout.RowStyles.Add(new(SizeType.Absolute, 108));
+        layout.RowStyles.Add(new(SizeType.Absolute, 168)); layout.RowStyles.Add(new(SizeType.Absolute, 108));
         layout.RowStyles.Add(new(SizeType.Percent, 100)); layout.RowStyles.Add(new(SizeType.Absolute, 24));
         var heading = new ShowEditorFields(); _name = TextField(playlist.Name); heading.Field(playlist.Type == "ambient" ? "Ambient playlist" : "Storyboard playlist", _name);
+        _duration = TextField(playlist.DurationMilliseconds?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "");
+        _duration.PlaceholderText = playlist.Type == "ambient" ? "Empty = indefinite" : "Empty = automatic";
+        heading.Field("Duration (ms)", _duration); Watch(_duration, changed);
+        _duration.AccessibleName = "Playlist duration milliseconds";
+        _audioOutputMode = Choice(["Configured", "Random"], playlist.AudioOutputMode);
+        heading.Field("Audio outputs", _audioOutputMode); Watch(_audioOutputMode, changed);
         var usage = Note(uses.Length == 0 ? "Standalone playlist • available to manual and network commands" : "Used by " + string.Join(" · ", uses)); usage.Height = 30; heading.Wide(usage);
         Watch(_name, changed); layout.Controls.Add(heading, 0, 0); layout.Controls.Add(_timing, 0, 1);
         var columns = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
@@ -58,7 +68,17 @@ internal sealed class PlaylistEditorView : UserControl
     private bool Attempt(Action action)
     { try { action(); _error.Text = ""; return true; } catch (Exception ex) { _error.Text = ex.Message; return false; } }
     private void Changed() { if (!_loading) _changed(); }
-    internal PlaylistOptions Read() { CommitItem(); return _value with { Name = _name.Text.Trim() }; }
+    internal PlaylistOptions Read()
+    {
+        CommitItem(); int? duration = null;
+        if (!string.IsNullOrWhiteSpace(_duration.Text))
+        {
+            if (!int.TryParse(_duration.Text, out var parsed) || parsed is < 0 or > 86400000)
+                throw new ArgumentException("Playlist duration must be 0–86400000 milliseconds, or empty for automatic/indefinite.");
+            duration = parsed;
+        }
+        return _value with { Name = _name.Text.Trim(), DurationMilliseconds = duration, AudioOutputMode = _audioOutputMode.Text };
+    }
     private void CommitCommand()
     { if (_commandEditor is not null && _command >= 0) _commandValues[_command] = _commandEditor.Read(); }
     private void CommitItem()
@@ -137,7 +157,7 @@ internal sealed class PlaylistEditorView : UserControl
         if (index == _command || index < 0 || index >= _commandValues.Count) return;
         if (!Attempt(CommitCommand)) { RenderCommands(); return; }
         _commandEditor?.Dispose(); _command = index;
-        _commandEditor = new(_commandValues[index], _show, _options, _peers, _media, Changed);
+        _commandEditor = new(_commandValues[index], _show, _options, _peers, _media, Changed, _serialDevices);
         _commandPanel!.Controls.Clear(); _commandPanel.Controls.Add(_commandEditor); RenderCommands();
     }
     private void EditCommands(string action) => Attempt(() =>

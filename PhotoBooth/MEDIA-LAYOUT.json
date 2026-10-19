@@ -1,0 +1,183 @@
+{
+  "SchemaVersion": 1,
+  "VerifiedAt": "2026-10-18T18:45:10.3047403-05:00",
+  "VerifiedOn": "ALPHA",
+  "CanonicalLibrary": "%OneDrive%\\Home Technologies\\SourceMedia",
+  "Comparison": "Windows case-insensitive relative path; compare bytes and SHA-256 before replacement",
+  "RootExceptions": [
+    "ping.mp4"
+  ],
+  "ReportUnlistedFiles": true,
+  "Files": [
+    {
+      "RelativePath": "Collections/HalloweenWindowProjection2024.mp4",
+      "Bytes": 22007903,
+      "Sha256": "B33F4270ECC45C27A3BA3B37CFF75CBE885DA3D545CC234D53D32CC026C51313"
+    },
+    {
+      "RelativePath": "Collections/HalloweenWindowProjection2026.mp4",
+      "Bytes": 21220008,
+      "Sha256": "C9DADCCB11E0C84668F905406071F030977E4A8436481085C8C4E841FBB3B3D8"
+    },
+    {
+      "RelativePath": "Creatures/EvilRoar.wav",
+      "Bytes": 1704014,
+      "Sha256": "53447F1B61E90A8206CD442C66EDA0FB98259AF49BEC2DC201EACEE6DF7196A6"
+    },
+    {
+      "RelativePath": "Creatures/TRex.mp4",
+      "Bytes": 1868692,
+      "Sha256": "6CD9DD9B2903932ABA669F7D837674DEC6047CC367E8BD90290FEFAB2649CCEB"
+    },
+    {
+      "RelativePath": "Effects/Bell.wav",
+      "Bytes": 5251150,
+      "Sha256": "C05678CCBFE02D08CC457852207665C22A5C447C2C891DC3A78BB5620CB6C069"
+    },
+    {
+      "RelativePath": "Effects/Crash.mp4",
+      "Bytes": 2979178,
+      "Sha256": "7816E056FEE8168B3F837025347FE549A62783E6223960A37A5F5E6F96090E31"
+    },
+    {
+      "RelativePath": "Effects/DoorOpens.wav",
+      "Bytes": 893006,
+      "Sha256": "DC1E3A1CA8253F2FD97E49C123E5D6AB48BB2CD79BF785AAE6914C8A663CB9A2"
+    },
+    {
+      "RelativePath": "Effects/Footsteps.wav",
+      "Bytes": 2011214,
+      "Sha256": "E953FD5BB83110E8B7AAA50A4696397CB7922FB924B868862AA4C487643D84A9"
+    },
+    {
+      "RelativePath": "Effects/Warp.mp4",
+      "Bytes": 19357607,
+      "Sha256": "4BA6F1229EB2C557D62392EB18A55711CEFF46056A2829AF6C6EB211E6AFDCCF"
+    },
+    {
+      "RelativePath": "Eyes/Eye.mp4",
+      "Bytes": 1160272,
+      "Sha256": "AF6D06BEC37D3295A1C1ECB7BC6DE437BEDE860F8597FA7C4DADA4643827164A"
+    },
+    {
+      "RelativePath": "Ghosts/DancingGhostsDual.mp4",
+      "Bytes": 2243445,
+      "Sha256": "69D1C9EDB389E3EC0E8B6113C6316D1174C9A78DE652E05DA0A702B1CB3FACF7"
+    },
+    {
+      "RelativePath": "Ghosts/FloatingGhost.mp4",
+      "Bytes": 8142179,
+      "Sha256": "60728F9A45D673A199B3F7B6A7E6C18EBFF159EA1813D5A720DB3410F758C3AD"
+    },
+    {
+      "RelativePath": "Ghosts/Ghost2.mp4",
+      "Bytes": 6664118,
+      "Sha256": "B697CA90E5AAD456F3C9C5B7859D3EC034CEBF806219AB128F07D72267A10704"
+    },
+    {
+      "RelativePath": "Ghosts/Ghosts.mp4",
+      "Bytes": 18662814,
+      "Sha256": "6B4A22C71233B4E5EF64B0ECB28D3B37A67C10AB26DEBA7AC3EE9311E2F33DF8"
+    },
+    {
+      "RelativePath": "Ghosts/Slimer.mp4",
+      "Bytes": 6014929,
+      "Sha256": "B887CC12CDEFC1F3185B818478837E31C8B92F6770C68B0C5A3116A91731D6A3"
+    },
+    {
+      "RelativePath": "Ghosts/WallGhost.mp4",
+      "Bytes": 1768845,
+      "Sha256": "30D5BA814B5C589B71A994BA8FADCEB93ACFC80F32C43C369E082A7B8D0620BA"
+    },
+    {
+      "RelativePath": "ping.mp4",
+      "Bytes": 813280794,
+      "Sha256": "6F0412F6FEF16E03325B3DE31E2BB26048EE8057AE83D4BA947AAE7E4586FBD0"
+    },
+    {
+      "RelativePath": "Pumpkins/JackLantern.mp4",
+      "Bytes": 1601801,
+      "Sha256": "2EF48C1B1EFE1B22E5CA5306C58A3206EF8876F746C95015BA5F76256B160444"
+    },
+    {
+      "RelativePath": "Skeletons/DancingSkeletonSingle.mp4",
+      "Bytes": 2262002,
+      "Sha256": "48BADE09C6B7D8582D7AD710FA69B558907797074ABCE72C5E9C67AA754F3729"
+    },
+    {
+      "RelativePath": "Skeletons/DancingSkeletonsMany.mp4",
+      "Bytes": 591974961,
+      "Sha256": "9A918ABE8C6B6E0CD1264BEE9B2983852167ACA837C9617482F8867167FA41B6"
+    },
+    {
+      "RelativePath": "Skeletons/Skeleton.mp4",
+      "Bytes": 14606747,
+      "Sha256": "66A1906A13709CA3C90435158FA7AFE9BA90265BE824AB0FE70C3920473FC33A"
+    },
+    {
+      "RelativePath": "Skulls/SkullAttackOverFog.mp4",
+      "Bytes": 20931528,
+      "Sha256": "6E63293F7E8F860BA1E870CF00C91389D1B5522EB9B3D3980836A180A2091DC6"
+    },
+    {
+      "RelativePath": "Skulls/SkullStrobe.mp4",
+      "Bytes": 2376208416,
+      "Sha256": "20FBCD9F80DD2D0359239DBF411A7A75C6EF95EE29C346078FC44058E35B87F3"
+    },
+    {
+      "RelativePath": "Unsorted/ping-compatible.mp4",
+      "Bytes": 813280794,
+      "Sha256": "6F0412F6FEF16E03325B3DE31E2BB26048EE8057AE83D4BA947AAE7E4586FBD0"
+    },
+    {
+      "RelativePath": "Unsorted/Video.mp4",
+      "Bytes": 5273985,
+      "Sha256": "B0302650CAEF6652ED54FFDF778D42BC65FD30AC920FF579B1742AA0ED133899"
+    },
+    {
+      "RelativePath": "Whispers/CanYouSeeMe.wav",
+      "Bytes": 4911182,
+      "Sha256": "7B2A88F0DB7D076CE288CFB99C65536E558BB4B5C2C1A23A9FFBEA92C95209AE"
+    },
+    {
+      "RelativePath": "Whispers/CanYouSeeMe01.wav",
+      "Bytes": 565448,
+      "Sha256": "692A43C24A593DF2204ED57DF6665021C9F51B837E80D4242B148EFAB7F819FB"
+    },
+    {
+      "RelativePath": "Whispers/CanYouSeeMe02.wav",
+      "Bytes": 508060,
+      "Sha256": "4E2B9664B8291DD23BFC3E06810D62EA768AC7D2DCC8AA0CBB58F1332A219F9F"
+    },
+    {
+      "RelativePath": "Whispers/CanYouSeeMe03.wav",
+      "Bytes": 3837728,
+      "Sha256": "028427EE0A6BE591A199AD155FB5037004932A5B4B25998A543BBCE1B437A32E"
+    },
+    {
+      "RelativePath": "Whispers/ISeeYou.wav",
+      "Bytes": 1245262,
+      "Sha256": "05D5DD9DB440BC557A888A2EDB58011630E7D7BB77C75DDD416DC0683F0FF985"
+    },
+    {
+      "RelativePath": "Whispers/WhisperLong.wav",
+      "Bytes": 17096782,
+      "Sha256": "7F6585FFE625D777FDE612BDF1CED1A47F30D0137084C081042AF5FBD8CFF44F"
+    },
+    {
+      "RelativePath": "Witches/HoodedWitch.mp4",
+      "Bytes": 5294153,
+      "Sha256": "778016CD183F61F85D5D2B19597238287897DBC9C047957058057977C86B83E7"
+    },
+    {
+      "RelativePath": "Zombies/HallowindowZombies.mp4",
+      "Bytes": 36160279,
+      "Sha256": "604341AEF1D0341B10BEFB1C5F4D75AED4F54C4078DB9694835D18D60F704BB4"
+    },
+    {
+      "RelativePath": "Zombies/TerrifyingZombieHorde.mp4",
+      "Bytes": 8983552497,
+      "Sha256": "D4F89397EEE2C73E183BDFB2242D26C99DCACEFBEBE6E026C0E71F6CEACEDA43"
+    }
+  ]
+}

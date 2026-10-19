@@ -160,14 +160,18 @@ internal static class ScreenChecks
                     SendMessage(window.Handle, 0x201, 1, (nint)((y << 16) | x));
                     SendMessage(window.Handle, 0x202, 0, (nint)((y << 16) | x));
                 }
-                Click(1152, 648);
+                // Windows can constrain the requested size to the current display.
+                _ = window.Handle;
+                var overlapX = (int)(.6 * (window.ClientSize.Width - 1));
+                var overlapY = (int)(.6 * (window.ClientSize.Height - 1));
+                Click(overlapX, overlapY);
                 Check(editor.SelectedScreen?.ScreenName == "screen1", "First overlapping screen was not selected.");
-                Click(1152, 648);
+                Click(overlapX, overlapY);
                 Check(editor.SelectedScreen?.ScreenName == "News", "Second overlapping screen was not selected.");
-                Click(1152, 648);
+                Click(overlapX, overlapY);
                 Check(editor.SelectedScreen?.ScreenName == "screen1", "Screen selection did not wrap.");
                 var selected = (ScreenSurface)editor.SelectedScreen!;
-                var center = ScreenNameLabel.Center(options.PointsFor("DISPLAY1", selected.ScreenId), 1920, 1080);
+                var center = ScreenNameLabel.Center(options.PointsFor("DISPLAY1", selected.ScreenId), window.ClientSize.Width, window.ClientSize.Height);
                 string? committed = null;
                 int editing = 0;
                 window.TextEditingChanged += enabled => editing += enabled ? 1 : -1;

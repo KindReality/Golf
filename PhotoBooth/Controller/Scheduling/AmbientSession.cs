@@ -13,6 +13,7 @@ internal sealed class AmbientSession
     public AmbientSession(PlaylistEngine engine, ControllerOptions options, SceneOptions scene, CancellationToken lifetime, ActivityLog log, SceneVideoLoops? loops = null)
     {
         var playlist = options.Playlist(scene.AmbientPlaylist, "ambient");
+        if (playlist.DurationMilliseconds is { } duration) _scheduling.CancelAfter(duration);
         Completion = Task.WhenAll(playlist.Items.Where(i => i.Enabled).Select(LoopAsync));
         async Task LoopAsync(PlaylistItem item)
         {

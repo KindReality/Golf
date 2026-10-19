@@ -421,7 +421,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             }
             chosen = _screenCycle.Pick(screens.Select((screen, index) => (screen, index)).Where(item => item.screen.IsVisualization || (item.screen.IsLed ? LedGeometry.Contains(item.screen,x,y,ClientSize.Width,ClientSize.Height) : ScreenSelection.Contains(item.screen.Points, x, y))).Select(item => item.index).ToArray());
             if (chosen < 0)
-                _calibration?.SelectScreen(null);
+                _calibration?.SelectDisplay(_display);
             else
             {
                 var dragging = Surface(screens[chosen].Id);

@@ -25,6 +25,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
     {
         get; private set;
     }
+    internal string? SelectedDisplayName { get; private set; }
     public bool HasSelectedPoint(IPointSurface surface) => _focusedPoint?.Surface == surface;
     private static string Identity(IPointSurface surface) => surface.DisplayName + "/" + surface.ScreenId;
     private PointOptions Coordinates(ExperienceOptions settings, IPointSurface surface) => settings.PointsFor(surface.DisplayName, surface.ScreenId);
@@ -38,11 +39,18 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
         Cancel("ScreenSelectionChanged");
         _focusedPoint = null;
         SelectedScreen = surface;
+        if (surface is not null)
+            SelectedDisplayName = surface.DisplayName;
         foreach (var item in windows())
         {
             item.SelectScreen(item == surface);
             item.ShowCalibration(-1);
         }
+    }
+    internal void SelectDisplay(string displayName)
+    {
+        SelectScreen(null);
+        SelectedDisplayName = displayName;
     }
 
     private bool _saving;
@@ -65,6 +73,7 @@ internal sealed class PointCalibration(Func<ExperienceOptions> options,
     private void Show(IPointSurface owner, int selected)
     {
         SelectedScreen = owner;
+        SelectedDisplayName = owner.DisplayName;
         _focusedPoint = selected >= 0 ? new(owner, selected) : null;
         var group = selected >= 0 && selected < Coordinates(options(), owner).Vertices.Count ? _pointDrag ?? NewPointDrag(owner) : null;
         if (group is not null && _pointDrag is null)

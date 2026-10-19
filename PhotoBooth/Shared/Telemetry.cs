@@ -27,6 +27,7 @@ public sealed record RequestLogContext
     public string? Roles { get; init; }
     public string? Path { get; init; }
     public string? CorrelationId { get; init; }
+    public string? Priority { get; init; }
 }
 
 public static class Telemetry

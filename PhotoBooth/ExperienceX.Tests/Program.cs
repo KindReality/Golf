@@ -4,6 +4,8 @@ internal static class TestSuites
 {
     public static async Task RunAsync(string[] arguments)
     {
+        if (arguments.SequenceEqual(["--priority-events"])) { VideoPriorityChecks.Run(); await PlaybackPriorityEventChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--display-context"])) { await DisplayContextChecks.Run(); await DisplayContextHardwareChecks.Run(); return; }
         if (arguments.SequenceEqual(["--calibration-performance"])) { await CalibrationOptimizationChecks.Run(); await CalibrationVisibilityChecks.Run(); return; }
         if (arguments.SequenceEqual(["--renderer-safety"])) { RendererSafetyChecks.Run(); await RendererSafetyHardwareChecks.Run(); return; }
         if (arguments.SequenceEqual(["--renderer-soak"])) { await RendererEditingSoakChecks.Run(); return; }
@@ -285,6 +287,8 @@ internal static class TestSuites
             CoreChecks.Run();
             VideoLoopChecks.Run();
             await ScreenChecks.Run();
+            VideoPriorityChecks.Run();
+            await DisplayContextChecks.Run();
             await MatChecks.Run();
             IdleMouseCursorChecks.Run();
             DisplayBackgroundChecks.Run();
@@ -310,6 +314,7 @@ internal static class TestSuites
         }
         if (hardware)
         {
+            await DisplayContextHardwareChecks.Run();
             await VideoOutlineHardwareChecks.Run();
             await ScreenCopyHardwareChecks.Run();
             await ScreenEditingWorkflowChecks.Run();

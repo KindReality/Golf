@@ -7,6 +7,7 @@ internal static class ShowEditorChecks
     internal static ControllerOptions Fixture() => new()
     {
         DeviceName = "show-editor-controller", ConfigurationMode = true, ExperienceSupervisionEnabled = false,
+        ArduinoDiscovery = new() { Enabled = false },
         Scenes = [new() { Name = "idle", AmbientPlaylist = "ambient", ActivatingPlaylist = "cue" }],
         Playlists = [new() { Name = "ambient", Type = "ambient" }, new() { Name = "cue", Items = [new() { Name = "First", DelayMilliseconds = 10000, Commands = [ShowEditSession.DefaultCommand()] }] },
             new() { Name = "parent", Items = [new() { Name = "Nested", Commands = [new() { Playlist = "cue" }] }] }],

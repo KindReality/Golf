@@ -1,0 +1,9 @@
+profiles:
+  mega:
+    fqbn: arduino:avr:mega:cpu=atmega2560
+    platforms:
+      - platform: arduino:avr (1.8.6)
+    libraries:
+      - Bounce2 (2.71)
+      - ArduinoJson (7.4.3)
+default_profile: mega

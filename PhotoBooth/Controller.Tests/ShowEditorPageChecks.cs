@@ -43,6 +43,7 @@ internal static class ShowEditorPageChecks
                     page.Navigate("Playlists", 1);
                     Console.WriteLine("PASS Storyboard inspector opens");
                     Field<TextBox>("Storyboard playlist").Text = "Renamed cue";
+                    Field<TextBox>("Playlist duration milliseconds").Text = "45000";
                     Button("+ Item").PerformClick(); Field<TextBox>("Item name").Text = "Second cue";
                     Console.WriteLine("PASS New item inspector opens");
                     Field<NumericUpDown>("Wait before item (ms)").Value = 20000;
@@ -55,7 +56,7 @@ internal static class ShowEditorPageChecks
                     Check(page.HasUnsavedChanges && host.Options.Playlists[1].Name == "cue" && host.Engine.Snapshot().Length == 0, "Editing items, roles and commands stays in the draft without dispatching anything");
                     await page.SaveAsync(); await Until(() => host.Options.Playlists[1].Name == "Renamed cue"); page.RefreshState();
                     var saved = host.Options.Playlists[1];
-                    Check(saved.Items.Length == 2 && saved.Items[1].DelayMilliseconds == 20000 && saved.Items[1].Roles == "Projector, Ceiling" && saved.Items[1].BroadcastMode == "Random" && saved.Items[1].Commands[0].Payload.GetProperty("loop").GetBoolean(), "Save persists edited millisecond timing, role routing and looping commands");
+                    Check(saved.DurationMilliseconds == 45000 && saved.Items.Length == 2 && saved.Items[1].DelayMilliseconds == 20000 && saved.Items[1].Roles == "Projector, Ceiling" && saved.Items[1].BroadcastMode == "Random" && saved.Items[1].Commands[0].Payload.GetProperty("loop").GetBoolean(), "Save persists playlist duration, millisecond timing, role routing and looping commands");
                     Check(host.Options.Playlists[2].Items[0].Commands[0].Playlist == "Renamed cue", "UI playlist rename preserves nested references");
                     Button("Run playlist").PerformClick(); await Until(() => host.Engine.Snapshot().Length == 1);
                     Button("Cancel run").PerformClick(); await Until(() => host.Engine.Snapshot().Length == 0);

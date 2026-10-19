@@ -48,6 +48,11 @@ internal sealed class ControllerHost : IAsyncDisposable
         });
     }
     public ArduinoStatus[] ArduinoStatus => _arduinos.Snapshot();
+    public void ClearRunningPlaylists()
+    {
+        Scenes.StopImmediately();
+        Log.Info("RunningPlaylistsCleared", "Stopped all running playlists without scene deactivation");
+    }
 
     public ControllerHost(string path, string? templateDirectory = null)
     {
@@ -58,13 +63,13 @@ internal sealed class ControllerHost : IAsyncDisposable
         Experiences = new(Log);
         _announcements = new(() => Options, Log);
         _arduinos = new(Log, ReceiveSerialAsync);
-        Engine = new(_options, new CommandDispatcher(_arduinos, ReceiveUdpAsync, _shutdown.Token), Log);
+        Engine = new(_options, new CommandDispatcher(_arduinos, ReceiveUdpAsync, _shutdown.Token), Log) { ReadExperiences = Experiences.Snapshot };
         Scenes = new(_options, Engine, Log);
-        _listener = new(() => Options, ReceiveUdpAsync);
+        _listener = new(() => Options, ReceiveUdpAsync, device => _arduinos.HasTarget(device));
         try
         {
             _listener.Bind(_options.UdpCommandsPort, _options.UdpEventsPort);
-            _arduinos.Apply(_options.Arduinos);
+            _arduinos.Apply(_options.Arduinos, _options.ArduinoDiscovery);
             _announcements.Start();
             Engine.Start();
             Scenes.Start();
@@ -84,7 +89,7 @@ internal sealed class ControllerHost : IAsyncDisposable
     {
         if (Options.UdpEventsPort != options.UdpEventsPort || Options.UdpCommandsPort != options.UdpCommandsPort)
             _listener.Bind(options.UdpCommandsPort, options.UdpEventsPort);
-        _arduinos.Apply(options.Arduinos);
+        _arduinos.Apply(options.Arduinos, options.ArduinoDiscovery);
         Volatile.Write(ref _options, options);
         Engine.Apply(options);
         Scenes.Apply(options);
@@ -94,7 +99,17 @@ internal sealed class ControllerHost : IAsyncDisposable
 
     private async Task ReceiveUdpAsync(BroadcastEnvelope message, CancellationToken token)
     {
-        if (token.IsCancellationRequested || !message.Targets(Options.EffectiveDeviceName) || message.IsExpired(DateTimeOffset.UtcNow)) return;
+        if (token.IsCancellationRequested || message.IsExpired(DateTimeOffset.UtcNow)) return;
+        // A board is a named network destination even though USB provides its last hop.
+        // Wildcard commands are not blindly forwarded to attached hardware.
+        if (message.Type == "command" && message.Device != "*" && _arduinos.HasTarget(message.Device))
+        {
+            if (!_received.Accept(message.Source.ToUpperInvariant(), message.RequestId, Options.RequestDeduplicationSeconds)) return;
+            await _arduinos.SendAsync(message.Device, System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(message.Body), token).ConfigureAwait(false);
+            Log.Info("ArduinoNetworkCommandSent", $"{message.Source} → Arduino {message.Device}", new { message.Source, message.Device, message.Body }, message.RequestId);
+            return;
+        }
+        if (!message.Targets(Options.EffectiveDeviceName)) return;
         if (!_received.Accept(message.Source.ToUpperInvariant(), message.RequestId, Options.RequestDeduplicationSeconds)) return;
         if (message.Event == ExperienceDiscovery.Event) { Experiences.Receive(message); return; }
         if (ExperienceDiscovery.IsRequest(message)) return;
@@ -121,6 +136,8 @@ internal sealed class ControllerHost : IAsyncDisposable
         {
             if (message.Event == ControllerDiscovery.ResponseEvent) return;
             ControllerOptions.RequireInput(message.Body);
+            if (PlaybackPriorityEvent.TryDescribe(message, out var priorityActivity))
+                Log.Info("PlaybackPriorityRejected", priorityActivity, message.Body, message.RequestId);
             Engine.Receive(message);
         }
         else
@@ -149,9 +166,11 @@ internal sealed class ControllerHost : IAsyncDisposable
     {
         var message = BroadcastEnvelope.Parse(bytes);
         if (message.Type != "event" || !ControllerOptions.Same(message.Source, device))
-            throw new ArgumentException("Arduino input must be an event whose source matches its configured device name.");
+            throw new ArgumentException("Arduino input must be an event whose source matches its registered device name.");
         ControllerOptions.RequireInput(message.Body);
         if (message.IsExpired(DateTimeOffset.UtcNow) || !_received.Accept(message.Source.ToUpperInvariant(), message.RequestId, Options.RequestDeduplicationSeconds)) return;
+        if (message.Event == "device.status")
+            Log.Info("ArduinoStatusReceived", $"{device}: serial device status", message.Body, message.RequestId);
         if (message.Targets(Options.EffectiveDeviceName)) Engine.Receive(message);
         // The Arduino announces its event to all intended LAN recipients just like an ESP32.
         try { await UdpBroadcastSender.SendAsync(bytes, Options, token).ConfigureAwait(false); }

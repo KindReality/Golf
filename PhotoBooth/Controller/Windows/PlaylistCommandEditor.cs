@@ -14,6 +14,7 @@ internal sealed class PlaylistCommandEditor : UserControl
     private readonly ControllerOptions _options;
     private readonly ExperiencePeer[] _peers;
     private readonly string[] _media;
+    private readonly string[] _serialDevices;
     private readonly Action _changed;
     private PlaylistCommand _original;
     private string _loadedKind;
@@ -22,9 +23,10 @@ internal sealed class PlaylistCommandEditor : UserControl
     private NumericUpDown? _volume, _channel;
     private TextBox? _raw, _event, _input;
     private bool _loading;
-    internal PlaylistCommandEditor(PlaylistCommand command, ShowConfiguration show, ControllerOptions options, ExperiencePeer[] peers, string[] media, Action changed)
+    internal PlaylistCommandEditor(PlaylistCommand command, ShowConfiguration show, ControllerOptions options, ExperiencePeer[] peers, string[] media, Action changed, string[]? serialDevices = null)
     {
         _show = show; _options = options; _peers = peers; _media = media; _changed = changed; _original = command;
+        _serialDevices = options.Arduinos.Select(a => a.Name).Concat(serialDevices ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         Dock = DockStyle.Top; AutoSize = false; Height = 480; BackColor = DarkTheme.Surface;
         _loadedKind = Kind(command);
         _kind = Choice(["Video", "Audio", "Scene command", "Local playlist", "Network playlist", "Event", "Arduino", "Advanced JSON"], _loadedKind);
@@ -62,7 +64,7 @@ internal sealed class PlaylistCommandEditor : UserControl
         "Scene command" => new() { Device = _options.EffectiveDeviceName, Payload = JsonSerializer.SerializeToElement(new { command = "scene", value = _show.Scenes.FirstOrDefault()?.Name ?? "" }) },
         "Network playlist" => new() { Device = _options.EffectiveDeviceName, Payload = JsonSerializer.SerializeToElement(new { command = "playlist", value = _show.Playlists.FirstOrDefault(p => p.Type == "storyboard")?.Name ?? "" }) },
         "Event" => new() { Type = "event", Device = "*", Payload = JsonSerializer.SerializeToElement(new { input = "motion", @event = "motion.detected" }) },
-        "Arduino" => new() { Transport = "arduino", Device = _options.Arduinos.FirstOrDefault()?.Name ?? "", Payload = JsonSerializer.SerializeToElement(new { command = "switch", value = "on" }) },
+        "Arduino" => new() { Transport = "arduino", Device = _serialDevices.FirstOrDefault() ?? "", Payload = JsonSerializer.SerializeToElement(new { command = "status" }) },
         _ => Application.ShowEditSession.DefaultCommand()
     };
     private JsonObject Payload() => _original.Payload.ValueKind == JsonValueKind.Object ? JsonNode.Parse(_original.Payload.GetRawText(), new() { PropertyNameCaseInsensitive = true })!.AsObject() : new();
@@ -85,7 +87,7 @@ internal sealed class PlaylistCommandEditor : UserControl
         else
         {
             var devices = new[] { "*", _options.EffectiveDeviceName }.Concat(_peers.Select(p => p.Inventory.DeviceName));
-            if (_loadedKind == "Arduino") devices = _options.Arduinos.Select(a => a.Name);
+            if (_loadedKind == "Arduino") devices = _serialDevices;
             _device = Choice(devices, _original.Device ?? "*", true); Field("Destination device", _device);
             if (_loadedKind is "Video" or "Audio")
             {

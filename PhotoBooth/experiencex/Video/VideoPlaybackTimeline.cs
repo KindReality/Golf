@@ -36,6 +36,11 @@ internal sealed class VideoPlaybackTimeline
         _clock.Restart();
     }
     public void RequestStop(double fadeSeconds) => StopAt(_clock.Elapsed.TotalSeconds, fadeSeconds);
+    internal void Continue(bool loop)
+    {
+        _loop = loop;
+        _fading = _stopping = _reportFade = false;
+    }
     internal void StopAt(double elapsed, double fadeSeconds)
     {
         if (_stopping) return; // A duplicate stop must never extend the fade.

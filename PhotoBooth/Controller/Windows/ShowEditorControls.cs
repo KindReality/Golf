@@ -54,7 +54,10 @@ internal static class ShowEditorControls
         switch (control)
         {
             case TextBoxBase text: text.TextChanged += (_, _) => changed(); break;
-            case ComboBox combo: combo.TextChanged += (_, _) => changed(); break;
+            case ComboBox combo:
+                combo.SelectedIndexChanged += (_, _) => changed();
+                if (combo.DropDownStyle != ComboBoxStyle.DropDownList) combo.TextChanged += (_, _) => changed();
+                break;
             case NumericUpDown number: number.ValueChanged += (_, _) => changed(); break;
             case CheckBox check: check.CheckedChanged += (_, _) => changed(); break;
         }

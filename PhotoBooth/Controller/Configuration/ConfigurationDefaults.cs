@@ -37,6 +37,20 @@ internal static class ConfigurationDefaults
         if (root[playlistKey] is null) root[playlistKey] = playlists;
         playlists.Add(new JsonObject { ["Name"] = name, ["Type"] = "ambient", ["Items"] = new JsonArray() });
         root[sceneKey] = new JsonArray(new JsonObject { ["Name"] = "idle", ["AmbientPlaylist"] = name });
+        var activeAmbient = "active-ambient";
+        for (var index = 2; playlists.OfType<JsonObject>().Any(p => ControllerOptions.Same(p["Name"]?.GetValue<string>(), activeAmbient)); index++) activeAmbient = "active-ambient" + index;
+        playlists.Add(new JsonObject { ["Name"] = activeAmbient, ["Type"] = "ambient", ["Items"] = new JsonArray() });
+        ((JsonArray)root[sceneKey]!).Add(new JsonObject { ["Name"] = "active", ["AmbientPlaylist"] = activeAmbient });
+        for (var zone = 1; zone <= 3; zone++)
+        {
+            var zoneName = "active-zone-" + zone;
+            if (playlists.OfType<JsonObject>().Any(p => ControllerOptions.Same(p["Name"]?.GetValue<string>(), zoneName))) continue;
+            playlists.Add(new JsonObject { ["Name"] = zoneName, ["Type"] = "storyboard", ["Items"] = new JsonArray(new JsonObject
+            {
+                ["Name"] = "Activate", ["Roles"] = "", ["BroadcastMode"] = "Broadcast", ["IncludeSubwoofer"] = false,
+                ["Commands"] = new JsonArray(new JsonObject { ["Device"] = "*", ["Payload"] = new JsonObject { ["command"] = "scene", ["value"] = "active" } })
+            }) });
+        }
         var result = root.ToJsonString(ControllerOptions.Json); ControllerOptions.Parse(result, build); return result;
     }
     public static void Write(string path, string text)

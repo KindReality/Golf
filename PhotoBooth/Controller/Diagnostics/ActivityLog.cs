@@ -8,6 +8,7 @@ internal sealed class ActivityLog
 {
     private readonly ConcurrentQueue<ActivityEntry> _entries = new();
     public ActivityEntry[] Snapshot() => _entries.Reverse().ToArray();
+    public void Clear() => _entries.Clear();
     public void Info(string name, string message, object? data = null, string? id = null)
     {
         Telemetry.Info(name, data ?? new { Message = message }, id);

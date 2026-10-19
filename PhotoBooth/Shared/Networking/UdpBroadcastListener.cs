@@ -6,7 +6,7 @@ using PhotoBooth.Diagnostics;
 namespace PhotoBooth.Networking;
 
 internal sealed class UdpBroadcastListener(Func<BroadcastOptions> options,
-    Func<BroadcastEnvelope, CancellationToken, Task> received) : IAsyncDisposable
+    Func<BroadcastEnvelope, CancellationToken, Task> received, Func<string, bool>? additionalCommandTarget = null) : IAsyncDisposable
 {
     private readonly RequestDeduplicator _duplicates = new();
     private readonly List<Task> _loops = [];
@@ -69,7 +69,7 @@ internal sealed class UdpBroadcastListener(Func<BroadcastOptions> options,
                     Telemetry.Warning("UdpWrongMessagePort", new { ExpectedType = expectedType, message.Type }, message.RequestId);
                     continue;
                 }
-                if (!message.Targets(current.EffectiveDeviceName))
+                if (!message.Targets(current.EffectiveDeviceName) && !(message.Type == "command" && additionalCommandTarget?.Invoke(message.Device) == true))
                 {
                     Telemetry.Debug("UdpTargetIgnored", new { message.Device, DeviceName = current.EffectiveDeviceName }, message.RequestId);
                     continue;

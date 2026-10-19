@@ -69,7 +69,9 @@ internal sealed class ShowEditorPage : UserControl
     private void Changed() { if (_loading) return; _pending = true; _reloadArmed = false; _confirmSceneChange = null; _reload.Text = "Reload"; Message("Unsaved draft • Save applies ambient changes; running storyboards keep their current settings."); UpdateActions(); }
     private bool CommitCurrent() => Attempt(() =>
     {
-        if (_index < 0 || !_pending) return;
+        // Read the actual controls at save/navigation boundaries, rather than
+        // relying on a change notification to decide whether their values exist.
+        if (_index < 0) return;
         switch (_view)
         {
             case SceneEditorView scene: _session.SetScene(_index, scene.Read()); break;
@@ -127,12 +129,34 @@ internal sealed class ShowEditorPage : UserControl
         {
             _view = _section switch
             {
-                "Scenes" => new SceneEditorView(show.Scenes[_index], show, _index == 0, Changed, OpenPlaylist),
-                "Playlists" => new PlaylistEditorView(show.Playlists[_index], show, _host.Options, _host.Experiences.Snapshot(), Media(), _session.PlaylistUses(show.Playlists[_index].Name), Changed),
+                "Scenes" => new SceneEditorView(show.Scenes[_index], show, _index == 0, Changed, OpenPlaylist, CreateScenePlaylist),
+                "Playlists" => new PlaylistEditorView(show.Playlists[_index], show, _host.Options, _host.Experiences.Snapshot(), Media(), _session.PlaylistUses(show.Playlists[_index].Name), Changed,
+                    _host.ArduinoStatus.Where(a => a.Connected).Select(a => a.Name).ToArray()),
                 _ => new TriggerEditorView(show.Triggers[_index], show, _host.Options.Build.DefaultTriggerCooldownMilliseconds, Changed, OpenPlaylist)
             };
             _workspace.Controls.Add(_view);
         });
+    }
+    private void CreateScenePlaylist(string phase)
+    {
+        if (_saving || _section != "Scenes" || _index < 0 || !CommitCurrent()) return;
+        var show = _session.Current;
+        var scene = show.Scenes[_index];
+        var name = ShowEditSession.Unique(scene.Name + " " + phase, show.Playlists.Select(p => p.Name));
+        var playlist = new PlaylistOptions { Name = name, Type = phase == "ambient" ? "ambient" : "storyboard" };
+        var linked = phase switch
+        {
+            "activation" => scene with { ActivatingPlaylist = name },
+            "ambient" => scene with { AmbientPlaylist = name },
+            "deactivation" => scene with { DeactivatingPlaylist = name },
+            _ => throw new ArgumentException("Unknown scene phase.")
+        };
+        _session.Change(show with { Playlists = [.. show.Playlists, playlist], Scenes = show.Scenes.Select((s, i) => i == _index ? linked : s).ToArray() });
+        // Dispose the old scene controls before navigation can read their old
+        // selection back over the newly assigned reference.
+        _view?.Dispose(); _workspace.Controls.Clear(); _view = null; _pending = false;
+        _history.Push((_section, _index)); Navigate("Playlists", _session.Current.Playlists.Length - 1);
+        Message($"Created and assigned {phase} playlist ‘{name}’. Save keeps it linked to ‘{scene.Name}’.");
     }
     private void Add(string type = "storyboard")
     {
@@ -208,9 +232,13 @@ internal sealed class ShowEditorPage : UserControl
         if (HasUnsavedChanges || _index < 0) { Message("Save the draft before activating or running it."); return; }
         Attempt(() =>
         {
-            if (_section == "Scenes") _host.Scenes.Request(_session.Current.Scenes[_index].Name);
-            else if (_section == "Playlists" && _session.Current.Playlists[_index].Type == "storyboard") _runId = _host.Engine.RunManually(_session.Current.Playlists[_index].Name);
-            _host.Log.Info("EditorPlaybackRequested", "Explicit playback requested from the scene editor", new { Section = _section, Index = _index });
+            string name, kind;
+            if (_section == "Scenes")
+            { kind = "Scene"; name = _session.Current.Scenes[_index].Name; _host.Scenes.Request(name); }
+            else if (_section == "Playlists" && _session.Current.Playlists[_index].Type == "storyboard")
+            { kind = "Playlist"; name = _session.Current.Playlists[_index].Name; _runId = _host.Engine.RunManually(name); }
+            else return;
+            _host.Log.Info("EditorPlaybackRequested", $"{kind} requested: {name}", new { Section = _section, Name = name });
         }); UpdateActions();
     }
     private void CancelRun() { if (_runId is not null) _host.Engine.Cancel(_runId); _runId = null; UpdateActions(); }

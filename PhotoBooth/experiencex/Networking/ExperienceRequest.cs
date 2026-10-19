@@ -4,6 +4,12 @@ namespace ExperienceX;
 
 public sealed record ExperienceRequest
 {
+    public PhotoBooth.Networking.CommandPriority Priority { get; init; } = PhotoBooth.Networking.CommandPriority.Medium;
+    [System.Text.Json.Serialization.JsonIgnore] public PhotoBooth.Networking.CommandPriority EffectivePriority => Loop || IsAmbient ? PhotoBooth.Networking.CommandPriority.Low : Priority;
+    [System.Text.Json.Serialization.JsonIgnore] internal VideoPlaybackPriority? PriorityCoordinator { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] internal PhotoBooth.Networking.CommandPriority? BlockingPriority { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] internal Action<ExperienceRequest, string, string, PhotoBooth.Networking.CommandPriority>? PriorityRejected { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] internal PhotoBooth.Networking.BroadcastChain? Chain { get; init; }
     public PhotoBooth.Networking.CommandContext? Context { get; init; }
     [System.Text.Json.Serialization.JsonIgnore] public bool IsAmbient => Context?.IsAmbient == true;
     [System.Text.Json.Serialization.JsonIgnore] internal VideoPriorityLease? VideoPriority { get; init; }
@@ -11,7 +17,7 @@ public sealed record ExperienceRequest
     [System.Text.Json.Serialization.JsonIgnore] public string? TargetDevice { get; init; }
     internal PhotoBooth.Diagnostics.RequestLogContext LogContext(string? path = null) => new()
     {
-        Source = Source, Device = TargetDevice, Experience = Experience, Value = Value,
+        Source = Source, Device = TargetDevice, Experience = Experience, Value = Value, Priority = EffectivePriority.ToString().ToLowerInvariant(),
         Scene = Context?.Scene, Playlist = Context?.Playlist, Item = Context?.Item, IsAmbient = IsAmbient, Roles = Roles, Path = path, CorrelationId = CorrelationId
     };
     public string Experience { get; init; } = "";
@@ -49,7 +55,7 @@ public sealed record ExperienceRequest
         get; init;
     }
     public string? Roles { get; init; }
-    [System.Text.Json.Serialization.JsonIgnore] public bool HasRoles => PhotoBooth.Networking.RoleList.Parse(Roles).Length > 0;
+    [System.Text.Json.Serialization.JsonIgnore] public bool HasRoles => PhotoBooth.Networking.RoleList.ParseTargets(Roles).Length > 0;
     public string[]? AudioDevices
     {
         get; init;
@@ -85,7 +91,7 @@ public sealed record ExperienceRequest
     private static ExperienceRequest Validate(ExperienceRequest request)
     {
         request.Context?.Validate();
-        PhotoBooth.Networking.RoleList.Parse(request.Roles);
+        PhotoBooth.Networking.RoleList.ParseTargets(request.Roles);
         if (request.HasRoles && (request.IsStop || !string.IsNullOrWhiteSpace(request.Screen) || !string.IsNullOrWhiteSpace(request.DisplayName) ||
             !string.IsNullOrWhiteSpace(request.AudioDevice) || request.AudioDevices is not null))
             throw new ArgumentException("Role playback targets cannot include direct screen/display/audio targets or stop commands.");

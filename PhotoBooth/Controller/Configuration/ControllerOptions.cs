@@ -27,6 +27,7 @@ internal sealed record ControllerOptions : BroadcastOptions
     public string? DefaultDisplayName { get; init; }
     public Dictionary<string, string> DisplayAliases { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public ArduinoOptions[] Arduinos { get; init; } = [];
+    public ArduinoDiscoveryOptions ArduinoDiscovery { get; init; } = new();
     public TriggerOptions[] Triggers { get; init; } = [];
     public SceneOptions[] Scenes { get; init; } = [];
     public PlaylistOptions[] Playlists { get; init; } = [];
@@ -44,6 +45,8 @@ internal sealed record ControllerOptions : BroadcastOptions
     private void Validate()
     {
         ValidateNetwork();
+        if (ArduinoDiscovery is null || ArduinoDiscovery.BaudRate is < 300 or > 2000000)
+            throw new ArgumentException("Invalid ArduinoDiscovery serial settings.");
         if (!double.IsFinite(PointHitDiameterPercent) || PointHitDiameterPercent is <= 0 or > 100) throw new ArgumentException("PointHitDiameterPercent must be greater than zero and at most 100.");
         if (DefinitionsPort is < 1 or > 65535) throw new ArgumentException("DefinitionsPort must be 1–65535.");
         new ControllerSharedDefinitions { ControllerId = string.IsNullOrWhiteSpace(ControllerId) ? "00000000000000000000000000000000" : ControllerId, ControllerName = EffectiveDeviceName, Hostname = Environment.MachineName, Perspectives = Perspectives }.Validate();
@@ -57,15 +60,20 @@ internal sealed record ControllerOptions : BroadcastOptions
             if (!arduino.Port.StartsWith("COM", StringComparison.OrdinalIgnoreCase) || !int.TryParse(arduino.Port.AsSpan(3), out var number) || number <= 0 || arduino.BaudRate is < 300 or > 2000000) throw new ArgumentException($"Invalid serial settings: {arduino.Name}.");
         foreach (var playlist in Playlists)
         {
+            if (!Same(playlist.AudioOutputMode, "Configured") && !Same(playlist.AudioOutputMode, "Random"))
+                throw new ArgumentException($"AudioOutputMode must be Configured or Random: {playlist.Name}.");
+            if (playlist.DurationMilliseconds is < 0 or > 86400000) throw new ArgumentException($"Playlist duration must be 0–86400000 milliseconds or empty for automatic: {playlist.Name}.");
             if (playlist.Type is not ("ambient" or "storyboard") || playlist.Items is null || playlist.Items.Any(i => i is null) || playlist.Items.Length > 1000) throw new ArgumentException($"Invalid playlist type/items: {playlist.Name}.");
             Unique(playlist.Items.Select(i => i.Name), $"item in {playlist.Name}");
             foreach (var item in playlist.Items)
             {
-                var itemRoles = RoleList.Parse(item.Roles);
+                var itemRoles = RoleList.ParseTargets(item.Roles);
                 if (!Same(item.BroadcastMode, "Broadcast") && !Same(item.BroadcastMode, "Random"))
                     throw new ArgumentException($"BroadcastMode must be Broadcast or Random: {playlist.Name}/{item.Name}.");
                 if (itemRoles.Length == 0 && (Same(item.BroadcastMode, "Random") || item.IncludeSubwoofer))
                     throw new ArgumentException($"Random targeting and IncludeSubwoofer require a nonempty Roles list: {playlist.Name}/{item.Name}.");
+                if (Same(item.BroadcastMode, "Random") && RoleList.RandomChoices(item.Roles).Length == 0)
+                    throw new ArgumentException($"Random role selection requires a positive rule or '*': {playlist.Name}/{item.Name}.");
                 if (item.DelayMilliseconds is < 0 or > 86400000 || item.CooldownMilliseconds is < 0 or > 86400000 || item.Commands is null || item.Commands.Any(c => c is null) || item.Commands.Length is 0 or > 1000) throw new ArgumentException($"Invalid timing/commands: {playlist.Name}/{item.Name}.");
                 if (playlist.Type == "ambient")
                 {
@@ -81,11 +89,14 @@ internal sealed record ControllerOptions : BroadcastOptions
                         continue;
                     }
                     if (command.Transport is not ("udp" or "arduino") || command.Type is not ("command" or "event") || command.Payload.ValueKind != JsonValueKind.Object) throw new ArgumentException($"Invalid command: {playlist.Name}/{item.Name}.");
-                    if (command.Transport == "arduino" && (command.Type != "command" || !Arduinos.Any(a => Same(a.Name, command.Device)))) throw new ArgumentException($"Unknown Arduino target: {command.Device}.");
+                    if (command.Transport == "arduino" && (command.Type != "command" || command.Device == "*" || string.IsNullOrWhiteSpace(Text(command.Payload, "command"))))
+                        throw new ArgumentException("Serial commands require a named device and a command. The device may be discovered later.");
                     // Check every possible random destination rather than treating the entire list as one packet.
-                    foreach (var roles in Same(item.BroadcastMode, "Random") ? itemRoles : [item.Roles])
+                    foreach (var roles in Same(item.BroadcastMode, "Random") ? RoleList.RandomChoices(item.Roles) : [item.Roles])
                     {
                         var routed = PlaylistRoleTarget.Apply(command, roles, item.IncludeSubwoofer);
+                        if (Same(playlist.AudioOutputMode, "Random") && Controller.Scheduling.PlaylistAudioTarget.IsAudio(routed))
+                            Controller.Scheduling.PlaylistAudioTarget.Validate(routed);
                         BroadcastEnvelope.Create(this, routed.Type, routed.Device!, routed.Payload);
                     }
                     if (command.Type == "event") RequireInput(command.Payload);

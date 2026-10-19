@@ -12,6 +12,7 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
     public const int MaximumDatagramBytes = 1200;
     public const int MaximumHops = 8;
     public CommandContext? Context { get; init; }
+    public CommandPriority Priority { get; init; } = CommandPriority.Medium;
     // Transport metadata, never supplied by or serialized into the JSON message.
     internal string? SenderAddress { get; init; }
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -26,6 +27,7 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         public int HopCount { get; init; }
         public double ProcessingTimeoutSeconds { get; init; } = 10;
         public CommandContext? Context { get; init; }
+        public CommandPriority Priority { get; init; } = CommandPriority.Medium;
     }
 
     public static BroadcastEnvelope Parse(ReadOnlySpan<byte> bytes)
@@ -54,7 +56,7 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         if (!double.IsFinite(fields.ProcessingTimeoutSeconds) || fields.ProcessingTimeoutSeconds is <= 0 or > 300)
             throw new ArgumentException("processingTimeoutSeconds must be greater than zero and at most 300.");
         return new(body, type, fields.Device!.Trim(), fields.Source!.Trim(), fields.RequestId!.Trim(),
-            fields.Event?.Trim(), fields.ExpiresAt, fields.HopCount, fields.ProcessingTimeoutSeconds, Stopwatch.GetTimestamp()) { Context = fields.Context };
+            fields.Event?.Trim(), fields.ExpiresAt, fields.HopCount, fields.ProcessingTimeoutSeconds, Stopwatch.GetTimestamp()) { Context = fields.Context, Priority = fields.Priority };
     }
 
     public bool Targets(string name) => Device == "*" || string.Equals(Device, name, StringComparison.OrdinalIgnoreCase);
@@ -63,10 +65,15 @@ internal sealed record BroadcastEnvelope(JsonElement Body, string Type, string D
         Stopwatch.GetElapsedTime(ReceivedTimestamp, timestamp ?? Stopwatch.GetTimestamp()).TotalSeconds >= ProcessingTimeoutSeconds;
 
     public static byte[] Create(BroadcastOptions options, string type, string device, object payload, string? requestId = null,
-        BroadcastChain? chain = null, CommandContext? context = null)
+        BroadcastChain? chain = null, CommandContext? context = null, CommandPriority? priority = null)
     {
         options.ValidateNetwork();
         var body = JsonSerializer.SerializeToNode(payload, Json) as JsonObject ?? throw new ArgumentException("Payload must be an object.");
+        if (priority is not null)
+        {
+            foreach (var key in body.Select(p => p.Key).Where(k => k.Equals("priority", StringComparison.OrdinalIgnoreCase)).ToArray()) body.Remove(key);
+            body["priority"] = priority.Value.ToString().ToLowerInvariant();
+        }
         // Reserve envelope fields so callers cannot accidentally override routing or retry identity.
         foreach (var key in body.Select(property => property.Key).ToArray())
             if (new[] { "type", "device", "source", "requestId", "expiresAt", "hopCount", "processingTimeoutSeconds", "correlationId", "originSource", "causationId", "actionHistory" }.Contains(key, StringComparer.OrdinalIgnoreCase))

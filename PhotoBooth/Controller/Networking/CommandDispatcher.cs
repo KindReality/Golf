@@ -10,7 +10,7 @@ internal sealed class CommandDispatcher(ArduinoConnections arduinos,
 {
     public async Task<DispatchReceipt> SendAsync(PlaylistCommand step, ControllerOptions options, BroadcastChain chain, string requestId, CancellationToken token)
     {
-        var bytes = BroadcastEnvelope.Create(options, step.Type, step.Device!, step.Payload, requestId, chain, step.Context);
+        var bytes = BroadcastEnvelope.Create(options, step.Type, step.Device!, step.Payload, requestId, chain, step.Context, step.Priority);
         if (step.Transport == "udp")
         {
             long firstSent = 0;
@@ -31,7 +31,8 @@ internal sealed class CommandDispatcher(ArduinoConnections arduinos,
             }
             return new(firstSent);
         }
-        var written = await arduinos.SendAsync(options.Arduinos.First(a => ControllerOptions.Same(a.Name, step.Device)), bytes, token).ConfigureAwait(false);
+        var written = await arduinos.SendAsync(step.Device!, bytes, token,
+            options.Arduinos.FirstOrDefault(a => ControllerOptions.Same(a.Name, step.Device))).ConfigureAwait(false);
         return new(written);
     }
 }

@@ -154,7 +154,7 @@ internal sealed class VideoRenderer : IDisposable
     {
         try
         {
-            Enqueue("Playback:" + request.ScreenId, () =>
+            Enqueue((request.Loop ? "Background:" : "Playback:") + request.ScreenId, () =>
             {
                 DisplayScreenTrack? track = null;
                 var accepted = false;

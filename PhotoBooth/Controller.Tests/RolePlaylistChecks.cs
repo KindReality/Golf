@@ -30,6 +30,11 @@ internal static class RolePlaylistChecks
         }
         var scoped = PlaylistRoleTarget.Apply(video with { Device = "projection-pc" }, "Scary");
         Check(scoped.Device == "projection-pc", "An explicit device limits role targeting to that computer.");
+        Check(ControllerOptions.Text(PlaylistRoleTarget.Apply(audio, "^subwoofer,*", true).Payload, "roles") == "^subwoofer,*,subwoofer" &&
+            !RoleList.Matches("subwoofer", ControllerOptions.Text(PlaylistRoleTarget.Apply(audio, "^subwoofer,*", true).Payload, "roles")),
+            "An earlier exclusion takes precedence over the later IncludeSubwoofer rule.");
+        Check(PlaylistRoleTarget.Select(item with { Roles = "^subwoofer,Left,Right", BroadcastMode = "Random" }, null, count => { Check(count == 2, "Exclusions are not random choices."); return 1; }) == "^subwoofer,Right",
+            "Random role targeting retains every exclusion with the selected positive role.");
         var loop = video with { Payload = JsonSerializer.SerializeToElement(new { experience = "video", value = "Eye.mp4", loop = true, mute = true }) };
         var loopOptions = Valid(options with { Playlists = [new() { Name = "background", Type = "ambient" }, new() { Name = "loop", Items = [item with { Commands = [loop] }] }] });
         recorder = new();
@@ -54,7 +59,7 @@ internal static class RolePlaylistChecks
         Check(PlaylistRoleTarget.Apply(explicitRole, "").Device == "*", "Individual role playback commands also support omitted device.");
         Reject(() => PlaylistRoleTarget.Apply(video with { Payload = JsonSerializer.SerializeToElement(new { experience = "video", value = "Eye.mp4", roles = "Scary", screen = "*" }) }, ""));
         Reject(() => PlaylistRoleTarget.Apply(video with { Payload = JsonSerializer.SerializeToElement(new { experience = "video", value = "Eye.mp4", roles = 42 }) }, ""));
-        Reject(() => Valid(options with { Playlists = [new() { Name = "background", Type = "ambient" }, new() { Name = "invalid", Items = [item with { Roles = "*" }] }] }));
+        Reject(() => Valid(options with { Playlists = [new() { Name = "background", Type = "ambient" }, new() { Name = "invalid", Items = [item with { Roles = "^" }] }] }));
         var randomItem = new PlaylistItem { Name = "random", Roles = "Left,Right,left", BroadcastMode = "Random", IncludeSubwoofer = true, MinIntervalMilliseconds = 20, MaxIntervalMilliseconds = 20, Commands = [video, audio] };
         var randomOptions = Valid(options with { Playlists = [new() { Name = "background", Type = "ambient", Items = [randomItem] }] });
         recorder = new(); var choices = 0;

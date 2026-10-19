@@ -48,6 +48,7 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
                     Source = message.Source,
                     TargetDevice = message.Device,
                     Context = message.Context,
+                    Chain = BroadcastChain.From(message),
                     Expired = () => message.IsExpired(DateTimeOffset.UtcNow)
                 };
             }

@@ -13,6 +13,8 @@ internal sealed record PlaylistOptions
 {
     public required string Name { get; init; }
     public string Type { get; init; } = "storyboard";
+    public int? DurationMilliseconds { get; init; }
+    public string AudioOutputMode { get; init; } = "Configured";
     public PlaylistItem[] Items { get; init; } = [];
 }
 internal sealed record PlaylistItem
@@ -30,6 +32,7 @@ internal sealed record PlaylistItem
 }
 internal sealed record PlaylistCommand
 {
+    [JsonIgnore] public PhotoBooth.Networking.CommandPriority Priority { get; init; } = PhotoBooth.Networking.CommandPriority.Medium;
     [JsonIgnore] public PhotoBooth.Networking.CommandContext? Context { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Playlist { get; init; }
     public string Transport { get; init; } = "udp";
@@ -44,6 +47,11 @@ internal sealed record ArduinoOptions
     public bool Enabled { get; init; } = true;
     public int BaudRate { get; init; } = 115200;
     public bool DtrEnable { get; init; } = true;
+}
+internal sealed record ArduinoDiscoveryOptions
+{
+    public bool Enabled { get; init; } = true;
+    public int BaudRate { get; init; } = 115200;
 }
 internal sealed record TriggerOptions
 {

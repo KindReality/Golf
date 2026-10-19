@@ -8,8 +8,20 @@ internal static class RoleConfigurationChecks
     {
         Check(RoleList.Parse("  Front, Scary, FRONT,, ").SequenceEqual(["Front", "Scary"]) && RoleList.Parse("").Length == 0, "Role lists trim, deduplicate and allow zero roles.");
         Check(RoleList.Matches("Front, Scary", "scary") && !RoleList.Matches("Front", "Rear"), "Role matching ignores case.");
+        Check(RoleList.Matches("", "^subwoofer,*") && RoleList.Matches("Front", "^subwoofer,*") &&
+            !RoleList.Matches("Front,SUBWOOFER", "^subwoofer,*") && RoleList.Matches("Subwoofer", "*,^subwoofer"),
+            "The first matching rule decides: an initial wildcard includes all, while an earlier exclusion denies its role.");
+        Check(RoleList.Matches("Front", "^subwoofer,Front") && !RoleList.Matches("Rear", "^subwoofer,Front") &&
+            RoleList.Matches("Front,Subwoofer", "Front,^subwoofer,Subwoofer") &&
+            !RoleList.Matches("Front,Subwoofer", "^subwoofer,Front") && !RoleList.Matches("Rear", "Front,^subwoofer"),
+            "Earlier positive and negative rules take precedence; unmatched outputs stay unselected.");
+        Check(RoleList.RandomChoices("Front,^subwoofer,Rear").SequenceEqual(["Front,^subwoofer", "^subwoofer,Rear"]), "Random role choices preserve the original order of the selected positive rule and every exclusion.");
+        Check(!RoleList.Matches("Front", "^subwoofer") && !RoleList.Matches("Front", "^*,*") && RoleList.Matches("Front", "Front,^*"),
+            "Negative-only rules default to no selection, and a negative wildcard respects earlier positive rules.");
+        foreach (var invalid in new[] { "^", "^^subwoofer,*", "^ subwoofer,*", "Front*" }) Reject(() => RoleList.ParseTargets(invalid));
         foreach (var invalid in new[] { "*", "front\nrear", new string('x', 65), string.Join(",", Enumerable.Range(0, 257)) })
             Reject(() => RoleList.Parse(invalid));
+        Reject(() => RoleList.Parse("^subwoofer"));
         var options = new ExperienceOptions
         {
             AudioDevices = new()
@@ -29,6 +41,13 @@ internal static class RoleConfigurationChecks
         var selection = AudioDeviceSelection.Resolve(request with { Experience = "audio", Roles = "ambient, welcome" }, options, outputs, "id-c");
         Check(selection.Devices.Select(device => device.Id).SequenceEqual(["id-a", "id-b"]), "Role audio selects matching speakers once, including group roles and excluding the default speaker.");
         Check(AudioDeviceSelection.Resolve(request with { Experience = "audio", Roles = "absent" }, options, outputs, "id-c").Devices.Length == 0, "Missing audio roles never fall back to default audio.");
+        var excludedOptions = options with { AudioDevices = new(options.AudioDevices) { ["id-b"] = new() { Roles = "Subwoofer" } } };
+        var excludedRequest = ExperienceRequest.Parse("{\"experience\":\"audio\",\"value\":\"Bell.wav\",\"roles\":\"^subwoofer,*\"}"u8);
+        Check(AudioDeviceSelection.Resolve(excludedRequest, excludedOptions, outputs, "id-b").Devices.Select(d => d.Id).SequenceEqual(["id-a", "id-c"]),
+            "Actual audio routing excludes subwoofers and includes unassigned endpoints without a default fallback.");
+        var videoOptions = options with { DisplayScreens = new() { ["DISPLAY1"] = [new() { Id = "a", Roles = "Front" }, new() { Id = "b", Roles = "Subwoofer" }, new() { Id = "c" }] } };
+        Check(ScreenSelection.VideoOutputs(request with { Roles = "^subwoofer,*" }, videoOptions, ["DISPLAY1"], "DISPLAY1").Count == 2,
+            "Video role targeting applies the same wildcard and exclusion rules.");
         foreach (var target in new[] { "\"screen\":\"DISPLAY1/screen1\"", "\"displayName\":\"DISPLAY1\"", "\"audioDevice\":\"*\"", "\"audioDevices\":[\"id-a\"]" })
             Reject(() => ExperienceRequest.Parse(System.Text.Encoding.UTF8.GetBytes("{\"experience\":\"video\",\"value\":\"Eye.mp4\",\"roles\":\"scary\"," + target + "}")));
         Check(RoleList.Parse(AudioDeviceOptions.RolesFor(new("id-a", "Front", 2), options)).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(["Scary", "Welcome", "Ambient"]), "Physical ID, name and virtual-group roles combine without duplicates.");

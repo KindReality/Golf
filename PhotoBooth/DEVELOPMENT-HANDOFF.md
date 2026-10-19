@@ -130,3 +130,7 @@ Read `BUILDING.md`, `NETWORKING.md`, `Controller/README.md`, `experiencex/README
 The snapshot includes roles targeting, ambient video priority, overlapping independent audio, identical-loop request suppression, full-display new screens, one-step point undo, and persisted media/mat layer ordering above G-Force. These changes are not all on GitHub yet.
 
 The user was discussing a future redesign of random ambient item targeting. No new redesign is approved. Currently a scene references an ambient playlist; each enabled item has an independent random timer, commands use fixed targets or all matching roles, and cooldown belongs to Controller + playlist + item, not individual output. Ask design questions one at a time before implementing that change. No application code was changed for this handoff.
+
+## Media organization handoff (October 18, 2026)
+
+Read [MEDIA-LAYOUT.md](MEDIA-LAYOUT.md) and its exact-path/size/SHA-256 allowlist [MEDIA-LAYOUT.json](MEDIA-LAYOUT.json) before adding, moving or reconciling media. Preserve the category hierarchy, report unlisted files/content conflicts, and never promote legacy or archived copies automatically. Shared handoff copies are in `%OneDrive%\Home Technologies\DevelopmentHandoff`. Media binaries remain excluded from Git. Keep verification brief; this work needs a configuration/path check rather than stress testing.

@@ -28,6 +28,8 @@
     <InternalsVisibleTo Include="Controller.Tests" />
     <None Update="appsettings.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
     <None Update="Install-Controller.cmd;Install-Controller.ps1;Restart-Controller.cmd;Restart-Controller.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\microcontroller\Arduino mega\README.md" Link="Microcontroller\ArduinoMega\README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\microcontroller\Arduino mega\SaftMega\SaftMega.ino;..\microcontroller\Arduino mega\SaftMega\sketch.yaml" Link="Microcontroller\ArduinoMega\SaftMega\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="appsettings.Development.json;appsettings.Production.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
   </ItemGroup>
   <Target Name="ControllerConfigurationTransform" AfterTargets="CopyFilesToOutputDirectory">

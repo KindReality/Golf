@@ -25,7 +25,7 @@ internal sealed class RendererStateMachine
             (RendererState.Idle, RendererState.Opening) => true,
             (RendererState.Opening, RendererState.Playing or RendererState.Idle) => true,
             (RendererState.Playing, RendererState.FadingOut or RendererState.Idle) => true,
-            (RendererState.FadingOut, RendererState.Idle) => true,
+            (RendererState.FadingOut, RendererState.Idle or RendererState.Playing) => true,
             _ => false
         };
         if (!allowed)
