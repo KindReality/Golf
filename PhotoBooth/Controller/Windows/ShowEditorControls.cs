@@ -66,14 +66,33 @@ internal static class ShowEditorControls
 
 internal sealed class ShowEditorFields : TableLayoutPanel
 {
-    internal ShowEditorFields()
+    private readonly int _fieldColumns;
+    private int _nextColumn;
+    internal ShowEditorFields(int fieldColumns = 1)
     {
-        Dock = DockStyle.Top; AutoSize = false; Height = 4; ColumnCount = 2; GrowStyle = TableLayoutPanelGrowStyle.AddRows;
+        _fieldColumns = fieldColumns;
+        Dock = DockStyle.Top; AutoSize = false; Height = 4; ColumnCount = fieldColumns == 1 ? 2 : fieldColumns; GrowStyle = TableLayoutPanelGrowStyle.AddRows;
         BackColor = DarkTheme.Surface; Padding = new(2);
-        ColumnStyles.Add(new(SizeType.Percent, 34)); ColumnStyles.Add(new(SizeType.Percent, 66));
+        if (fieldColumns == 1) { ColumnStyles.Add(new(SizeType.Percent, 34)); ColumnStyles.Add(new(SizeType.Percent, 66)); }
+        else for (var i = 0; i < fieldColumns; i++) ColumnStyles.Add(new(SizeType.Percent, 100f / fieldColumns));
     }
     internal void Field(string label, Control control)
     {
+        if (_fieldColumns > 1)
+        {
+            if (RowCount == 0) _nextColumn = 0;
+            var rowHeight = Math.Max(70, control.Height + 30);
+            if (_nextColumn == 0) { RowCount++; RowStyles.Add(new(SizeType.Absolute, rowHeight)); }
+            else RowStyles[RowCount - 1].Height = Math.Max(RowStyles[RowCount - 1].Height, rowHeight);
+            control.AccessibleName = label; control.Dock = DockStyle.Top; control.Margin = Padding.Empty;
+            var cell = new Panel { Dock = DockStyle.Fill, Margin = new(4), Padding = new(0, 2, 4, 0) };
+            cell.Controls.Add(control);
+            cell.Controls.Add(new Label { Text = label, Dock = DockStyle.Top, Height = 24, ForeColor = DarkTheme.Muted });
+            Controls.Add(cell, _nextColumn, RowCount - 1);
+            _nextColumn = (_nextColumn + 1) % _fieldColumns;
+            Height = (int)RowStyles.Cast<RowStyle>().Sum(r => r.Height) + Padding.Vertical;
+            return;
+        }
         var row = RowCount++; RowStyles.Add(new(SizeType.Absolute, Math.Max(44, control.Height + 10)));
         control.AccessibleName = label; control.Dock = DockStyle.Top; control.Margin = new(4, 4, 4, 6);
         var caption = new Label { Text = label, AutoSize = true, Dock = DockStyle.Top, ForeColor = DarkTheme.Muted, Margin = new(4, 8, 6, 4) };
@@ -82,8 +101,9 @@ internal sealed class ShowEditorFields : TableLayoutPanel
     }
     internal void Wide(Control control)
     {
+        _nextColumn = 0;
         var row = RowCount++; RowStyles.Add(new(SizeType.Absolute, control.Height + 6));
-        control.Dock = DockStyle.Top; Controls.Add(control, 0, row); SetColumnSpan(control, 2); FitRow(control, row, 0);
+        control.Dock = DockStyle.Top; Controls.Add(control, 0, row); SetColumnSpan(control, ColumnCount); FitRow(control, row, 0);
     }
     private void FitRow(Control control, int row, int minimum)
     {

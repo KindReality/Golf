@@ -31,7 +31,7 @@ internal static class ScreenMediaBrowsingHardwareChecks
                     int Port(){using var socket=new UdpClient(new IPEndPoint(IPAddress.Loopback,0));return ((IPEndPoint)socket.Client.LocalEndPoint!).Port;}
                     var display=Forms.Screen.PrimaryScreen!.DeviceName;
                     var screen=new ScreenOptions{Id="stage",Name="Stage"};
-                    var options=new ExperienceOptions{DeveloperMode=true,ConfigurationMode=true,MediaDiscovery=new(){Enabled=false},VideoDirectory=media,
+                    var options=new ExperienceOptions{DeveloperMode=true,ConfigurationMode=true,LocalController=new(){Enabled=false},VideoDirectory=media,
                         UdpCommandsPort=Port(),UdpEventsPort=Port(),TransitionInSeconds=.01,CalibrationGridEnabled=false,
                         DisplayScreens=Forms.Screen.AllScreens.ToDictionary(d=>d.DeviceName,d=>d.Primary?new List<ScreenOptions>{screen}:[])};
                     var config=Path.Combine(folder,"appsettings.json");File.WriteAllText(config,JsonSerializer.Serialize(options));

@@ -38,7 +38,7 @@ internal static class RolePlaybackHardwareChecks
                     var commands = FreeUdpPort(); var events = FreeUdpPort();
                     ExperienceOptions Options(string device, bool first) => new()
                     {
-                        DeviceName = device, DeveloperMode = true, MediaDiscovery = new() { Enabled = false },
+                        DeviceName = device, DeveloperMode = true, LocalController = new() { Enabled = false },
                         VideoDirectory = folder, AudioDirectory = folder, UdpCommandsPort = commands, UdpEventsPort = events, UdpSendAttempts = 1, InventoryPort = FreeTcpPort(),
                         TransitionInSeconds = .05, TransitionOutSeconds = .1,
                         DisplayBackgrounds = displays.ToDictionary(name => name, _ => new DisplayBackgroundOptions { IsTransparent = true }),

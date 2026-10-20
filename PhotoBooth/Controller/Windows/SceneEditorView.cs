@@ -1,21 +1,35 @@
 using Controller.Configuration;
+using Controller.Scheduling;
 using static Controller.Windows.ShowEditorControls;
 
 namespace Controller.Windows;
 
 internal sealed class SceneEditorView : UserControl
 {
-    private readonly TextBox _name;
-    private readonly ComboBox _ambient, _entry, _exit;
-    private sealed record OptionalPlaylist(string? Name) { public override string ToString() => Name ?? "None"; }
+    private readonly TextBox _name, _destination;
+    private readonly ComboBox _ambient, _entry, _after, _next;
+    private readonly NumericUpDown _minimum = new() { DecimalPlaces = 3, Increment = .1m, Minimum = .001m, Maximum = 86400, Value = 5, Height = 30 };
+    private readonly Label _estimate = new() { Text = "Estimating from activation media…", AccessibleName = "Scene transition estimate",
+        ForeColor = DarkTheme.Accent, Height = 56, Dock = DockStyle.Top, Padding = new(0, 6, 0, 8), AutoEllipsis = true };
+    private CancellationTokenSource? _estimateStop;
     private static ComboBox OptionalChoice(IEnumerable<string> names, string? selected)
     {
         var box = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList }; DarkTheme.Choices(box);
-        box.Items.Add(new OptionalPlaylist(null)); foreach (var name in names) box.Items.Add(new OptionalPlaylist(name));
-        box.SelectedItem = box.Items.Cast<OptionalPlaylist>().First(p => p.Name is null && selected is null || p.Name is not null && ControllerOptions.Same(p.Name, selected));
+        // Use the same string items as other native dropdowns. The first index,
+        // rather than its display text, represents an unassigned playlist.
+        box.Items.Add("(None)"); foreach (var name in names) box.Items.Add(name);
+        box.SelectedIndex = selected is null ? 0 : Enumerable.Range(1, box.Items.Count - 1)
+            .First(i => ControllerOptions.Same(box.Items[i] as string, selected));
         return box;
     }
-    internal SceneEditorView(SceneOptions scene, ShowConfiguration show, bool startup, Action changed, Action<string> openPlaylist, Action<string>? createPlaylist = null)
+    private static string? OptionalSelection(ComboBox box) => box.SelectedIndex switch
+    {
+        0 => null,
+        > 0 => box.Items[box.SelectedIndex] as string ?? throw new ArgumentException("Choose a playlist."),
+        _ => throw new ArgumentException("Choose a playlist or (None).")
+    };
+    internal SceneEditorView(SceneOptions scene, ShowConfiguration show, bool startup, Action changed, Action<string> openPlaylist, Action<string>? createPlaylist = null,
+        Func<SceneOptions, ShowConfiguration, CancellationToken, Task<SceneTransitionEstimate>>? estimateTransition = null)
     {
         Dock = DockStyle.Fill; BackColor = DarkTheme.Surface;
         var fields = new ShowEditorFields();
@@ -24,22 +38,81 @@ internal sealed class SceneEditorView : UserControl
         var storyboards = show.Playlists.Where(p => p.Type == "storyboard").Select(p => p.Name).ToArray();
         _entry = OptionalChoice(storyboards, scene.ActivatingPlaylist);
         _ambient = Choice(show.Playlists.Where(p => p.Type == "ambient").Select(p => p.Name), scene.AmbientPlaylist);
-        _exit = OptionalChoice(storyboards, scene.DeactivatingPlaylist);
+        _after = Choice(["Run ambient playlist", "Go to scene"], scene.Transition is null ? "Run ambient playlist" : "Go to scene");
+        _next = Choice(show.Scenes.Where(s => !ControllerOptions.Same(s.Name, scene.Name)).Select(s => s.Name), scene.Transition?.Scene);
+        // A named remote destination can define a scene absent from this Controller.
+        _next.DropDownStyle = ComboBoxStyle.DropDown;
+        if (scene.Transition is { } transition) _next.Text = transition.Scene;
+        _destination = TextField(scene.Transition?.Device ?? "*");
+        _destination.PlaceholderText = "* = all devices";
+        _minimum.Value = (decimal)(scene.Transition?.MinimumSceneDurationSeconds ?? 5);
+        _minimum.BackColor = DarkTheme.Raised; _minimum.ForeColor = DarkTheme.Text; _minimum.BorderStyle = BorderStyle.FixedSingle;
         fields.Wide(Note("01  /  ON ACTIVATION")); fields.Field("Activation storyboard", _entry);
-        fields.Wide(Actions("activation", () => (_entry.SelectedItem as OptionalPlaylist)?.Name));
-        fields.Wide(Note("02  /  WHILE ACTIVE")); fields.Field("Ambient playlist", _ambient);
-        fields.Wide(Actions("ambient", () => _ambient.SelectedItem as string));
-        fields.Wide(Note("03  /  ON DEACTIVATION")); fields.Field("Deactivation storyboard", _exit);
-        fields.Wide(Actions("deactivation", () => (_exit.SelectedItem as OptionalPlaylist)?.Name));
+        fields.Wide(Actions("activation", () => OptionalSelection(_entry)));
+        fields.Wide(Note("02  /  AFTER ACTIVATION")); fields.Field("After activation", _after);
+        var ambientFields = new ShowEditorFields(); ambientFields.Field("Ambient playlist", _ambient);
+        ambientFields.Wide(Actions("ambient", () => _ambient.SelectedItem as string));
+        var transitionFields = new ShowEditorFields(fieldColumns: 2);
+        transitionFields.Field("Next scene", _next);
+        transitionFields.Field("Minimum scene duration (seconds)", _minimum);
+        transitionFields.Field("Destination device", _destination);
+        transitionFields.Wide(_estimate);
+        var afterFields = new Panel { Dock = DockStyle.Top };
+        afterFields.Controls.Add(ambientFields); afterFields.Controls.Add(transitionFields);
+        fields.Wide(afterFields);
         fields.Wide(Note("Playlists are shared references. Editing one affects every scene that uses it."));
         Controls.Add(ScrollContainer(fields));
-        foreach (var control in new Control[] { _name, _ambient, _entry, _exit }) Watch(control, changed);
+        foreach (var control in new Control[] { _name, _ambient, _entry, _after, _next, _destination }) Watch(control, changed);
+        _minimum.ValueChanged += (_, _) => { changed(); RefreshEstimate(); };
+        _after.SelectedIndexChanged += (_, _) => UpdateMode();
+        _entry.SelectedIndexChanged += (_, _) => RefreshEstimate();
+        transitionFields.SizeChanged += (_, _) => { if (_after.SelectedIndex == 1) afterFields.Height = transitionFields.Height; };
+        ambientFields.SizeChanged += (_, _) => { if (_after.SelectedIndex == 0) afterFields.Height = ambientFields.Height; };
+        UpdateMode();
+        void UpdateMode()
+        {
+            var transitioning = _after.SelectedIndex == 1;
+            ambientFields.Visible = !transitioning; transitionFields.Visible = transitioning;
+            afterFields.Height = transitioning ? transitionFields.Height : ambientFields.Height;
+            if (transitioning) RefreshEstimate(); else _estimateStop?.Cancel();
+        }
+        async void RefreshEstimate()
+        {
+            _estimateStop?.Cancel(); _estimateStop?.Dispose();
+            if (_after.SelectedIndex != 1) return;
+            var stop = _estimateStop = new(); var token = stop.Token;
+            _estimate.Text = "Estimating from activation media…";
+            try
+            {
+                var draft = scene with { ActivatingPlaylist = OptionalSelection(_entry), AmbientPlaylist = null,
+                    Transition = new() { Scene = _next.Text, Device = _destination.Text, MinimumSceneDurationSeconds = (double)_minimum.Value } };
+                var estimate = estimateTransition is not null ? await estimateTransition(draft, show, token) :
+                    await SceneTransitionTiming.EstimateAsync(draft, new() { Scenes = show.Scenes, Playlists = show.Playlists }, MediaDurations.ReadMilliseconds, token);
+                if (IsDisposed || token.IsCancellationRequested) return;
+                _estimate.Text = $"Transition after {estimate.DurationMilliseconds / 1000:0.###} s from scene start" +
+                    (estimate.HasUnknownMedia ? " • Some media durations are unavailable." : " • Minimum or latest non-looping media end.");
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                if (IsDisposed || token.IsCancellationRequested) return;
+                _estimate.Text = $"Minimum: {_minimum.Value:0.###} s • Unable to estimate: " + ex.Message;
+            }
+        }
         Control Actions(string phase, Func<string?> selected)
         {
             var edit = Button("Edit " + phase + " playlist", () => { if (selected() is { } name) openPlaylist(name); }, phase == "ambient");
             return createPlaylist is null ? edit : Toolbar(edit, Button("New " + phase + " playlist", () => createPlaylist(phase)));
         }
     }
-    internal SceneOptions Read() => new() { Name = _name.Text.Trim(), AmbientPlaylist = _ambient.Text,
-        ActivatingPlaylist = (_entry.SelectedItem as OptionalPlaylist)?.Name, DeactivatingPlaylist = (_exit.SelectedItem as OptionalPlaylist)?.Name };
+    internal SceneOptions Read() => new() { Name = _name.Text.Trim(),
+        AmbientPlaylist = _after.SelectedIndex == 0 ? _ambient.SelectedItem as string ?? throw new ArgumentException("Choose an ambient playlist.") : null,
+        Transition = _after.SelectedIndex == 1 ? new() { Scene = string.IsNullOrWhiteSpace(_next.Text) ? throw new ArgumentException("Choose a next scene.") : _next.Text.Trim(),
+            Device = _destination.Text.Trim(), MinimumSceneDurationSeconds = (double)_minimum.Value } : null,
+        ActivatingPlaylist = OptionalSelection(_entry) };
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { _estimateStop?.Cancel(); _estimateStop?.Dispose(); }
+        base.Dispose(disposing);
+    }
 }

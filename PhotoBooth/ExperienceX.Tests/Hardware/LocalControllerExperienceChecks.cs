@@ -53,7 +53,7 @@ internal static class LocalControllerExperienceChecks
         config["Telemetry"]=JsonSerializer.SerializeToNode(new{Directory=logRoot,HealthIntervalSeconds=2});Write(cPath,config);
         var displays=Forms.Screen.AllScreens.Select(d=>d.DeviceName).ToArray();var primary=Forms.Screen.PrimaryScreen!.DeviceName;
         var options=new ExperienceOptions{DeviceName="local-experience-test",ConfigurationMode=false,DeveloperMode=false,CalibrationGridEnabled=false,
-            UdpCommandsPort=commandPort,UdpEventsPort=eventPort,UdpSendAttempts=1,MediaDiscovery=new(){Enabled=false},
+            UdpCommandsPort=commandPort,UdpEventsPort=eventPort,UdpSendAttempts=1,LocalController=new(){Port=definitionsPort,MediaSyncEnabled=false},
             VideoDirectory=media,AudioDirectory=media,DisplayBackgrounds=displays.ToDictionary(d=>d,_=>new DisplayBackgroundOptions{IsTransparent=true}),
             DisplayScreens=displays.ToDictionary(d=>d,_=>new List<ScreenOptions>{new(){Id="probe",Name="probe",Points=new(){Enabled=true,TopLeft=new(.25,.25),TopRight=new(.75,.25),BottomLeft=new(.25,.75),BottomRight=new(.75,.75)}}})};
         var xConfig=JsonSerializer.SerializeToNode(options)!.AsObject();xConfig["Telemetry"]=JsonSerializer.SerializeToNode(new{Directory=logRoot,HealthIntervalSeconds=2});Write(xPath,xConfig);

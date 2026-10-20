@@ -3,21 +3,21 @@ using System.IO;
 using System.Text.Json;
 using PhotoBooth.Diagnostics;
 
-namespace ExperienceX;
+namespace PhotoBooth.Media;
 
 // Copies preserve category folders and become visible atomically; local extras are never deleted.
-internal sealed class ControllerMediaCache
+internal sealed class MediaCache
 {
     private sealed record Origin(string Hostname, long Length, DateTime LastWriteUtc, string Hash);
     private const string StateFile = ".controller-media-state.json";
-    public async Task<bool> SynchronizeAsync(string hostname, string share, string destination, CancellationToken token)
+    public async Task<bool> SynchronizeAsync(string hostname, string share, string destination, CancellationToken token, bool acceptManagedOwnershipTransfer = false)
     {
         token.ThrowIfCancellationRequested();
         if (!Directory.Exists(share)) throw new DirectoryNotFoundException("The Controller media share is unavailable.");
-        MediaPath.EnsureLocalPath(destination);
+        LocalMediaPath.Ensure(destination);
         Directory.CreateDirectory(destination);
         var statePath = Path.Combine(destination, StateFile);
-        MediaPath.EnsureLocalPath(statePath);
+        LocalMediaPath.Ensure(statePath);
         var origins = new Dictionary<string, Origin>(StringComparer.OrdinalIgnoreCase);
         if (File.Exists(statePath))
         {
@@ -44,8 +44,9 @@ internal sealed class ControllerMediaCache
         {
             token.ThrowIfCancellationRequested();
             var name = entry.RelativePath;
+            if (entry.Name.StartsWith('.')) continue; // Cache metadata and in-progress copies are never media.
             var target = PhotoBooth.Media.MediaLibrary.Resolve(destination,name);
-            MediaPath.EnsureLocalPath(target);
+            LocalMediaPath.Ensure(target);
             if (entry.IsFolder) { Directory.CreateDirectory(target); continue; }
             var source = PhotoBooth.Media.MediaLibrary.Resolve(share,name);
             var info = new FileInfo(source);
@@ -53,7 +54,7 @@ internal sealed class ControllerMediaCache
             var temporary = Path.Combine(destination, "." + Guid.NewGuid().ToString("N") + ".download");
             try
             {
-                MediaPath.EnsureLocalPath(target);
+                LocalMediaPath.Ensure(target);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 var sourceLength = info.Length;
                 var sourceDate = info.LastWriteTimeUtc;
@@ -74,14 +75,14 @@ internal sealed class ControllerMediaCache
                 if (File.Exists(target))
                 {
                     var existingHash = await HashAsync(target, token);
-                    bool sameOwner = origin is not null && origin.Hostname.Equals(hostname, StringComparison.OrdinalIgnoreCase) && existingHash == origin.Hash;
+                    bool sameOwner = origin is not null && (origin.Hostname.Equals(hostname, StringComparison.OrdinalIgnoreCase) || acceptManagedOwnershipTransfer) && existingHash == origin.Hash;
                     if (existingHash != hash && !sameOwner)
                     {
                         Telemetry.Warning("MediaFilenameConflict", new { Hostname = hostname, Filename = name, destination, ExistingController = origin?.Hostname, Action = "KeepFirst" });
                         continue;
                     }
                     // Identical files from another controller do not transfer ownership of the filename.
-                    if (existingHash == hash && origin is not null && !origin.Hostname.Equals(hostname, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (existingHash == hash && origin is not null && !origin.Hostname.Equals(hostname, StringComparison.OrdinalIgnoreCase) && !acceptManagedOwnershipTransfer) continue;
                 }
                 token.ThrowIfCancellationRequested();
                 File.Move(temporary, target, true);

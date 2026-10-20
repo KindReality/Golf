@@ -5,6 +5,17 @@ namespace PhotoBooth.Networking;
 internal static class ControllerDiscovery
 {
     public const string ResponseEvent = "controller.announced";
+    internal sealed record Announcement(string ControllerId, string Hostname, string Revision, int DefinitionsPort);
+    public static Announcement? ReadAnnouncement(BroadcastEnvelope message)
+    {
+        if (message.Type != "event" || message.Event != ResponseEvent) return null;
+        var id = Text(message.Body, "controllerId"); var hostname = Text(message.Body, "hostname"); var revision = Text(message.Body, "revision");
+        ValidateHostname(hostname);
+        if (!Guid.TryParse(id, out _) || revision is not { Length: 64 } || !revision.All(Uri.IsHexDigit) ||
+            !message.Body.TryGetProperty("definitionsPort", out var field) || !field.TryGetInt32(out var port) || port is < 1 or > 65535)
+            throw new ArgumentException("Invalid controller announcement identity, revision or port.");
+        return new(id!, hostname!, revision, port);
+    }
     private static string? Text(JsonElement body, string field) => body.EnumerateObject()
         .FirstOrDefault(p => p.Name.Equals(field, StringComparison.OrdinalIgnoreCase)).Value is { ValueKind: JsonValueKind.String } value ? value.GetString() : null;
     public static bool IsRequest(BroadcastEnvelope message) => message.Type == "command" &&

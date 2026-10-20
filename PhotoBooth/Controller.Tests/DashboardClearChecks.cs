@@ -28,11 +28,10 @@ internal static class DashboardClearChecks
         var options = new ControllerOptions
         {
             DeviceName = "dashboard-clear-test",
-            Scenes = [new() { Name = "idle", AmbientPlaylist = "empty" }, new() { Name = "active", ActivatingPlaylist = "entry", AmbientPlaylist = "ambient", DeactivatingPlaylist = "exit" }],
+            Scenes = [new() { Name = "idle", AmbientPlaylist = "empty" }, new() { Name = "active", ActivatingPlaylist = "entry", AmbientPlaylist = "ambient" }],
             Playlists = [
                 new() { Name = "empty", Type = "ambient" },
                 new() { Name = "entry", Items = [new() { Name = "first", Commands = [Cmd("entry")] }, new() { Name = "late", DelayMilliseconds = 120, Commands = [Cmd("late-entry")] }] },
-                new() { Name = "exit", Items = [new() { Name = "exit", Commands = [Cmd("deactivate")] }] },
                 new() { Name = "ambient", Type = "ambient", Items = [new() { Name = "tick", MinIntervalMilliseconds = 20, MaxIntervalMilliseconds = 20, Commands = [Cmd("ambient")] }] },
                 new() { Name = "manual", Items = [new() { Name = "wait", DelayMilliseconds = 120, Commands = [Cmd("late-manual")] }] }
             ]
@@ -43,28 +42,22 @@ internal static class DashboardClearChecks
         scenes.Start(); await Until(() => scenes.Snapshot().Phase == "Active");
         scenes.Request("active"); await Until(() => recorder.Values.Contains("entry"));
         var manual = engine.Run("manual");
-        scenes.Request("idle"); // Queued behind the normally uninterruptible activation.
         scenes.StopImmediately();
         Check(engine.Snapshot().Length == 0 && scenes.Snapshot().Phase == "Stopped" && scenes.Snapshot().Destination is null,
             "Clear immediately empties running status and abandons pending scene activation");
         await manual.Completion;
         await Task.Delay(160);
-        Check(recorder.Values.SequenceEqual(["entry"]), "Clear suppresses remaining cues, automatic Idle, ambient startup and deactivation");
+        Check(recorder.Values.SequenceEqual(["entry"]), "Clear suppresses remaining cues, automatic Idle and ambient startup");
         scenes.Apply(options); await Task.Delay(35);
         Check(scenes.Snapshot().Phase == "Stopped" && recorder.Values.Count == 1, "Configuration reload does not silently resume a cleared scene");
 
         scenes.Request("active");
         await Until(() => recorder.Values.Contains("ambient"));
-        var loop = new PlaylistCommand { Device = "*", Payload = JsonSerializer.SerializeToElement(new { experience = "video", value = "test.mp4", loop = true }) };
-        var loops = new SceneVideoLoops("active");
-        loops.Register(loop, options, "existing-loop").TrySetResult(); engine.SetSceneLoops(loops);
         scenes.StopImmediately();
         var count = recorder.Values.Count;
         await Task.Delay(70);
-        Check(recorder.Values.Count == count && !recorder.Values.Contains("deactivate"), "Clearing an active scene stops ambient scheduling without deactivation");
-        Check(loops.Count == 0, "Clear abandons loop ownership without sending cleanup commands");
+        Check(recorder.Values.Count == count, "Clearing an active scene stops ambient scheduling");
         scenes.Request("idle"); await Until(() => scenes.Snapshot() is { Active: "idle", Phase: "Active" });
-        Check(!recorder.Values.Contains("deactivate"), "A later explicit scene activation does not run the abandoned scene's deactivation");
         var fresh = engine.Run("manual"); await fresh.Completion;
         Check(recorder.Values.Contains("late-manual"), "Clear does not permanently disable future manual or triggered playlists");
         CheckLayout();

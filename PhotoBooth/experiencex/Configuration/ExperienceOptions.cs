@@ -51,7 +51,7 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
     public double AudioTransitionOutSeconds { get; init; } = 3;
     public string VideoDirectory { get; init; } = "Media";
     public string AudioDirectory { get; init; } = "Media";
-    public MediaDiscoveryOptions MediaDiscovery { get; init; } = new();
+    public LocalControllerOptions LocalController { get; init; } = new();
     public PointOptions Points { get; init; } = new();
     public VisualizationOptions Visualization { get; init; } = new();
     public BlackKeyOptions BlackKey { get; init; } = new();
@@ -64,8 +64,8 @@ public sealed record ExperienceOptions : PhotoBooth.Networking.BroadcastOptions
         if (InventoryPort is < 1 or > 65535) throw new ArgumentException("InventoryPort must be between 1 and 65535.");
         if (Visualization is null) throw new ArgumentException("Visualization must be an object.");
         Visualization.Validate();
-        if (MediaDiscovery is null) throw new ArgumentException("MediaDiscovery must be an object.");
-        MediaDiscovery.Validate();
+        if (LocalController is null) throw new ArgumentException("LocalController must be an object.");
+        LocalController.Validate();
         AudioDeviceSelection.ValidateConfiguration(VirtualAudioDevices, AudioDeviceLatencyMilliseconds);
         AudioDeviceOptions.Validate(AudioDevices);
         if (ConfigurationVersion != ConfigurationSchema.CurrentVersion)

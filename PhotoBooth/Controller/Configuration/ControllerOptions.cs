@@ -31,6 +31,8 @@ internal sealed record ControllerOptions : BroadcastOptions
     public TriggerOptions[] Triggers { get; init; } = [];
     public SceneOptions[] Scenes { get; init; } = [];
     public PlaylistOptions[] Playlists { get; init; } = [];
+    public PinnedActionOptions[] PinnedActions { get; init; } = [];
+    public PeerDiscoveryOptions PeerDiscovery { get; init; } = new();
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public JsonElement Telemetry { get; init; }
     [JsonIgnore] public BuildEnvironment Build { get; init; } = new("Development", 1000);
     internal static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, WriteIndented = true };
@@ -45,6 +47,12 @@ internal sealed record ControllerOptions : BroadcastOptions
     private void Validate()
     {
         ValidateNetwork();
+        if (PeerDiscovery is null) throw new ArgumentException("PeerDiscovery must be an object.");
+        PeerDiscovery.Validate();
+        if (PinnedActions is null || PinnedActions.Length > 128 || PinnedActions.Any(p => p is null)) throw new ArgumentException("PinnedActions must contain at most 128 actions.");
+        if (PinnedActions.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != PinnedActions.Length) throw new ArgumentException("Choose a unique pinned action name.");
+        if (PinnedActions.Select(p => p.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != PinnedActions.Length) throw new ArgumentException("Duplicate pinned action ID.");
+        foreach (var pin in PinnedActions) pin.Validate(this);
         if (ArduinoDiscovery is null || ArduinoDiscovery.BaudRate is < 300 or > 2000000)
             throw new ArgumentException("Invalid ArduinoDiscovery serial settings.");
         if (!double.IsFinite(PointHitDiameterPercent) || PointHitDiameterPercent is <= 0 or > 100) throw new ArgumentException("PointHitDiameterPercent must be greater than zero and at most 100.");
@@ -115,9 +123,22 @@ internal sealed record ControllerOptions : BroadcastOptions
         foreach (var playlist in Playlists) Visit(playlist.Name, new(StringComparer.OrdinalIgnoreCase));
         foreach (var scene in Scenes)
         {
-            Playlist(scene.AmbientPlaylist, "ambient");
+            if ((scene.AmbientPlaylist is not null) == (scene.Transition is not null))
+                throw new ArgumentException($"Scene {scene.Name} must choose either an ambient playlist or a next scene.");
+            if (scene.AmbientPlaylist is { } ambient) Playlist(ambient, "ambient");
+            if (scene.Transition is { } transition)
+            {
+                ValidateName(transition.Scene, "next scene", false);
+                ValidateName(transition.Device, "scene destination", true);
+                if (!double.IsFinite(transition.MinimumSceneDurationSeconds) || transition.MinimumSceneDurationSeconds is < .001 or > 86400)
+                    throw new ArgumentException("Minimum scene duration must be 0.001–86400 seconds.");
+                if (Same(transition.Device, "*") || Same(transition.Device, EffectiveDeviceName))
+                {
+                    Scene(transition.Scene);
+                    if (Same(transition.Scene, scene.Name)) throw new ArgumentException("Choose a different next scene.");
+                }
+            }
             if (scene.ActivatingPlaylist is not null) Playlist(scene.ActivatingPlaylist, "storyboard");
-            if (scene.DeactivatingPlaylist is not null) Playlist(scene.DeactivatingPlaylist, "storyboard");
         }
         foreach (var trigger in Triggers)
         {
@@ -138,7 +159,7 @@ internal sealed record ControllerOptions : BroadcastOptions
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in values) { ValidateName(name, kind, false); if (name != name.Trim() || name.Contains('/') || !names.Add(name)) throw new ArgumentException($"Duplicate/invalid {kind}: {name}."); }
     }
-    private static void RejectDuplicates(JsonElement value)
+    internal static void RejectDuplicates(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.Object)
         {

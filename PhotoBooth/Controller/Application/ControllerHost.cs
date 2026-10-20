@@ -12,6 +12,8 @@ internal sealed class ControllerHost : IAsyncDisposable
 {
     private readonly ConfigurationService _configuration;
     private readonly ArduinoConnections _arduinos;
+    private readonly CommandDispatcher _dispatcher;
+    private readonly ControllerPeers _controllers;
     private readonly UdpBroadcastListener _listener;
     private readonly RequestDeduplicator _received = new();
     private readonly CancellationTokenSource _shutdown = new();
@@ -31,11 +33,47 @@ internal sealed class ControllerHost : IAsyncDisposable
     public ControllerOptions Options => Volatile.Read(ref _options);
     public string ConfigurationPath => _configuration.Path;
     public Task SetConfigurationModeAsync(bool value) => _configuration.SetConfigurationModeAsync(value);
+    public async Task SavePinnedActionAsync(PinnedActionOptions? expected, PinnedActionOptions? next)
+    {
+        await _configuration.SavePinnedActionAsync(expected, next);
+        Log.Info("PinnedActionSaved", next is null ? $"Removed pin: {expected!.Name}" : $"Saved pin: {next.Name}");
+    }
+    public async Task SendManualAsync(PlaylistCommand command, string? eventSource = null, string? label = null)
+    {
+        var options = Options;
+        PinnedActionOptions.ValidateCommand(command, options, eventSource);
+        if (command.Playlist is { } playlist)
+        {
+            options.Playlist(playlist, "storyboard");
+            Engine.RunManually(playlist);
+            Log.Info("ManualPlaylistStarted", $"Manual playlist: {playlist}");
+            return;
+        }
+        var id = Guid.NewGuid().ToString("N");
+        var source = eventSource ?? options.EffectiveDeviceName;
+        var context = new CommandContext { Scene = Scenes.Snapshot().Active, Playlist = "Manual", Item = label ?? "Send action" };
+        var outbound = command with { Context = context };
+        Telemetry.SetRequestContext(id, new() { Source = source, Device = command.Device, Scene = context.Scene, Playlist = context.Playlist, Item = context.Item,
+            Experience = ControllerOptions.Text(command.Payload, "experience"), Value = ControllerOptions.Text(command.Payload, "value"), Priority = "medium" });
+        try
+        {
+            if (command.Transport == "arduino") await _dispatcher.SendAsync(outbound, options, BroadcastChain.Root(source), id, _shutdown.Token);
+            else
+            {
+                var bytes = BroadcastEnvelope.Create(options with { DeviceName = source }, command.Type, command.Device!, command.Payload, id, BroadcastChain.Root(source), context, CommandPriority.Medium);
+                try { await UdpBroadcastSender.SendAsync(bytes, options, _shutdown.Token); }
+                finally { await ReceiveUdpAsync(BroadcastEnvelope.Parse(bytes), _shutdown.Token); } // Deduplication suppresses the UDP echo.
+            }
+            var description = command.Type == "event" ? ControllerOptions.Text(command.Payload, "event") : ShowEditSession.CommandSummary(command);
+            Log.Info(command.Type == "event" ? "ManualEventSent" : "ManualCommandSent", $"Sent {description} → {command.Device}", new { Source = source, command.Device, command.Type, command.Payload }, id);
+        }
+        catch (Exception ex) { Log.Error("ManualActionFailed", ex, new { command.Device, command.Type }, id); throw; }
+    }
     public async Task SaveShowAsync(ShowConfiguration expected, ShowConfiguration next)
     {
         await _configuration.SaveShowAsync(expected, next);
         Log.Info("ShowConfigurationSaved", "Saved scenes, playlists and triggers; running storyboards retain their settings", new
-        { Scenes = next.Scenes.Select(s => s.Name).ToArray(), Playlists = next.Playlists.Select(p => new { p.Name, p.Type, Items = p.Items.Length }).ToArray(), Triggers = next.Triggers.Select(t => t.Name).ToArray() });
+        { Scenes = next.Scenes.Select(s => new { s.Name, s.ActivatingPlaylist, s.AmbientPlaylist, s.Transition }).ToArray(), Playlists = next.Playlists.Select(p => new { p.Name, p.Type, Items = p.Items.Length }).ToArray(), Triggers = next.Triggers.Select(t => t.Name).ToArray() });
     }
     public async Task SavePerspectivesAsync(PerspectiveDefinition[] expected, PerspectiveDefinition[] next)
     {
@@ -51,7 +89,7 @@ internal sealed class ControllerHost : IAsyncDisposable
     public void ClearRunningPlaylists()
     {
         Scenes.StopImmediately();
-        Log.Info("RunningPlaylistsCleared", "Stopped all running playlists without scene deactivation");
+        Log.Info("RunningPlaylistsCleared", "Stopped all running playlists; existing playback continues");
     }
 
     public ControllerHost(string path, string? templateDirectory = null)
@@ -61,9 +99,11 @@ internal sealed class ControllerHost : IAsyncDisposable
         _configuration = new(path, environment, Log, ApplyAsync, templateDirectory);
         _options = _configuration.Initial;
         Experiences = new(Log);
-        _announcements = new(() => Options, Log);
+        _controllers = new(() => Options, Log, () => _announcements!.PublishCatalog());
+        _announcements = new(() => Options, Log, peers: () => _controllers.Definitions);
         _arduinos = new(Log, ReceiveSerialAsync);
-        Engine = new(_options, new CommandDispatcher(_arduinos, ReceiveUdpAsync, _shutdown.Token), Log) { ReadExperiences = Experiences.Snapshot };
+        _dispatcher = new(_arduinos, ReceiveUdpAsync, _shutdown.Token);
+        Engine = new(_options, _dispatcher, Log) { ReadExperiences = Experiences.Snapshot };
         Scenes = new(_options, Engine, Log);
         _listener = new(() => Options, ReceiveUdpAsync, device => _arduinos.HasTarget(device));
         try
@@ -71,6 +111,7 @@ internal sealed class ControllerHost : IAsyncDisposable
             _listener.Bind(_options.UdpCommandsPort, _options.UdpEventsPort);
             _arduinos.Apply(_options.Arduinos, _options.ArduinoDiscovery);
             _announcements.Start();
+            _controllers.Start();
             Engine.Start();
             Scenes.Start();
             _configuration.Start();
@@ -87,6 +128,10 @@ internal sealed class ControllerHost : IAsyncDisposable
 
     private Task ApplyAsync(ControllerOptions options)
     {
+        var pinsOnly = System.Text.Json.JsonSerializer.Serialize(Options with { PinnedActions = [] }, ControllerOptions.Json) ==
+            System.Text.Json.JsonSerializer.Serialize(options with { PinnedActions = [] }, ControllerOptions.Json);
+        // Personal shortcuts must not reset ambient timers or restart hardware discovery.
+        if (pinsOnly) { Volatile.Write(ref _options, options); return Task.CompletedTask; }
         if (Options.UdpEventsPort != options.UdpEventsPort || Options.UdpCommandsPort != options.UdpCommandsPort)
             _listener.Bind(options.UdpCommandsPort, options.UdpEventsPort);
         _arduinos.Apply(options.Arduinos, options.ArduinoDiscovery);
@@ -111,6 +156,7 @@ internal sealed class ControllerHost : IAsyncDisposable
         }
         if (!message.Targets(Options.EffectiveDeviceName)) return;
         if (!_received.Accept(message.Source.ToUpperInvariant(), message.RequestId, Options.RequestDeduplicationSeconds)) return;
+        if (message.Event == ControllerDiscovery.ResponseEvent) { _controllers.Receive(message); return; }
         if (message.Event == ExperienceDiscovery.Event) { Experiences.Receive(message); return; }
         if (ExperienceDiscovery.IsRequest(message)) return;
         Telemetry.SetRequestContext(message.RequestId, new()
@@ -138,6 +184,8 @@ internal sealed class ControllerHost : IAsyncDisposable
             ControllerOptions.RequireInput(message.Body);
             if (PlaybackPriorityEvent.TryDescribe(message, out var priorityActivity))
                 Log.Info("PlaybackPriorityRejected", priorityActivity, message.Body, message.RequestId);
+            else
+                Log.Info("NetworkEventReceived", $"{message.Source}: {message.Event} · {ControllerOptions.Text(message.Body, "input")}", message.Body, message.RequestId);
             Engine.Receive(message);
         }
         else
@@ -169,6 +217,7 @@ internal sealed class ControllerHost : IAsyncDisposable
             throw new ArgumentException("Arduino input must be an event whose source matches its registered device name.");
         ControllerOptions.RequireInput(message.Body);
         if (message.IsExpired(DateTimeOffset.UtcNow) || !_received.Accept(message.Source.ToUpperInvariant(), message.RequestId, Options.RequestDeduplicationSeconds)) return;
+        Log.Info("ArduinoEventReceived", $"{device}: {message.Event} · {ControllerOptions.Text(message.Body, "input")}", message.Body, message.RequestId);
         if (message.Event == "device.status")
             Log.Info("ArduinoStatusReceived", $"{device}: serial device status", message.Body, message.RequestId);
         if (message.Targets(Options.EffectiveDeviceName)) Engine.Receive(message);
@@ -181,6 +230,7 @@ internal sealed class ControllerHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _configuration.DisposeAsync().ConfigureAwait(false);
+        await _controllers.DisposeAsync().ConfigureAwait(false);
         await _announcements.DisposeAsync().ConfigureAwait(false);
         await _listener.DisposeAsync().ConfigureAwait(false);
         await Experiences.DisposeAsync().ConfigureAwait(false);

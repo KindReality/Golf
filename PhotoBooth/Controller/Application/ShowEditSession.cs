@@ -37,7 +37,9 @@ internal sealed class ShowEditSession(ControllerOptions options)
     internal void SetScene(int index, SceneOptions value)
     {
         CheckName(value.Name, Current.Scenes.Where((_, i) => i != index).Select(s => s.Name));
-        Change(Current with { Scenes = Current.Scenes.Select((s, i) => i == index ? value : s).ToArray() });
+        var old = Current.Scenes[index].Name;
+        Change(Current with { Scenes = Current.Scenes.Select((s, i) => i == index ? value : s).Select(s =>
+            s.Transition is { } next && ControllerOptions.Same(next.Scene, old) ? s with { Transition = next with { Scene = value.Name } } : s).ToArray() });
     }
     internal void SetPlaylist(int index, PlaylistOptions value)
     {
@@ -48,7 +50,7 @@ internal sealed class ShowEditSession(ControllerOptions options)
         var playlists = Current.Playlists.Select((p, i) => i == index ? value : p).Select(p => p with
         { Items = p.Items.Select(item => item with { Commands = item.Commands.Select(c => c.Playlist is null ? c : c with { Playlist = Rename(c.Playlist) }).ToArray() }).ToArray() }).ToArray();
         Change(Current with { Playlists = playlists,
-            Scenes = Current.Scenes.Select(s => s with { AmbientPlaylist = Rename(s.AmbientPlaylist), ActivatingPlaylist = Optional(s.ActivatingPlaylist), DeactivatingPlaylist = Optional(s.DeactivatingPlaylist) }).ToArray(),
+            Scenes = Current.Scenes.Select(s => s with { AmbientPlaylist = Optional(s.AmbientPlaylist), ActivatingPlaylist = Optional(s.ActivatingPlaylist) }).ToArray(),
             Triggers = Current.Triggers.Select(t => t with { Playlist = Rename(t.Playlist) }).ToArray() });
     }
     internal void SetTrigger(int index, TriggerOptions value)
@@ -56,7 +58,7 @@ internal sealed class ShowEditSession(ControllerOptions options)
         CheckName(value.Name, Current.Triggers.Where((_, i) => i != index).Select(t => t.Name));
         Change(Current with { Triggers = Current.Triggers.Select((t, i) => i == index ? value : t).ToArray() });
     }
-    internal string[] PlaylistUses(string name) => Current.Scenes.Where(s => new[] { s.AmbientPlaylist, s.ActivatingPlaylist, s.DeactivatingPlaylist }.Any(p => ControllerOptions.Same(p, name))).Select(s => "Scene: " + s.Name)
+    internal string[] PlaylistUses(string name) => Current.Scenes.Where(s => new[] { s.AmbientPlaylist, s.ActivatingPlaylist }.Any(p => ControllerOptions.Same(p, name))).Select(s => "Scene: " + s.Name)
         .Concat(Current.Triggers.Where(t => ControllerOptions.Same(t.Playlist, name)).Select(t => "Trigger: " + t.Name))
         .Concat(Current.Playlists.Where(p => p.Items.Any(i => i.Commands.Any(c => ControllerOptions.Same(c.Playlist, name)))).Select(p => "Playlist: " + p.Name)).ToArray();
     internal void DeletePlaylist(int index)
@@ -68,6 +70,9 @@ internal sealed class ShowEditSession(ControllerOptions options)
     internal void DeleteScene(int index)
     {
         if (Current.Scenes.Length == 1) throw new ArgumentException("Keep at least one scene.");
+        var name = Current.Scenes[index].Name;
+        if (Current.Scenes.Any(s => ControllerOptions.Same(s.Transition?.Scene, name)))
+            throw new ArgumentException("Reassign next-scene references before deleting this scene.");
         Change(Current with { Scenes = Current.Scenes.Where((_, i) => i != index).ToArray() });
     }
     internal void MakeStartup(int index) => Change(Current with { Scenes = new[] { Current.Scenes[index] }.Concat(Current.Scenes.Where((_, i) => i != index)).ToArray() });

@@ -62,10 +62,10 @@ internal static class PlaylistLifecycleChecks
             scenes.Start(); await Until(() => scenes.Snapshot().Phase == "Active"); scenes.Request("active");
             await Until(() => recording.Commands.Any()); scenes.Request("idle");
             await Until(() => scenes.Snapshot() is { Active: "idle", Phase: "Active" });
-            Check(recording.Commands.Select(c => ControllerOptions.Text(c.Payload, "value")).SequenceEqual(["first", "last"]), "Activation finishes before a queued scene; obsolete ambient never starts.");
+            Check(recording.Commands.Select(c => ControllerOptions.Text(c.Payload, "value")).SequenceEqual(["first"]), "Activation cancellation suppresses later commands and obsolete ambient scheduling.");
             Check(recording.Commands.All(c => c.Priority == CommandPriority.Low), "Scene activation uses low priority.");
             scenes.Request("active"); await Until(() => scenes.Snapshot().Phase == "Activating"); scenes.Request("idle");
-            Check(!scenes.Request("active"), "Repeated Active cancels a pending Idle without restarting activation.");
+            Check(scenes.Request("active"), "The latest Active request replaces Idle even during activation.");
             await Until(() => scenes.Snapshot() is { Active: "active", Phase: "Active" });
         }
         var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "appsettings.defaults.json"));

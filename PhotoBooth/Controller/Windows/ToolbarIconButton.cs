@@ -3,7 +3,7 @@ using System.ComponentModel;
 
 namespace Controller.Windows;
 
-internal enum ToolbarGlyph { Power, Chevron, Minimize, Play, Return, Configure }
+internal enum ToolbarGlyph { Power, Chevron, Minimize, Play, Return, Configure, Edit }
 
 // Draw small vector glyphs at the current DPI rather than depending on an installed icon font.
 internal sealed class ToolbarIconButton : Button
@@ -46,6 +46,10 @@ internal sealed class ToolbarIconButton : Button
                     graphics.DrawLine(pen, -7, 3, 7, 3); break;
                 case ToolbarGlyph.Play:
                     graphics.FillPolygon(brush, [new PointF(-5, -9), new(9, 0), new(-5, 9)]); break;
+                case ToolbarGlyph.Edit:
+                    graphics.DrawPolygon(pen, [new PointF(-8, 8), new(-6, 1), new(5, -10), new(10, -5), new(-1, 6)]);
+                    graphics.DrawLine(pen, 3, -8, 8, -3);
+                    graphics.DrawLine(pen, -6, 1, -1, 6); break;
                 case ToolbarGlyph.Return:
                     using (var path = new GraphicsPath())
                     {

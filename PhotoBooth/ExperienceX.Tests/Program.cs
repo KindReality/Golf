@@ -192,10 +192,17 @@ internal static class TestSuites
             await VideoLoopHardwareChecks.Run();
             return;
         }
-        if (arguments.SequenceEqual(["--media-discovery"]))
+        if (arguments.SequenceEqual(["--local-controller"]))
+        {
+            await LocalControllerChecks.Run();
+            await MediaCacheChecks.Run();
+            await MediaPathChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--media-cache"]))
         {
             await MediaPathChecks.Run();
-            await MediaDiscoveryChecks.Run();
+            await MediaCacheChecks.Run();
             return;
         }
         if (arguments.SequenceEqual(["--desktop-transparency"]))
@@ -213,7 +220,7 @@ internal static class TestSuites
         {
             await ScreenTransparencyChecks.Run();
             await ScreenPerspectiveCropChecks.Run();
-            await MediaDiscoveryChecks.Run();
+            await MediaCacheChecks.Run();
             await ScreenChromaKeyHardwareChecks.Run();
             return;
         }

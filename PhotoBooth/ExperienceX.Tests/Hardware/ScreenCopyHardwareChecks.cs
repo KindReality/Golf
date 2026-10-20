@@ -27,7 +27,7 @@ internal static class ScreenCopyHardwareChecks
                     var display=Forms.Screen.PrimaryScreen!.DeviceName;
                     var original=new ScreenOptions{Id="video",Name="Eye",DefaultName="screen1",Roles="wall",Brightness=75,Framing=new(){Zoom=2},BlackKey=new(){Enabled=false}};
                     var mat=new ScreenOptions{Id="mat",Name="mask",Type="mat",IsNegative=true,Points=new(){Enabled=true,Vertices=[new(.65,.2),new(.9,.2),new(.9,.7),new(.75,.6),new(.65,.7)]}};
-                    var options=new ExperienceOptions{ConfigurationMode=true,CalibrationGridEnabled=false,TransitionInSeconds=.05,MediaDiscovery=new(){Enabled=false},
+                    var options=new ExperienceOptions{ConfigurationMode=true,CalibrationGridEnabled=false,TransitionInSeconds=.05,LocalController=new(){Enabled=false},
                         VideoDirectory=media,DefaultDisplayName=display,UdpCommandsPort=Port(),UdpEventsPort=Port(),
                         DisplayScreens=Forms.Screen.AllScreens.ToDictionary(d=>d.DeviceName,d=>d.Primary?new List<ScreenOptions>{original,mat}:[])};
                     var path=Path.Combine(folder,"appsettings.json");File.WriteAllText(path,JsonSerializer.Serialize(options));var store=new PointConfigurationStore(path);

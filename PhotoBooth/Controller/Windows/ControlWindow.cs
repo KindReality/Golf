@@ -83,7 +83,7 @@ internal sealed class ControlWindow : Form
         DarkTheme.Button(_run, true);
         DarkTheme.Button(_cancel);
         DarkTheme.Button(_clearRunning); DarkTheme.Button(_clearActivity);
-        _toolbarTips.SetToolTip(_clearRunning, "Stop all running playlists immediately without scene deactivation");
+        _toolbarTips.SetToolTip(_clearRunning, "Stop sending playlist commands immediately; existing playback continues");
         _toolbarTips.SetToolTip(_clearActivity, "Clear the activity feed");
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 18, 24, 12), ColumnCount = 2, RowCount = 4, BackColor = DarkTheme.Background };
         layout.ColumnStyles.Add(new(SizeType.Percent, 42));
@@ -246,7 +246,7 @@ internal sealed class ControlWindow : Form
         SetChoices(_playlists, options.Playlists.Where(p => p.Type == "storyboard").Select(p => p.Name).ToArray());
         SetChoices(_scenes, options.Scenes.Select(s => s.Name).ToArray());
         var scene = _host.Scenes.Snapshot();
-        _sceneStatus.Text = $"Scene: {scene.Active ?? "none"} • {scene.Phase}" + (scene.Destination is { } destination ? $" → {destination}" : "");
+        _sceneStatus.Text = $"Scene: {scene.Active ?? "none"} • {scene.Phase}";
         _run.Enabled = _playlists.SelectedItem is not null;
         _activate.Enabled = _scenes.SelectedItem is not null;
         _hardware.BeginUpdate();

@@ -30,7 +30,7 @@ internal static class PointSnappingHardwareChecks
                     var options = new ExperienceOptions
                     {
                         DeveloperMode = true, ConfigurationMode = true, CalibrationGridEnabled = false,
-                        MediaDiscovery = new() { Enabled = false }, DefaultDisplayName = display,
+                        LocalController = new() { Enabled = false }, DefaultDisplayName = display,
                         UdpCommandsPort = ((IPEndPoint)commands.Client.LocalEndPoint!).Port,
                         UdpEventsPort = ((IPEndPoint)events.Client.LocalEndPoint!).Port,
                         DisplayScreens = Forms.Screen.AllScreens.ToDictionary(d => d.DeviceName, d => d.DeviceName == display ? new List<ScreenOptions> { source, mat } : []),

@@ -24,7 +24,13 @@ internal static class Program
     {
         try
         {
-            if(args.SequenceEqual(["--scene-playlists"])) ScenePlaylistChecks.Run().GetAwaiter().GetResult();
+            if(args.SequenceEqual(["--scene-cancellation"])) SceneCancellationChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--scene-next"])) SceneTransitionChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--scene-transitions"])) { SceneTestsAsync().GetAwaiter().GetResult(); VideoLoopTestsAsync().GetAwaiter().GetResult(); }
+            else if(args.SequenceEqual(["--controller-peers"])) ControllerPeerChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--manual-actions"])) ManualActionChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--scene-defaults"])) SceneDefaultsChecks.Run();
+            else if(args.SequenceEqual(["--scene-playlists"])) ScenePlaylistChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--dashboard-clear"])) DashboardClearChecks.Run().GetAwaiter().GetResult();
             else if(args.Length == 2 && args[0] == "--serial-firmware") SerialDiscoveryChecks.CheckFirmware(args[1]);
             else if(args.SequenceEqual(["--serial-discovery"])) SerialDiscoveryChecks.Run().GetAwaiter().GetResult();
@@ -98,9 +104,7 @@ internal static class Program
             try { Valid(invalidDisplay); } catch (ArgumentException) { rejected = true; }
             Check(rejected, "Invalid Controller display configuration is rejected");
         }
-        Check(defaults.Playlists.Any(p => p.Name == "default-ambient") && defaults.Scenes[0].AmbientPlaylist == "default-ambient" &&
-            defaults.Playlist("default-video").Items[0].Commands[0].Device == "*" &&
-            ControllerOptions.Text(defaults.Playlist("default-video").Items[0].Commands[0].Payload, "screen") == "*", "Default ambient/video names target every device and video screen");
+        SceneDefaultsChecks.CheckScenePlaylists(defaults, "Shipped defaults", activationVideos: true);
         var probe = BroadcastEnvelope.Parse(ControllerDiscovery.Request(new() { DeviceName = "experience-alias" }, "probe-id"));
         var reply = BroadcastEnvelope.Parse(ControllerDiscovery.Response(new() { DeviceName = "controller-alias" }, probe));
         Check(ControllerDiscovery.IsRequest(probe) && reply.Device == "*" &&
@@ -110,7 +114,7 @@ internal static class Program
         Check(ControllerOptions.Parse("{}", Development).UdpSendAttempts == 1, "One best-effort send is the Controller default");
         var populated = ConfigurationDefaults.Populate("{}", Development);
         var seed = ControllerOptions.Parse(populated, Development);
-        Check(seed.Scenes.Length == 2 && seed.Scenes[0].AmbientPlaylist == "default-ambient" && seed.Scenes[0].ActivatingPlaylist is null && seed.Scenes[0].DeactivatingPlaylist is null && seed.Playlist(seed.Scenes[0].AmbientPlaylist, "ambient").Items.Length == 0, "Missing scenes create idle/active scenes with empty ambient playlists");
+        SceneDefaultsChecks.CheckScenePlaylists(seed, "Missing-scene startup");
         var seededSource = ConfigurationDefaults.Populate(source, Development);
         Check(ConfigurationDefaults.Populate(populated, Development) == populated && ConfigurationDefaults.Populate(seededSource, Development) == seededSource &&
             ControllerOptions.Parse(seededSource, Development).Scenes.SequenceEqual(defaults.Scenes) && Guid.TryParse(seed.ControllerId,out _), "Default population creates a permanent controller ID, is idempotent and preserves configured scenes");
@@ -252,16 +256,13 @@ internal static class Program
             scenes.Start(); await UntilAsync(() => scenes.Snapshot().Phase == "Active");
             Check(recorder.Sends.Count == 3 && recorder.Sends.Skip(1).Select(s => s.Command.Device).SequenceEqual(["lighting-after-loop", "next-item"]), "A nested looping video sends once and does not block later commands or playlist items");
             await engine.Run("loops").Completion;
-            var original = recorder.Sends.Where(s => SceneVideoLoops.IsLoop(s.Command)).ToArray();
-            Check(original.Length == 2 && !recorder.Sends.Any(s => ControllerOptions.Text(s.Command.Payload, "command") == "stop"), "Completed and manual playlists retain their looping playback until scene exit");
-            var changed = options with { DeviceName = "renamed-controller" }; engine.Apply(changed); scenes.Apply(changed);
+            var original = recorder.Sends.Where(s => VideoCommand.IsLoop(s.Command)).ToArray();
+            Check(original.Length == 2 && !recorder.Sends.Any(s => ControllerOptions.Text(s.Command.Payload, "command") == "stop"), "Completed and manual playlists do not send automatic playback stops");
             scenes.Request("other"); await UntilAsync(() => scenes.Snapshot() is { Active: "other", Phase: "Active" });
-            var stops = recorder.Sends.Where(s => ControllerOptions.Text(s.Command.Payload, "command") == "stop").ToArray();
-            Check(stops.Length == 2 && stops.Select(s => ControllerOptions.Text(s.Command.Payload, "playbackRequestId")).SequenceEqual(original.Select(s => s.RequestId)) &&
-                stops.All(s => s.Command.Device == "*" && s.Source == "controller-test"), "Scene exit stops exact original playback IDs and preserves the original sender identity after reload");
-            var run = engine.Run("late"); await UntilAsync(() => recorder.Sends.Count == 9);
+            Check(!recorder.Sends.Any(s => ControllerOptions.Text(s.Command.Payload, "command") == "stop"), "Scene changes send no playback stops for existing loops");
+            var run = engine.Run("late"); await UntilAsync(() => recorder.Sends.Count >= 7);
             scenes.Request("idle"); await UntilAsync(() => scenes.Snapshot() is { Active: "idle", Phase: "Active" }); await run.Completion;
-            Check(recorder.Sends.Count(s => SceneVideoLoops.IsLoop(s.Command)) == 4, "Old manual runs cannot start new loops in the next scene");
+            Check(recorder.Sends.Count(s => VideoCommand.IsLoop(s.Command)) >= 4, "Unrelated manual playlists keep running across scene changes");
         }
         recorder = new() { SlowDevice = "*" };
         options = options with { Scenes = [new() { Name = "idle", AmbientPlaylist = "idle-ambient", ActivatingPlaylist = "late" }, new() { Name = "other", AmbientPlaylist = "idle-ambient" }] };
@@ -270,8 +271,9 @@ internal static class Program
         {
             scenes.Start(); await UntilAsync(() => recorder.Sends.Count == 1); scenes.Request("other");
             await UntilAsync(() => scenes.Snapshot() is { Active: "other", Phase: "Active" });
-            Check(recorder.Sends.Count == 4 && recorder.Sends.Take(2).All(s => SceneVideoLoops.IsLoop(s.Command)) && recorder.Sends.Skip(2).Select(s => ControllerOptions.Text(s.Command.Payload, "playbackRequestId")).SequenceEqual(recorder.Sends.Take(2).Select(s => s.RequestId)),
-                "Activation finishes both loop commands before scene-exit cleanup");
+            await Task.Delay(200);
+            Check(recorder.Sends.Count == 1 && VideoCommand.IsLoop(recorder.Sends.Single().Command),
+                "An interrupted activation stops sending further loop commands and leaves the first playing");
         }
     }
     private static async Task TriggerTestsAsync()
@@ -305,10 +307,10 @@ internal static class Program
         }
     }
     private static ControllerOptions SceneOptions() => Valid(Options(
-        Board("enter-a", Item("a-entry")), Board("exit-a", Item("a-exit")), Board("enter-b", Item("b-entry")), Board("enter-c", Item("c-entry")),
+        Board("enter-a", Item("a-entry")), Board("enter-b", Item("b-entry")), Board("enter-c", Item("c-entry")),
         Board("manual", Item("manual-first"), Item("manual-last", 200)), Ambient("a-ambient", RandomItem("a-tick", 40, 40)), Ambient("b-ambient", RandomItem("b-tick", 35, 35)), Ambient("c-ambient")) with
     {
-        Scenes = [new() { Name = "a", AmbientPlaylist = "a-ambient", ActivatingPlaylist = "enter-a", DeactivatingPlaylist = "exit-a" }, new() { Name = "b", AmbientPlaylist = "b-ambient", ActivatingPlaylist = "enter-b" }, new() { Name = "c", AmbientPlaylist = "c-ambient", ActivatingPlaylist = "enter-c" }]
+        Scenes = [new() { Name = "a", AmbientPlaylist = "a-ambient", ActivatingPlaylist = "enter-a" }, new() { Name = "b", AmbientPlaylist = "b-ambient", ActivatingPlaylist = "enter-b" }, new() { Name = "c", AmbientPlaylist = "c-ambient", ActivatingPlaylist = "enter-c" }]
     });
     private static async Task SceneTestsAsync()
     {
@@ -320,31 +322,20 @@ internal static class Program
             var before = recorder.Sends.Count; Check(!scenes.Request("a") && recorder.Sends.Count == before, "Requesting the active scene does not restart it");
             var manual = engine.Run("manual"); scenes.Request("b"); await UntilAsync(() => recorder.Sends.Any(s => s.Command.Device == "b-tick")); await manual.Completion;
             var devices = recorder.Sends.Select(s => s.Command.Device).ToArray();
-            Check(Array.IndexOf(devices, "a-exit") < Array.IndexOf(devices, "b-entry") && Array.IndexOf(devices, "b-entry") < Array.IndexOf(devices, "b-tick"), "Scene transition sends deactivation, activation, then ambient");
-            Check(recorder.Sends.Single(s => s.Command.Device == "a-exit").Command.Context?.Scene == "a" &&
-                recorder.Sends.Single(s => s.Command.Device == "b-entry").Command.Context?.Scene == "b" &&
+            Check(Array.IndexOf(devices, "b-entry") < Array.IndexOf(devices, "b-tick"), "Scene transition sends activation, then ambient");
+            Check(recorder.Sends.Single(s => s.Command.Device == "b-entry").Command.Context?.Scene == "b" &&
                 recorder.Sends.First(s => s.Command.Device == "b-tick").Command.Context?.Scene == "b" &&
-                recorder.Sends.Single(s => s.Command.Device == "manual-last").Command.Context?.Scene == "a", "Scene context follows activation, deactivation, ambient and the manual run's original scene");
+                recorder.Sends.Single(s => s.Command.Device == "manual-last").Command.Context?.Scene == "a", "Scene context follows activation, ambient and the manual run's original scene");
             Check(devices.Contains("manual-last"), "Scene changes leave unrelated playlists running");
-            var lastExit = Array.IndexOf(devices, "a-exit"); Check(!devices.Skip(lastExit + 1).Contains("a-tick"), "Scene exit cancels the previous ambient schedule");
+            var firstEntry = Array.IndexOf(devices, "b-entry"); Check(!devices.Skip(firstEntry + 1).Contains("a-tick"), "Scene exit cancels the previous ambient schedule");
         }
-        recorder = new();
-        options = SceneOptions(); options = Valid(options with { Playlists = options.Playlists.Select(p => p.Name == "exit-a" ? Board("exit-a", Item("exit-start"), Item("exit-late", 170)) : p).ToArray() });
-        await using (var engine = new PlaylistEngine(options, recorder, new()))
-        await using (var scenes = new SceneManager(options, engine, new()))
-        {
-            scenes.Start(); await UntilAsync(() => scenes.Snapshot().Phase == "Active"); scenes.Request("b"); await UntilAsync(() => recorder.Sends.Any(s => s.Command.Device == "exit-start")); scenes.Request("c");
-            await UntilAsync(() => scenes.Snapshot() is { Active: "c", Phase: "Active" }); await Task.Delay(200);
-            var devices = recorder.Sends.Select(s => s.Command.Device).ToArray();
-            Check(devices.Count(d => d == "exit-start") == 1 && !devices.Contains("exit-late") && !devices.Contains("b-entry") && devices.Contains("c-entry"), "Latest scene request cancels pending exit work without repeating exit commands");
-        }
-        recorder = new(); options = SceneOptions(); options = Valid(options with { Playlists = options.Playlists.Select(p => p.Name == "enter-b" ? Board("enter-b", Item("b-entry"), Item("b-late", 160)) : p).Append(Board("exit-b", Item("b-exit"))).ToArray(), Scenes = options.Scenes.Select(s => s.Name == "b" ? s with { DeactivatingPlaylist = "exit-b" } : s).ToArray() });
+        recorder = new(); options = SceneOptions(); options = Valid(options with { Playlists = options.Playlists.Select(p => p.Name == "enter-b" ? Board("enter-b", Item("b-entry"), Item("b-late", 160)) : p).ToArray() });
         await using (var engine = new PlaylistEngine(options, recorder, new()))
         await using (var scenes = new SceneManager(options, engine, new()))
         {
             scenes.Start(); await UntilAsync(() => scenes.Snapshot().Phase == "Active"); scenes.Request("b"); await UntilAsync(() => recorder.Sends.Any(s => s.Command.Device == "b-entry"));
             Check(!scenes.Request("b"), "Repeat transition destinations are ignored"); scenes.Request("c"); await UntilAsync(() => scenes.Snapshot() is { Active: "c", Phase: "Active" }); await Task.Delay(180);
-            var devices = recorder.Sends.Select(s => s.Command.Device).ToArray(); Check(devices.Contains("b-late") && Array.IndexOf(devices, "b-late") < Array.IndexOf(devices, "b-exit") && Array.IndexOf(devices, "b-exit") < Array.IndexOf(devices, "c-entry"), "New scene requests wait for activation to finish before deactivating");
+            var devices = recorder.Sends.Select(s => s.Command.Device).ToArray(); Check(!devices.Contains("b-late") && devices.Contains("c-entry"), "New scene requests cancel unfinished activation commands");
         }
         recorder = new();
         var random = RandomItem("same", 20, 60, 45); options = Valid(Options(Ambient("shared", random), Ambient("empty")) with { Scenes = [new() { Name = "one", AmbientPlaylist = "shared" }, new() { Name = "two", AmbientPlaylist = "empty" }, new() { Name = "three", AmbientPlaylist = "shared" }] });

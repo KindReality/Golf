@@ -19,6 +19,7 @@
     <Compile Include="..\Shared\MediaLibrary\*.cs" Link="Media\Shared\%(Filename)%(Extension)" />
     <Compile Include="..\Shared\Updates\*.cs" Link="Updates\%(Filename)%(Extension)" />
     <None Include="..\Shared\Networking\NetworkAccess.ps1" Link="NetworkAccess.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\Shared\Networking\MediaCredentials.ps1" Link="MediaCredentials.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\Shared\Updates\Stage-ApplicationUpdate.ps1" Link="Stage-ApplicationUpdate.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\Shared\Windows\StartMenuShortcut.ps1" Link="StartMenuShortcut.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Compile Include="..\Shared\Configuration\*.cs" Link="Configuration\Shared\%(Filename)%(Extension)" />

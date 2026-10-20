@@ -31,7 +31,7 @@ internal static class RendererCaptureChecks
             int Port() { using var socket = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)); return ((IPEndPoint)socket.Client.LocalEndPoint!).Port; }
             var options = new ExperienceOptions
             {
-                DeveloperMode = true, MediaDiscovery = new() { Enabled = false }, VideoDirectory = media, AudioDirectory = media,
+                DeveloperMode = true, LocalController = new() { Enabled = false }, VideoDirectory = media, AudioDirectory = media,
                 UdpCommandsPort = Port(), UdpEventsPort = Port(), InventoryPort = Port(),
                 DisplayBackgrounds = Forms.Screen.AllScreens.ToDictionary(s => s.DeviceName, _ => new DisplayBackgroundOptions { IsTransparent = true }),
                 DisplayScreens = Forms.Screen.AllScreens.ToDictionary(s => s.DeviceName, _ => new List<ScreenOptions>())

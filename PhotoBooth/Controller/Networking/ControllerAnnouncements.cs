@@ -3,7 +3,8 @@ using Controller.Diagnostics;
 using PhotoBooth.Networking;
 namespace Controller.Networking;
 
-internal sealed class ControllerAnnouncements(Func<ControllerOptions> options, ActivityLog log, Func<byte[], BroadcastOptions, CancellationToken, Task>? send = null) : IAsyncDisposable
+internal sealed class ControllerAnnouncements(Func<ControllerOptions> options, ActivityLog log, Func<byte[], BroadcastOptions, CancellationToken, Task>? send = null,
+    Func<ControllerSharedDefinitions[]>? peers = null) : IAsyncDisposable
 {
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _signal = new(0, 1);
@@ -12,13 +13,19 @@ internal sealed class ControllerAnnouncements(Func<ControllerOptions> options, A
     private Task _announcing = Task.CompletedTask;
     private volatile Published _published = new([], "");
     private sealed record Published(byte[] Bytes, string Revision);
+    private ControllerSharedDefinitions OwnDefinitions()
+    {
+        var current = options();
+        return new() { ControllerId=current.ControllerId,ControllerName=current.EffectiveDeviceName,Hostname=Environment.MachineName,Perspectives=current.Perspectives };
+    }
     public int Port => _server.Port == 0 ? options().DefinitionsPort : _server.Port;
     public void Start() { _started=true; Publish(); _signal.Wait(0); _announcing=AnnounceAsync(); }
     public void Publish()
     {
-        var bytes=new ControllerSharedDefinitions { ControllerId=options().ControllerId,ControllerName=options().EffectiveDeviceName,Hostname=Environment.MachineName,Perspectives=options().Perspectives }.Serialize();
+        var bytes=OwnDefinitions().Serialize();
         var revision=ControllerSharedDefinitions.Revision(bytes);
         _server.Publish(bytes,revision); _published=new(bytes,revision);
+        PublishCatalog();
         try
         {
             var changed=_server.Port!=options().DefinitionsPort;
@@ -27,6 +34,16 @@ internal sealed class ControllerAnnouncements(Func<ControllerOptions> options, A
         }
         catch(System.Net.Sockets.SocketException ex) { log.Error("DefinitionsHttpUnavailable",ex,new { Port=options().DefinitionsPort,Hint="Check for a conflicting process/port; run Install-Controller.cmd to enable remote firewall access." }); }
         if(_started && _signal.CurrentCount==0)try{_signal.Release();}catch(SemaphoreFullException){}
+    }
+    public void PublishCatalog()
+    {
+        try
+        {
+            var own = OwnDefinitions();
+            var catalog = new ControllerCatalog { LocalControllerId = own.ControllerId, Controllers = new[] { own }.Concat(peers?.Invoke() ?? []).Where(c => c.ControllerId == own.ControllerId || !c.Hostname.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)).DistinctBy(c => c.ControllerId).ToArray() };
+            var bytes = catalog.Serialize(); _server.Publish(bytes, ControllerSharedDefinitions.Revision(bytes), "/catalog");
+        }
+        catch (ArgumentException ex) { log.Error("ControllerCatalogPublishFailed", ex, new { RetainedPrevious = true }); }
     }
     public Task SendAsync(CancellationToken token=default)
     {

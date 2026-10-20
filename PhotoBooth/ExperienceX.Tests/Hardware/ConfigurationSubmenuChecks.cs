@@ -31,7 +31,7 @@ internal static class ConfigurationSubmenuChecks
                     var options = new ExperienceOptions
                     {
                         DeveloperMode = true, ConfigurationMode = true, CalibrationGridEnabled = false,
-                        MediaDiscovery = new() { Enabled = false }, VideoDirectory = root, AudioDirectory = root,
+                        LocalController = new() { Enabled = false }, VideoDirectory = root, AudioDirectory = root,
                         UdpCommandsPort = commands, UdpEventsPort = events, UdpSendAttempts = 1,
                         DisplayBackgrounds = displays.ToDictionary(d => d, _ => new DisplayBackgroundOptions { IsTransparent = true }),
                         DisplayScreens = displays.ToDictionary(d => d, _ => new List<ScreenOptions> { new()

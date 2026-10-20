@@ -27,7 +27,7 @@ internal static class VideoFramingHardwareChecks
                     var display = Forms.Screen.PrimaryScreen!.DeviceName;
                     var points = new PointOptions { Enabled = true, TopLeft = new(.1,.1), TopRight = new(.9,.1), BottomLeft = new(.1,.9), BottomRight = new(.9,.9) };
                     var screen = new ScreenOptions { Id = "video", Points = points };
-                    var options = new ExperienceOptions { ConfigurationMode = true, CalibrationGridEnabled = false, MediaDiscovery = new() { Enabled = false },
+                    var options = new ExperienceOptions { ConfigurationMode = true, CalibrationGridEnabled = false, LocalController = new() { Enabled = false },
                         UdpCommandsPort = Port(), UdpEventsPort = Port(), DefaultDisplayName = display,
                         DisplayScreens = Forms.Screen.AllScreens.ToDictionary(d => d.DeviceName, d => d.Primary ? new List<ScreenOptions> { screen } : []) };
                     var path = Path.Combine(folder,"appsettings.json"); File.WriteAllText(path, JsonSerializer.Serialize(options));

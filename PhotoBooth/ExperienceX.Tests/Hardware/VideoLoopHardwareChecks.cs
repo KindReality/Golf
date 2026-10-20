@@ -30,7 +30,7 @@ internal static class VideoLoopHardwareChecks
                     var commands = ((IPEndPoint)first.Client.LocalEndPoint!).Port; var events = ((IPEndPoint)second.Client.LocalEndPoint!).Port;
                     first.Dispose(); second.Dispose();
                     var display = Forms.Screen.PrimaryScreen!.DeviceName;
-                    var options = new ExperienceOptions { DeveloperMode = true, DeviceName = "loop-client", SoftwareVideoDecoding = softwareVideoDecoding, MediaDiscovery = new() { Enabled = false },
+                    var options = new ExperienceOptions { DeveloperMode = true, DeviceName = "loop-client", SoftwareVideoDecoding = softwareVideoDecoding, LocalController = new() { Enabled = false },
                         VideoDirectory = Path.GetDirectoryName(video)!, UdpCommandsPort = commands, UdpEventsPort = events,
                         DisplayBackgrounds = Forms.Screen.AllScreens.ToDictionary(s => s.DeviceName, _ => new DisplayBackgroundOptions { IsTransparent = true }),
                         TransitionInSeconds = .5, TransitionOutSeconds = 3, DisplayScreens = new() { [display] = [new() { Id = "a", Name = "screen1" }] } };

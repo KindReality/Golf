@@ -27,7 +27,7 @@ internal static class ExperienceRestartChecks
         var keptMedia=Path.Combine(runtime,"Media","keep.bin");Directory.CreateDirectory(Path.GetDirectoryName(keptMedia)!);File.WriteAllText(keptMedia,"retained-media");
         int Port(){using var socket=new UdpClient(new IPEndPoint(IPAddress.Loopback,0));return ((IPEndPoint)socket.Client.LocalEndPoint!).Port;}
         var display=Forms.Screen.PrimaryScreen!.DeviceName;var logs=Path.Combine(root,"logs");
-        var options=new ExperienceOptions{ConfigurationMode=false,CalibrationGridEnabled=false,MediaDiscovery=new(){Enabled=false},
+        var options=new ExperienceOptions{ConfigurationMode=false,CalibrationGridEnabled=false,LocalController=new(){Enabled=false},
             VideoDirectory=media,AudioDirectory=media,UdpCommandsPort=Port(),UdpEventsPort=Port(),DefaultDisplayName=display,
             DisplayBackgrounds=Forms.Screen.AllScreens.ToDictionary(s=>s.DeviceName,_=>new DisplayBackgroundOptions{IsTransparent=true}),
             DisplayScreens=Forms.Screen.AllScreens.ToDictionary(s=>s.DeviceName,_=>new List<ScreenOptions>{new(){Id="preserved",Name="preserved",Brightness=55,Roles="wall"}})};

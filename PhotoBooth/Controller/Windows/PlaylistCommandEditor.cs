@@ -9,7 +9,8 @@ namespace Controller.Windows;
 internal sealed class PlaylistCommandEditor : UserControl
 {
     private readonly ComboBox _kind;
-    private readonly ShowEditorFields _fields = new();
+    private readonly ShowEditorFields _fields;
+    private readonly bool _manual;
     private readonly ShowConfiguration _show;
     private readonly ControllerOptions _options;
     private readonly ExperiencePeer[] _peers;
@@ -23,14 +24,17 @@ internal sealed class PlaylistCommandEditor : UserControl
     private NumericUpDown? _volume, _channel;
     private TextBox? _raw, _event, _input;
     private bool _loading;
-    internal PlaylistCommandEditor(PlaylistCommand command, ShowConfiguration show, ControllerOptions options, ExperiencePeer[] peers, string[] media, Action changed, string[]? serialDevices = null)
+    internal PlaylistCommandEditor(PlaylistCommand command, ShowConfiguration show, ControllerOptions options, ExperiencePeer[] peers, string[] media, Action changed, string[]? serialDevices = null, bool manual = false)
     {
+        _manual = manual; _fields = new(manual ? 2 : 1);
         _show = show; _options = options; _peers = peers; _media = media; _changed = changed; _original = command;
         _serialDevices = options.Arduinos.Select(a => a.Name).Concat(serialDevices ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         Dock = DockStyle.Top; AutoSize = false; Height = 480; BackColor = DarkTheme.Surface;
         _loadedKind = Kind(command);
-        _kind = Choice(["Video", "Audio", "Scene command", "Local playlist", "Network playlist", "Event", "Arduino", "Advanced JSON"], _loadedKind);
-        var layout = new ShowEditorFields(); layout.Field("Command type", _kind); layout.Wide(_fields); Controls.Add(layout);
+        string[] kinds = ["Video", "Audio", "Scene command", "Local playlist", "Network playlist", "Event", "Arduino", "Advanced JSON"];
+        _kind = Choice(manual ? _loadedKind == "Event" ? ["Event"] : kinds.Where(k => k != "Event") : kinds, _loadedKind);
+        if (manual) { Dock = DockStyle.Fill; Controls.Add(ScrollContainer(_fields)); }
+        else { var layout = new ShowEditorFields(); layout.Field("Command type", _kind); layout.Wide(_fields); Controls.Add(layout); }
         Render();
         _kind.SelectedIndexChanged += (_, _) =>
         {
@@ -71,12 +75,14 @@ internal sealed class PlaylistCommandEditor : UserControl
     private void Render()
     {
         _loading = true;
+        if (_manual) _kind.Parent?.Controls.Remove(_kind);
         foreach (Control c in _fields.Controls.Cast<Control>().ToArray()) c.Dispose();
         _fields.Controls.Clear(); _fields.RowStyles.Clear(); _fields.RowCount = 0;
         _device = _value = _target = null; _loop = _mute = null; _volume = _channel = null; _raw = _event = _input = null;
         string T(string name, string fallback = "") => ControllerOptions.Text(_original.Payload, name) ?? fallback;
         JsonNode? Node(string name) => Payload()[name];
         void Field(string label, Control c) { _fields.Field(label, c); Watch(c, () => { if (!_loading) _changed(); }); }
+        if (_manual && _loadedKind != "Event") _fields.Field("Command type", _kind);
         if (_loadedKind == "Advanced JSON")
         {
             _raw = TextField(JsonSerializer.Serialize(_original, ControllerOptions.Json), true); _raw.Font = new("Consolas", 9); _raw.Height = 240;
@@ -96,11 +102,18 @@ internal sealed class PlaylistCommandEditor : UserControl
                 _value = Choice(_media.Where(f => extensions.Contains(Path.GetExtension(f))), T("value"), true); Field("Media file", _value);
                 var targets = new[] { "*" }.Concat(audio ? _peers.SelectMany(p => p.Inventory.Speakers.Select(s => s.Name)) : _peers.SelectMany(p => p.Inventory.Screens.Where(s => s.Kind == "video").Select(s => s.Display + "/" + s.Name)));
                 _target = Choice(targets, T(audio ? "audioDevice" : "screen", "*"), true); Field(audio ? "Audio output" : "Screen", _target);
-                _mute = Check("Mute", Node("mute")?.GetValue<bool>() ?? false); _fields.Wide(_mute); Watch(_mute, _changed);
                 _volume = Number(Node("volume")?.GetValue<decimal>() ?? 100, 100); Field("Volume (%)", _volume);
-                if (!audio) { _loop = Check("Loop video", Node("loop")?.GetValue<bool>() ?? false); _fields.Wide(_loop); Watch(_loop, _changed); }
-                else { _channel = Number(Node("channel")?.GetValue<int>() ?? 0, 128); Field("Channel (0 = original)", _channel); }
-                _fields.Wide(Note("Item roles override direct outputs. Paths are relative to the local media library. Advanced JSON supports coordinated audioDevices arrays and other parameters."));
+                _mute = Check("Mute", Node("mute")?.GetValue<bool>() ?? false); Watch(_mute, _changed);
+                if (!audio) { _loop = Check("Loop video", Node("loop")?.GetValue<bool>() ?? false); Watch(_loop, _changed); }
+                if (_manual)
+                {
+                    var playback = new FlowLayoutPanel { Height = 32, WrapContents = false };
+                    playback.Controls.Add(_mute); if (_loop is not null) playback.Controls.Add(_loop);
+                    _fields.Field("Playback", playback);
+                }
+                else { _fields.Wide(_mute); if (_loop is not null) _fields.Wide(_loop); }
+                if (audio) { _channel = Number(Node("channel")?.GetValue<int>() ?? 0, 128); Field("Channel (0 = original)", _channel); }
+                if (!_manual) _fields.Wide(Note("Item roles override direct outputs. Paths are relative to the local media library. Advanced JSON supports coordinated audioDevices arrays and other parameters."));
             }
             else if (_loadedKind is "Scene command" or "Network playlist")
             { _value = Choice(_loadedKind == "Scene command" ? _show.Scenes.Select(s => s.Name) : _show.Playlists.Where(p => p.Type == "storyboard").Select(p => p.Name), T("value"), true); Field(_loadedKind == "Scene command" ? "Scene" : "Playlist", _value); }

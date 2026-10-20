@@ -16,7 +16,7 @@ internal sealed class UdpExperienceListener : IAsyncDisposable
         _listener = new(() => options(), async (message, token) =>
         {
             // Controllers own discovery commands; clients only consume the discovery events.
-            if (ControllerDiscovery.IsRequest(message) || message.Event == ExperienceDiscovery.Event || message.Body.TryGetProperty("command",out var command) && command.ValueKind==JsonValueKind.String && command.GetString()=="perspective.create") return;
+            if (ControllerDiscovery.IsRequest(message) || message.Event == ControllerDiscovery.ResponseEvent || message.Event == ExperienceDiscovery.Event || message.Body.TryGetProperty("command",out var command) && command.ValueKind==JsonValueKind.String && command.GetString()=="perspective.create") return;
             if (ExperienceDiscovery.IsRequest(message))
             {
                 await dispatcher.InvokeAsync(() => { if (!token.IsCancellationRequested && message.Targets(options().EffectiveDeviceName) && !message.IsExpired(DateTimeOffset.UtcNow)) discovered?.Invoke(); }, DispatcherPriority.Normal, token);

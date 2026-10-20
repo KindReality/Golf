@@ -9,7 +9,7 @@ namespace PhotoBooth.Networking;
 internal sealed class SnapshotHttpServer(string path = "/inventory") : IAsyncDisposable
 {
     private sealed record Snapshot(byte[] Bytes, string Revision);
-    private volatile Snapshot _snapshot = new([], "");
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Snapshot> _snapshots = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _connections = new(8);
     private readonly object _gate = new();
@@ -17,7 +17,7 @@ internal sealed class SnapshotHttpServer(string path = "/inventory") : IAsyncDis
     private TcpListener? _listener;
     private bool _stopping;
     public int Port { get; private set; }
-    public void Publish(byte[] bytes, string revision) => _snapshot = new(bytes, revision);
+    public void Publish(byte[] bytes, string revision, string? route = null) => _snapshots[route ?? path] = new(bytes, revision);
     public void Bind(int port)
     {
         if (_listener is not null && Port == port) return;
@@ -56,8 +56,10 @@ internal sealed class SnapshotHttpServer(string path = "/inventory") : IAsyncDis
                 }
                 if (end < 0) return;
                 var lines = Encoding.ASCII.GetString(header, 0, end).Split("\r\n");
-                var fields = lines[0].Split(' '); var snapshot = _snapshot;
-                int status = fields.Length == 3 && fields[0] == "GET" && fields[1] == path ? 200 : 404;
+                var fields = lines[0].Split(' ');
+                Snapshot? snapshot = null;
+                int status = fields.Length == 3 && fields[0] == "GET" && _snapshots.TryGetValue(fields[1], out snapshot) ? 200 : 404;
+                snapshot ??= new([], "");
                 if (status == 200 && lines.Skip(1).Any(line => line.Equals("If-None-Match: \"" + snapshot.Revision + "\"", StringComparison.OrdinalIgnoreCase))) status = 304;
                 var body = status == 200 ? snapshot.Bytes : [];
                 var response = Encoding.ASCII.GetBytes($"HTTP/1.1 {status} {(status == 200 ? "OK" : status == 304 ? "Not Modified" : "Not Found")}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {body.Length}\r\nETag: \"{snapshot.Revision}\"\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n");

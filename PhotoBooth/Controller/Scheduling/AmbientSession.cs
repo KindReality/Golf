@@ -10,9 +10,9 @@ internal sealed class AmbientSession
     private readonly object _gate = new();
     private bool _disposed;
     public Task Completion { get; }
-    public AmbientSession(PlaylistEngine engine, ControllerOptions options, SceneOptions scene, CancellationToken lifetime, ActivityLog log, SceneVideoLoops? loops = null)
+    public AmbientSession(PlaylistEngine engine, ControllerOptions options, SceneOptions scene, CancellationToken lifetime, ActivityLog log, SceneExecutionContext? sceneContext = null)
     {
-        var playlist = options.Playlist(scene.AmbientPlaylist, "ambient");
+        var playlist = options.Playlist(scene.AmbientPlaylist ?? throw new ArgumentException("This scene has no ambient playlist."), "ambient");
         if (playlist.DurationMilliseconds is { } duration) _scheduling.CancelAfter(duration);
         Completion = Task.WhenAll(playlist.Items.Where(i => i.Enabled).Select(LoopAsync));
         async Task LoopAsync(PlaylistItem item)
@@ -25,7 +25,7 @@ internal sealed class AmbientSession
                 {
                     var interval = engine.AmbientInterval(options, playlist, item, completed);
                     await engine.WaitUntilAsync(DeadlineScheduler.After(interval), linked.Token).ConfigureAwait(false);
-                    var run = engine.RunAmbientItem(playlist, item, options, scene.Name, lifetime, loops);
+                    var run = engine.RunAmbientItem(playlist, item, options, scene.Name, lifetime, sceneContext);
                     await run.Completion.WaitAsync(linked.Token).ConfigureAwait(false);
                     completed = true;
                 }

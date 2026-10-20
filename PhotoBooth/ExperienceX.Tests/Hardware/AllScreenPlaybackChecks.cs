@@ -30,7 +30,7 @@ internal static class AllScreenPlaybackChecks
                     var displays = Forms.Screen.AllScreens.Select(s => s.DeviceName).ToArray();
                     var options = new ExperienceOptions
                     {
-                        DeviceName = "all-screens-test", DeveloperMode = true, MediaDiscovery = new() { Enabled = false },
+                        DeviceName = "all-screens-test", DeveloperMode = true, LocalController = new() { Enabled = false },
                         VideoDirectory = Path.GetDirectoryName(video)!, UdpCommandsPort = commands, UdpEventsPort = events, TransitionInSeconds = .05,
                         DisplayScreens = displays.ToDictionary(d => d, d => new List<ScreenOptions>
                         {

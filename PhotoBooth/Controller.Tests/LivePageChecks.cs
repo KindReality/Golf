@@ -28,6 +28,7 @@ internal static class LivePageChecks
                     {
                         DeviceName = "live-ui-controller", UdpCommandsPort = FreeUdpPort(), UdpEventsPort = FreeUdpPort(),
                         DefinitionsPort = FreeTcpPort(), UdpSendAttempts = 1, UdpInterfaceAddress = "127.0.0.1",
+                        ArduinoDiscovery = new() { Enabled = false }, ExperienceSupervisionEnabled = false,
                         Telemetry = JsonSerializer.SerializeToElement(new { Directory = Path.Combine(folder, "logs") })
                     };
                     var path = Path.Combine(folder, "appsettings.json");

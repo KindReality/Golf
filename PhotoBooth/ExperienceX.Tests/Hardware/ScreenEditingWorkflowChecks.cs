@@ -34,7 +34,7 @@ internal static class ScreenEditingWorkflowChecks
                     var options = new ExperienceOptions
                     {
                         DeveloperMode = true, ConfigurationMode = true, CalibrationGridEnabled = false,
-                        MediaDiscovery = new() { Enabled = false },
+                        LocalController = new() { Enabled = false },
                         DefaultDisplayName = primary, UdpCommandsPort = commandsPort, UdpEventsPort = eventsPort,
                         ControllerDefinitions = new() { [definitions.ControllerId] = definitions },
                         AudioDevices = new() { ["workflow-roles"] = new() { Name = "Workflow roles", Roles = "Front,Scary" } },

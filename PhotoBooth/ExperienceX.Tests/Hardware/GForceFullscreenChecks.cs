@@ -51,7 +51,7 @@ internal static class GForceFullscreenChecks
                     Capture("gforce-fullscreen.png").Dispose();
                     using var commandSocket=new UdpClient(new IPEndPoint(IPAddress.Loopback,0));using var eventSocket=new UdpClient(new IPEndPoint(IPAddress.Loopback,0));
                     int commands=((IPEndPoint)commandSocket.Client.LocalEndPoint!).Port,events=((IPEndPoint)eventSocket.Client.LocalEndPoint!).Port;commandSocket.Dispose();eventSocket.Dispose();
-                    var options=new ExperienceOptions{DeveloperMode=false,ConfigurationMode=false,MediaDiscovery=new(){Enabled=false},UdpCommandsPort=commands,UdpEventsPort=events,TransitionInSeconds=.1,
+                    var options=new ExperienceOptions{DeveloperMode=false,ConfigurationMode=false,LocalController=new(){Enabled=false},UdpCommandsPort=commands,UdpEventsPort=events,TransitionInSeconds=.1,
                         DisplayBackgrounds=Forms.Screen.AllScreens.ToDictionary(d=>d.DeviceName,_=>new DisplayBackgroundOptions{IsTransparent=true}),
                         DisplayScreens=Forms.Screen.AllScreens.ToDictionary(d=>d.DeviceName,d=>d.Primary?new List<ScreenOptions>{
                             new(){Id="media",Name="overlay-probe",BlackKey=new(){Enabled=chromaKey},Points=new(){Enabled=true,TopLeft=new(.08,.16),TopRight=new(.55,.16),BottomLeft=new(.08,.75),BottomRight=new(.55,.75)}},

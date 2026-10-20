@@ -11,7 +11,7 @@ internal sealed class ShowEditorPage : UserControl
     private readonly ListView _library = List("Name", "Type");
     private readonly TextBox _search = TextField();
     private readonly Panel _workspace = new() { Dock = DockStyle.Fill, BackColor = DarkTheme.Surface };
-    private readonly Label _status = new() { Dock = DockStyle.Fill, ForeColor = DarkTheme.Muted, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly Label _status = new() { Dock = DockStyle.Fill, ForeColor = DarkTheme.Muted, TextAlign = ContentAlignment.MiddleLeft, AccessibleName = "Editor save status" };
     private readonly Label _playback = new() { Dock = DockStyle.Fill, ForeColor = DarkTheme.Accent, TextAlign = ContentAlignment.MiddleLeft };
     private readonly Button _save, _undo, _reload, _run, _cancel, _back;
     private readonly Dictionary<string, Button> _sections = new();
@@ -32,7 +32,7 @@ internal sealed class ShowEditorPage : UserControl
         _host = host; _lastOptions = host.Options; _session = new(host.Options);
         Dock = DockStyle.Fill; BackColor = DarkTheme.Background; ForeColor = DarkTheme.Text; Font = new("Segoe UI", 10);
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new(16, 6, 16, 12), RowCount = 4, ColumnCount = 1 };
-        layout.RowStyles.Add(new(SizeType.Absolute, 56)); layout.RowStyles.Add(new(SizeType.Absolute, 46)); layout.RowStyles.Add(new(SizeType.Percent, 100)); layout.RowStyles.Add(new(SizeType.Absolute, 44));
+        layout.RowStyles.Add(new(SizeType.Absolute, 56)); layout.RowStyles.Add(new(SizeType.Absolute, 46)); layout.RowStyles.Add(new(SizeType.Absolute, 56)); layout.RowStyles.Add(new(SizeType.Percent, 100));
         var title = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
         title.ColumnStyles.Add(new(SizeType.Percent, 40)); title.ColumnStyles.Add(new(SizeType.Percent, 60));
         title.Controls.Add(new Label { Text = "SCENES / PLAYLISTS", Font = new("Segoe UI", 17, FontStyle.Bold), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
@@ -49,7 +49,7 @@ internal sealed class ShowEditorPage : UserControl
         { var b = Button(section, () => Navigate(section, 0)); b.Padding = new(5, 3, 5, 3); _sections[section] = b; tabs.Controls.Add(b); }
         _search.PlaceholderText = "Find by name…"; _search.Dock = DockStyle.Fill; _search.TextChanged += (_, _) => RenderLibrary();
         sidebar.Controls.Add(tabs, 0, 0); sidebar.Controls.Add(_search, 0, 1); sidebar.Controls.Add(_tools, 0, 2); sidebar.Controls.Add(_library, 0, 3);
-        columns.Controls.Add(sidebar, 0, 0); columns.Controls.Add(_workspace, 1, 0); layout.Controls.Add(columns, 0, 2); layout.Controls.Add(_status, 0, 3); Controls.Add(layout);
+        columns.Controls.Add(sidebar, 0, 0); columns.Controls.Add(_workspace, 1, 0); layout.Controls.Add(_status, 0, 2); layout.Controls.Add(columns, 0, 3); Controls.Add(layout);
         _library.SelectedIndexChanged += (_, _) =>
         {
             if (_loading || _library.SelectedItems.Count == 0) return;
@@ -64,10 +64,10 @@ internal sealed class ShowEditorPage : UserControl
     }
     private void Message(string text, bool error = false)
     { _status.Text = text; _status.ForeColor = error ? DarkTheme.Error : DarkTheme.Muted; }
-    private bool Attempt(Action work)
-    { try { work(); return true; } catch (Exception ex) { Message(ex.Message, true); return false; } }
+    private bool Attempt(Action work, bool logSaveFailure = false)
+    { try { work(); return true; } catch (Exception ex) { Message(ex.Message, true); if (logSaveFailure) _host.Log.Error("ShowConfigurationSaveFailed", ex); return false; } }
     private void Changed() { if (_loading) return; _pending = true; _reloadArmed = false; _confirmSceneChange = null; _reload.Text = "Reload"; Message("Unsaved draft • Save applies ambient changes; running storyboards keep their current settings."); UpdateActions(); }
-    private bool CommitCurrent() => Attempt(() =>
+    private bool CommitCurrent(bool logSaveFailure = false) => Attempt(() =>
     {
         // Read the actual controls at save/navigation boundaries, rather than
         // relying on a change notification to decide whether their values exist.
@@ -79,7 +79,7 @@ internal sealed class ShowEditorPage : UserControl
             case TriggerEditorView trigger: _session.SetTrigger(_index, trigger.Read()); break;
         }
         _pending = false;
-    });
+    }, logSaveFailure);
     private int Count => _section == "Scenes" ? _session.Current.Scenes.Length : _section == "Playlists" ? _session.Current.Playlists.Length : _session.Current.Triggers.Length;
     internal void Navigate(string section, int index)
     {
@@ -147,8 +147,7 @@ internal sealed class ShowEditorPage : UserControl
         var linked = phase switch
         {
             "activation" => scene with { ActivatingPlaylist = name },
-            "ambient" => scene with { AmbientPlaylist = name },
-            "deactivation" => scene with { DeactivatingPlaylist = name },
+            "ambient" => scene with { AmbientPlaylist = name, Transition = null },
             _ => throw new ArgumentException("Unknown scene phase.")
         };
         _session.Change(show with { Playlists = [.. show.Playlists, playlist], Scenes = show.Scenes.Select((s, i) => i == _index ? linked : s).ToArray() });
@@ -210,23 +209,30 @@ internal sealed class ShowEditorPage : UserControl
     }
     internal async Task SaveAsync()
     {
-        if (_saving || !CommitCurrent() || !_host.Options.ConfigurationMode) return;
+        if (_saving) return;
+        if (!_host.Options.ConfigurationMode) { Message("Enable configuration mode before saving.", true); return; }
+        if (!CommitCurrent(logSaveFailure: true)) return;
         var next = _session.Current;
-        if (!Attempt(() => next.Validate(_host.Options))) return;
+        if (!Attempt(() => next.Validate(_host.Options), logSaveFailure: true)) return;
+        if (!_session.Dirty) { Message("No changes to save."); UpdateActions(); return; }
         var active = _host.Scenes.Snapshot().Active;
         if (active is not null && !next.Scenes.Any(s => ControllerOptions.Same(s.Name, active)) && _confirmSceneChange != next.Signature)
         { _confirmSceneChange = next.Signature; Message($"Active scene ‘{active}’ was renamed or removed. Save again to switch to startup scene ‘{next.Scenes[0].Name}’."); return; }
-        _saving = true; UpdateActions(); _workspace.Enabled = _library.Enabled = _tools.Enabled = false;
+        _saving = true; Message("Saving scenes, playlists and triggers…"); UpdateActions(); _workspace.Enabled = _library.Enabled = _tools.Enabled = false;
         try
         {
             await _host.SaveShowAsync(_session.Baseline, next);
             if (IsDisposed) return;
             _session.Accept(next); _pending = false; _awaiting = next.Signature; _awaitUntil = Environment.TickCount64 + 4000; _reloadArmed = false; _reload.Text = "Reload";
-            RenderLibrary(); Message("Saved • ambient scheduling updates live; running storyboards finish with their original settings.");
+            RenderLibrary();
+            Message(_section == "Scenes" && _index >= 0 ? SavedSceneMessage(next.Scenes[_index]) : "Saved scenes, playlists and triggers.");
         }
         catch (Exception ex) { if (!IsDisposed) { Message(ex.Message, true); _host.Log.Error("ShowConfigurationSaveFailed", ex); } }
         finally { if (!IsDisposed) { _saving = false; _workspace.Enabled = _library.Enabled = _tools.Enabled = true; UpdateActions(); } }
     }
+    private static string SavedSceneMessage(SceneOptions scene) =>
+        $"Saved scene ‘{scene.Name}’ • Activation: {scene.ActivatingPlaylist ?? "(None)"} • " +
+        (scene.Transition is { } next ? $"Next: {next.Scene} → {next.Device} • Minimum: {next.MinimumSceneDurationSeconds:0.###} s" : $"Ambient: {scene.AmbientPlaylist}");
     private void Run()
     {
         if (HasUnsavedChanges || _index < 0) { Message("Save the draft before activating or running it."); return; }
@@ -266,7 +272,9 @@ internal sealed class ShowEditorPage : UserControl
     private void UpdateActions()
     {
         var edit = !_saving && _host.Options.ConfigurationMode;
-        _save.Enabled = edit && HasUnsavedChanges; _undo.Enabled = edit && (_session.CanUndo || _pending); _reload.Enabled = !_saving;
+        // Saving reads the controls even if a native edit did not notify the
+        // draft. A missed notification must never turn Save into a dead button.
+        _save.Enabled = edit; _undo.Enabled = edit && (_session.CanUndo || _pending); _reload.Enabled = !_saving;
         _back.Enabled = !_saving && _history.Count > 0; _tools.Enabled = _workspace.Enabled = _library.Enabled = edit;
         _run.Text = _section == "Scenes" ? "Activate scene" : "Run playlist";
         _run.Enabled = edit && !HasUnsavedChanges && _index >= 0 && (_section == "Scenes" || _section == "Playlists" && _session.Current.Playlists[_index].Type == "storyboard");

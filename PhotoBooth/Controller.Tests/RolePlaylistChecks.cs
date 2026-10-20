@@ -40,11 +40,11 @@ internal static class RolePlaylistChecks
         recorder = new();
         await using (var engine = new PlaylistEngine(loopOptions, recorder, new ActivityLog()))
         {
-            var loops = new SceneVideoLoops("idle"); engine.SetSceneLoops(loops);
+            engine.SetSceneContext(new("idle"));
             await engine.Run("loop").Completion;
-            await engine.StopSceneLoopsAsync(loops);
-            Check(recorder.Commands.Count == 2 && recorder.Commands.All(command => command.Device == "*") && ControllerOptions.Text(recorder.Commands.Last().Payload, "command") == "stop" &&
-                recorder.Commands.Last().Payload.TryGetProperty("playbackRequestId", out _), "Role-bound loops preserve scene cleanup and broadcast exact playback stops.");
+            engine.SetSceneContext(new("active"));
+            Check(recorder.Commands.Count == 1 && recorder.Commands.Single().Device == "*" && VideoCommand.IsLoop(recorder.Commands.Single()),
+                "Role-bound loops remain low-priority broadcasts; changing scene context sends no playback stop.");
         }
         var child = new PlaylistOptions { Name = "child", Items = [new() { Name = "inherited", Commands = [video with { Device = "*" }] }, item with { Name = "override", Roles = "Welcome", Commands = [audio] }] };
         var ambientItem = new PlaylistItem { Name = "nested", Roles = "Ambient", MinIntervalMilliseconds = 20, MaxIntervalMilliseconds = 20, Commands = [new() { Playlist = "child" }] };
@@ -93,7 +93,7 @@ internal static class RolePlaylistChecks
         var populated = ConfigurationDefaults.Populate(JsonSerializer.Serialize(options, ControllerOptions.Json), new("Development", 1000));
         using (var defaultsDocument = JsonDocument.Parse(populated))
             Check(defaultsDocument.RootElement.GetProperty("Playlists").EnumerateArray().SelectMany(p => p.GetProperty("Items").EnumerateArray()).All(i => i.TryGetProperty("BroadcastMode", out _) && i.TryGetProperty("IncludeSubwoofer", out _)), "Configuration includes editable BroadcastMode and IncludeSubwoofer defaults.");
-        Console.WriteLine("Passed role routing, Random/Broadcast selection, audio-only subwoofer inclusion, nested inheritance, loop cleanup and configuration validation.");
+        Console.WriteLine("Passed role routing, Random/Broadcast selection, audio-only subwoofer inclusion, nested inheritance, loop continuity and configuration validation.");
     }
     private sealed class Recorder : ICommandDispatcher
     {

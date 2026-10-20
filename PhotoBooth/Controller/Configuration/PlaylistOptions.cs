@@ -5,9 +5,15 @@ namespace Controller.Configuration;
 internal sealed record SceneOptions
 {
     public required string Name { get; init; }
-    public required string AmbientPlaylist { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? AmbientPlaylist { get; init; }
     public string? ActivatingPlaylist { get; init; }
-    public string? DeactivatingPlaylist { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public SceneTransitionOptions? Transition { get; init; }
+}
+internal sealed record SceneTransitionOptions
+{
+    public required string Scene { get; init; }
+    public string Device { get; init; } = "*";
+    public double MinimumSceneDurationSeconds { get; init; } = 5;
 }
 internal sealed record PlaylistOptions
 {

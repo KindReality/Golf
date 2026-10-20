@@ -1,6 +1,7 @@
 using Controller.Configuration;
 using Controller.Diagnostics;
 using PhotoBooth.Networking;
+using System.Diagnostics;
 
 namespace Controller.Scheduling;
 
@@ -11,44 +12,27 @@ internal sealed class SceneManager : IAsyncDisposable
     private readonly PlaylistEngine _engine;
     private readonly ActivityLog _log;
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly List<Task> _retired = [];
+    private readonly HashSet<Task> _work = [];
     private ControllerOptions _options;
-    private Context? _active;
-    private string? _destination;
+    private Context? _selected;
     private string _phase = "Starting";
-    private CancellationTokenSource? _transition;
-    private Task _work = Task.CompletedTask;
-    private bool _stopping;
-    private bool _halted;
+    private bool _stopping, _halted;
     private long _generation;
-    private (string Name, BroadcastChain? Chain)? _pending;
     private int _triggeredPlaylists;
     public SceneManager(ControllerOptions options, PlaylistEngine engine, ActivityLog log)
     {
         _options = options; _engine = engine; _log = log;
         engine.TriggeredPlaylistStarted += PlaylistStarted; engine.TriggeredPlaylistFinished += PlaylistFinished;
     }
-    public SceneStatus Snapshot() { lock (_gate) return new(_active?.Scene.Name, _pending?.Name ?? _destination, _phase, _triggeredPlaylists); }
-    private void PlaylistStarted()
-    {
-        lock (_gate)
-        {
-            if (_stopping) return;
-            _triggeredPlaylists++;
-            if (ControllerOptions.Same(_pending?.Name, "idle") && ControllerOptions.Same(_active?.Scene.Name, "active")) _pending = null;
-        }
-    }
+    public SceneStatus Snapshot() { lock (_gate) return new(_selected?.Scene.Name, _phase is "Active" or "Stopped" or "Failed" ? null : _selected?.Scene.Transition?.Scene, _phase, _triggeredPlaylists); }
+    private void PlaylistStarted() { lock (_gate) if (!_stopping) _triggeredPlaylists++; }
     private void PlaylistFinished()
     {
         lock (_gate)
         {
             if (_stopping) return;
             _triggeredPlaylists = Math.Max(0, _triggeredPlaylists - 1);
-            if (_halted) return;
-            var requestedScene = _pending?.Name ?? _destination ?? _active?.Scene.Name;
-            if (_triggeredPlaylists == 0 && _options.Scenes.Any(s => ControllerOptions.Same(s.Name, "idle")) &&
-                ControllerOptions.Same(requestedScene, "active"))
-                Request("idle");
+            if (!_halted && _triggeredPlaylists == 0 && _selected?.Scene.Transition is null && ControllerOptions.Same(_selected?.Scene.Name, "active") && _options.Scenes.Any(s => ControllerOptions.Same(s.Name, "idle"))) Request("idle");
         }
     }
     public void Start() => Request(_options.Scenes[0].Name);
@@ -58,110 +42,142 @@ internal sealed class SceneManager : IAsyncDisposable
         {
             if (_stopping) return false;
             var options = _options; var scene = options.Scene(name);
-            _halted = false;
-            if (_phase == "Activating")
-            {
-                if (ControllerOptions.Same(_active?.Scene.Name, scene.Name)) { _pending = null; return false; }
-                _pending = (scene.Name, chain);
-                _log.Info("SceneChangeDeferred", $"Scene queued: {scene.Name}", new { Scene = scene.Name, Current = _active?.Scene.Name });
-                return true;
-            }
-            if (ControllerOptions.Same(_destination, scene.Name) || _destination is null && _phase == "Active" && ControllerOptions.Same(_active?.Scene.Name, scene.Name)) return false;
+            if (!_halted && _phase != "Failed" && ControllerOptions.Same(_selected?.Scene.Name, scene.Name)) return false;
             var ancestry = (chain ?? BroadcastChain.Root(options.EffectiveDeviceName)).Enter($"{options.EffectiveDeviceName}/scene:{scene.Name}");
-            _transition?.Cancel();
-            _active?.Lifetime.Cancel(); _active?.Ambient?.StopScheduling();
-            _active?.Loops.Seal();
-            var previous = _work; var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
-            _transition = cancellation; _destination = scene.Name; _phase = "Transitioning";
-            var generation = ++_generation;
-            // Serialize cleanup, then let the latest request replace all unsent transition work.
-            _work = Task.Run(() => TransitionAsync(previous, scene, options, ancestry, generation, cancellation));
+            var old = _selected;
+            Cancel(old);
+            _halted = false;
+            var current = new Context(scene, options, ++_generation, _shutdown.Token);
+            _selected = current; _phase = "Transitioning";
+            // Selection is immediate; activation is cancellable work, never a lock.
+            _engine.SetSceneContext(current.Execution);
+            _log.Info("SceneChangeRequested", $"Scene requested: {scene.Name}", new { PreviousScene = old?.Scene.Name, Scene = scene.Name, current.Generation, ancestry.CorrelationId });
+            if (old is not null) Retire(old);
+            current.Work = Task.Run(() => TransitionAsync(current, ancestry)); Track(current.Work);
             return true;
         }
     }
-    private async Task TransitionAsync(Task previous, SceneOptions scene, ControllerOptions options, BroadcastChain chain, long generation, CancellationTokenSource cancellation)
+    private void Cancel(Context? context)
     {
-        var token = cancellation.Token;
+        if (context is null) return;
+        context.Lifetime.Cancel(); context.Ambient?.StopScheduling();
+        if (context.ActivationStarted && !context.ActivationCompleted)
+            _log.Info("SceneActivationCancelled", $"Activation cancelled: {context.Scene.Name}", new { Scene = context.Scene.Name, context.Generation, PlaybackContinues = true });
+    }
+    private bool Current(Context context) => !_stopping && !_halted && ReferenceEquals(_selected, context) && !context.Lifetime.IsCancellationRequested;
+    private async Task TransitionAsync(Context current, BroadcastChain chain)
+    {
+        var token = current.Lifetime.Token;
         try
         {
-            await previous.ConfigureAwait(false); token.ThrowIfCancellationRequested();
-            Context? old;
-            lock (_gate) old = _active;
-            if (old is not null)
+            lock (_gate)
             {
-                if (!old.ExitStarted)
+                token.ThrowIfCancellationRequested(); if (!Current(current)) return;
+                current.ActivationStarted = true; _phase = "Activating";
+                _log.Info("SceneActivating", $"Scene activating: {current.Scene.Name}", new { Scene = current.Scene.Name, current.Generation, chain.CorrelationId });
+            }
+            using var activationStop = CancellationTokenSource.CreateLinkedTokenSource(token);
+            var activation = current.Scene.ActivatingPlaylist is { } entry
+                ? RunPhaseAsync(entry, current.Options, chain, "Scene activation", activationStop.Token, current.Execution) : Task.CompletedTask;
+            if (current.Scene.Transition is not null)
+            {
+                var next = TransitionAfterDelayAsync(current, chain, activationStop);
+                try
                 {
-                    old.ExitStarted = true;
-                    await _engine.StopSceneLoopsAsync(old.Loops).ConfigureAwait(false);
-                    if (old.Scene.DeactivatingPlaylist is { } exit)
+                    var first = await Task.WhenAny(activation, next).ConfigureAwait(false);
+                    if (first == activation)
                     {
-                        SetPhase(generation, "Deactivating");
-                        await _engine.Run(exit, old.Options, chain, "Scene deactivation", token, old.Loops, priority: CommandPriority.Low).Completion.ConfigureAwait(false);
-                        token.ThrowIfCancellationRequested();
+                        try { await activation.ConfigureAwait(false); }
+                        catch (OperationCanceledException) when (activationStop.IsCancellationRequested)
+                        {
+                            // The automatic deadline can cancel late cues before its scene
+                            // command has finished sending. That is a handoff, not a failure.
+                        }
+                        lock (_gate) if (Current(current) && !activationStop.IsCancellationRequested) { current.ActivationCompleted = true; _phase = "Waiting"; }
+                        await next.ConfigureAwait(false);
                     }
+                    else await next.ConfigureAwait(false);
+                    lock (_gate) if (Current(current)) { current.ActivationCompleted = true; _phase = "Active"; }
                 }
-                if (old.Ambient is { } ambient) await ambient.DisposeAsync().ConfigureAwait(false);
-                lock (_gate) { if (ReferenceEquals(_active, old)) _active = null; old.Lifetime.Dispose(); }
-            }
-            token.ThrowIfCancellationRequested();
-            Context current;
-            lock (_gate)
-            {
-                token.ThrowIfCancellationRequested(); current = new Context(scene, options); _active = current; _phase = "Activating";
-                _engine.SetSceneLoops(current.Loops);
-                _log.Info("SceneActivating", $"Scene activating: {scene.Name}", new { Scene = scene.Name, chain.CorrelationId });
-            }
-            if (scene.ActivatingPlaylist is { } entry)
-            { await _engine.Run(entry, options, chain, "Scene activation", token, current.Loops, priority: CommandPriority.Low).Completion.ConfigureAwait(false); token.ThrowIfCancellationRequested(); }
-            (string Name, BroadcastChain? Chain)? pending;
-            lock (_gate)
-            {
-                token.ThrowIfCancellationRequested();
-                // Activation retains its snapshot. The first ambient schedule uses the latest valid configuration.
-                var latest = _options.Scenes.FirstOrDefault(s => ControllerOptions.Same(s.Name, scene.Name));
-                pending = _pending; _pending = null;
-                if (latest is not null)
+                finally
                 {
-                    current.Scene = latest; current.Options = _options;
-                    if (pending is null) current.Ambient = new(_engine, _options, latest, current.Lifetime.Token, _log, current.Loops);
+                    activationStop.Cancel();
+                    try { await activation.ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (activationStop.IsCancellationRequested) { }
                 }
-                _destination = null; _phase = "Active";
-                // Commit the queued handoff atomically, so a newly arriving trigger cannot
-                // be overwritten by an older pending Idle request after this gate is released.
-                if (pending is { } next) Request(next.Name, next.Chain);
+                return;
             }
-            _log.Info("SceneActivated", $"Scene active: {scene.Name}", new { Scene = scene.Name, chain.CorrelationId });
-            lock (_gate) if (!_halted && !_options.Scenes.Any(s => ControllerOptions.Same(s.Name, scene.Name))) Request(_options.Scenes[0].Name);
+            await activation.ConfigureAwait(false);
+            lock (_gate)
+            {
+                token.ThrowIfCancellationRequested(); if (!Current(current)) return;
+                current.ActivationCompleted = true;
+                var latest = _options.Scenes.FirstOrDefault(s => ControllerOptions.Same(s.Name, current.Scene.Name));
+                if (latest is null) { Request(_options.Scenes[0].Name); return; }
+                // Live ambient edits apply without replaying activation. Changing the
+                // scene's mode, like a running storyboard edit, applies on its next entry.
+                if (latest.Transition is null) { current.Scene = latest; current.Options = _options; }
+                current.Ambient = new(_engine, current.Options, current.Scene, token, _log, current.Execution);
+                _phase = "Active";
+                _log.Info("SceneActivated", $"Scene active: {current.Scene.Name}", new { Scene = current.Scene.Name, current.Generation, chain.CorrelationId });
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            _log.Error("SceneTransitionFailed", ex, new { Scene = scene.Name });
-            lock (_gate) if (_generation == generation) { _destination = null; _pending = null; _phase = "Failed"; }
-        }
-        finally
-        {
-            lock (_gate) { if (ReferenceEquals(_transition, cancellation)) _transition = null; cancellation.Dispose(); }
+            _log.Error("SceneTransitionFailed", ex, new { Scene = current.Scene.Name, current.Generation });
+            lock (_gate) if (Current(current)) { _phase = "Failed"; Cancel(current); }
         }
     }
-    private void SetPhase(long generation, string phase) { lock (_gate) if (_generation == generation) _phase = phase; }
+    private async Task TransitionAfterDelayAsync(Context current, BroadcastChain chain, CancellationTokenSource activationStop)
+    {
+        var token = current.Lifetime.Token;
+        var transition = current.Scene.Transition!;
+        var estimate = await SceneTransitionTiming.EstimateAsync(current.Scene, current.Options, _engine.ReadMediaDurationMilliseconds, token).ConfigureAwait(false);
+        _log.Info("SceneTransitionScheduled", $"{current.Scene.Name} → {transition.Scene} after {estimate.DurationMilliseconds / 1000:0.###} s", new
+        { Scene = current.Scene.Name, NextScene = transition.Scene, transition.Device, current.Generation, estimate.DurationMilliseconds,
+            transition.MinimumSceneDurationSeconds, estimate.HasUnknownMedia, CountdownFromSceneStart = true });
+        await _engine.WaitUntilAsync(current.Started + DeadlineScheduler.Ticks(estimate.DurationMilliseconds), token).ConfigureAwait(false);
+        Task send;
+        lock (_gate)
+        {
+            token.ThrowIfCancellationRequested(); if (!Current(current)) return;
+            activationStop.Cancel(); // No old delayed cues are sent after the handoff.
+            send = _engine.SendSceneTransitionAsync(current.Scene, transition, current.Options, chain, token);
+        }
+        await send.ConfigureAwait(false);
+        _log.Info("SceneTransitionSent", $"Scene command: {current.Scene.Name} → {transition.Scene} on {transition.Device}",
+            new { Scene = current.Scene.Name, NextScene = transition.Scene, transition.Device, current.Generation });
+    }
+    private void Track(Task task)
+    {
+        lock (_gate) { _work.RemoveWhere(t => t.IsCompleted); _work.Add(task); }
+    }
+    private async Task RunPhaseAsync(string playlist, ControllerOptions options, BroadcastChain chain, string phase, CancellationToken token, SceneExecutionContext execution)
+    {
+        var run = _engine.Run(playlist, options, chain, phase, token, execution, priority: CommandPriority.Low, commandsOnly: true);
+        await run.Completion.WaitAsync(token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        if (await run.Outcome.ConfigureAwait(false) != PlaylistOutcome.Completed)
+            throw new InvalidOperationException($"{phase} playlist {playlist} did not complete successfully.");
+    }
+    private void Retire(Context context)
+    {
+        Track(Task.Run(async () =>
+        {
+            // Only this context disposes its resources; never touch a replacement context.
+            await context.Work.ConfigureAwait(false);
+            if (context.Ambient is { } ambient) await ambient.DisposeAsync().ConfigureAwait(false);
+            context.Lifetime.Dispose();
+        }));
+    }
     public void StopImmediately()
     {
         lock (_gate)
         {
             if (_stopping) return;
-            _halted = true;
-            ++_generation;
-            _pending = null; _destination = null; _phase = "Stopped";
-            _transition?.Cancel();
-            if (_active is { } current)
-            {
-                current.Lifetime.Cancel();
-                current.Ambient?.StopScheduling();
-                current.Loops.Abandon();
-                // This scene is abandoned, not deactivated later when another is requested.
-                current.ExitStarted = true;
-            }
+            _halted = true; ++_generation; _phase = "Stopped";
+            Cancel(_selected);
             _engine.CancelAll();
         }
     }
@@ -169,26 +185,38 @@ internal sealed class SceneManager : IAsyncDisposable
     {
         lock (_gate)
         {
-            _options = options;
-            if (_halted) return;
-            if (_destination is not null) return;
-            var scene = options.Scenes.FirstOrDefault(s => ControllerOptions.Same(s.Name, _active?.Scene.Name));
+            _options = options; if (_halted) return;
+            var scene = options.Scenes.FirstOrDefault(s => ControllerOptions.Same(s.Name, _selected?.Scene.Name));
             if (scene is null) { Request(options.Scenes[0].Name); return; }
-            if (_active!.Ambient is { } old) { old.StopScheduling(); _retired.Add(old.DisposeAsync()); }
-            _retired.RemoveAll(t => t.IsCompleted);
-            _active.Scene = scene; _active.Options = options;
-            _active.Ambient = new(_engine, options, scene, _active.Lifetime.Token, _log, _active.Loops);
+            if (_phase != "Active" || _selected!.Scene.Transition is not null || scene.Transition is not null) return;
+            if (_selected!.Ambient is { } old) { old.StopScheduling(); Track(old.DisposeAsync()); }
+            _selected.Scene = scene; _selected.Options = options;
+            _selected.Ambient = new(_engine, options, scene, _selected.Lifetime.Token, _log, _selected.Execution);
         }
     }
     public async ValueTask DisposeAsync()
     {
-        Task work;
-        lock (_gate) { if (_stopping) return; _stopping = true; _shutdown.Cancel(); _active?.Lifetime.Cancel(); _active?.Ambient?.StopScheduling(); _active?.Loops.Seal(); work = _work; }
+        Task[] work;
+        lock (_gate)
+        {
+            if (_stopping) return; _stopping = true; _shutdown.Cancel(); Cancel(_selected);
+            if (_selected is { } current) Retire(current);
+            work = _work.ToArray();
+        }
         _engine.TriggeredPlaylistStarted -= PlaylistStarted; _engine.TriggeredPlaylistFinished -= PlaylistFinished;
-        await work.ConfigureAwait(false);
-        if (_active is { } context) { if (context.Ambient is { } ambient) await ambient.DisposeAsync().ConfigureAwait(false); context.Lifetime.Dispose(); }
-        await Task.WhenAll(_retired).ConfigureAwait(false); _shutdown.Dispose();
+        await Task.WhenAll(work).ConfigureAwait(false); _shutdown.Dispose();
     }
-    private sealed class Context(SceneOptions scene, ControllerOptions options)
-    { public SceneOptions Scene = scene; public ControllerOptions Options = options; public readonly SceneVideoLoops Loops = new(scene.Name); public readonly CancellationTokenSource Lifetime = new(); public AmbientSession? Ambient; public bool ExitStarted; }
+    internal int OutstandingWork { get { lock (_gate) { _work.RemoveWhere(t => t.IsCompleted); return _work.Count; } } }
+    private sealed class Context(SceneOptions scene, ControllerOptions options, long generation, CancellationToken shutdown)
+    {
+        public SceneOptions Scene = scene;
+        public ControllerOptions Options = options;
+        public readonly long Generation = generation;
+        public readonly long Started = Stopwatch.GetTimestamp();
+        public readonly SceneExecutionContext Execution = new(scene.Name, generation);
+        public readonly CancellationTokenSource Lifetime = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
+        public Task Work = Task.CompletedTask;
+        public AmbientSession? Ambient;
+        public bool ActivationStarted, ActivationCompleted;
+    }
 }

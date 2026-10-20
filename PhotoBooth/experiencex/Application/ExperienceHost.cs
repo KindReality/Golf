@@ -19,8 +19,8 @@ internal sealed class ExperienceHost : IAsyncDisposable
     private readonly PlaybackPriorityEvents _priorityEvents;
     private AudioOutput[] _inventoryAudio = [];
     private string? _defaultAudioId;
-    private readonly ControllerMediaDiscovery _mediaDiscovery;
-    private readonly ControllerDefinitionsClient _definitions;
+    private readonly LocalControllerConnection _localController;
+    private readonly ControllerDefinitionsCache _definitions;
     private readonly ScreenMediaMonitor _screenMedia;
     private readonly ApplicationHotkeys _hotkeys;
     private readonly PhotoBooth.Windows.ConfigurationShortcut _configurationShortcut;
@@ -299,9 +299,9 @@ internal sealed class ExperienceHost : IAsyncDisposable
         _displays.CloseRequested += () => CloseRequested?.Invoke();
         _announcements = new(() => _options);
         _priorityEvents = new(() => _options);
-        _mediaDiscovery = new(() => _options);
-        _definitions = new(dispatcher, async definitions => { await _configuration.Store.ApplyPerspectivesAsync(definitions); await _configuration.ReloadAsync(); });
-        _listener = new(dispatcher, () => _options, HandleRequest, message => { _mediaDiscovery.Receive(message); _definitions.Receive(message); }, () => _announcements.RequestAnnouncement());
+        _definitions = new(async definitions => { await _configuration.Store.ApplyPerspectivesAsync(definitions); await _configuration.ReloadAsync(); });
+        _localController = new(dispatcher, _definitions.ApplyAsync);
+        _listener = new(dispatcher, () => _options, HandleRequest, discovered: () => _announcements.RequestAnnouncement());
         _configurationShortcut = new("Experience", () => _options.ConfigurationMode, enabled => _tasks.Run(token => SetSharedConfigurationAsync(enabled, token), "Set shared configuration"), FocusExperience,
             () => dispatcher.BeginInvoke(new Action(() => ShutdownRequested?.Invoke())));
         _hotkeys = new(() => _configurationShortcut.SwitchTo("Controller"), () =>
@@ -396,7 +396,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
         _screenMedia.Start(_options.VideoDirectory);
         _audio.UpdateOptions(_options);
         _listener.Bind(_options.UdpCommandsPort, _options.UdpEventsPort);
-        _mediaDiscovery.Configure(_options);
+        _localController.Configure(_options);
         _displays.Start(_options);
         PublishInventory(); _announcements.Start();
         _configuration.StartWatching();
@@ -559,19 +559,8 @@ internal sealed class ExperienceHost : IAsyncDisposable
         {
             var window=_displays.Windows.First(w=>w.DisplayName==selected.DisplayName);
             var initial=_options.ScreensFor(selected.DisplayName).Single(s=>s.Id==selected.ScreenId);
-            var controllers=_definitions.AvailableControllers;
-            PhotoBooth.Networking.ControllerSharedDefinitions? controller;
-            if(initial.Perspective is { } current) controller=controllers.FirstOrDefault(c=>c.ControllerId==current.ControllerId);
-            else if(controllers.Length==1) controller=controllers[0];
-            else if(controllers.Length>1)
-            {
-                using var picker=new ControllerPicker(controllers);
-                _editingText=true;UpdateHotkeys(true);
-                try { if(picker.ShowDialog(window)!=System.Windows.Forms.DialogResult.OK)return; controller=picker.Selection; }
-                finally { _editingText=false;UpdateHotkeys(_options.ConfigurationMode); }
-            }
-            else controller=null;
-            if(controller is null)throw new InvalidOperationException(initial.Perspective is null ? "No Controller is available. Start a Controller and try P again." : "The Controller that owns this perspective is unavailable. Try again when it reconnects.");
+            var controller=_definitions.LocalController;
+            if(controller is null)throw new InvalidOperationException("The local Controller is unavailable. Start it on this computer and try P again.");
             if(!_options.ConfigurationMode)return;
             var display=System.Windows.Forms.Screen.AllScreens.FirstOrDefault(d=>d.DeviceName==selected.DisplayName) ?? throw new InvalidOperationException("The selected display is unavailable.");
             await _calibration.FinishAsync(selected); await _configuration.ReloadAsync();
@@ -668,7 +657,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
         _screenMedia.Configure(next.VideoDirectory);
         _tasks.Run(_ => _calibration.ConfigurationAppliedAsync(previous, next), "Confirm remote calibration");
         _audio.UpdateOptions(next);
-        _mediaDiscovery.Configure(next);
+        _localController.Configure(next);
         PublishInventory();
     }
     private async Task PollAudioAsync(CancellationToken token)
@@ -794,10 +783,13 @@ internal sealed class ExperienceHost : IAsyncDisposable
                     var targeted = request with { ScreenId = output.Screen.Id, ScreenName = output.Screen.Name, PriorityCoordinator = _videoPriority,
                         BlockingPriority = blockingPriorities[index], PriorityRejected = _priorityEvents.Report };
                     var priority = priorities[index];
+                    // Report the known conflict before enqueueing renderer work. A frozen
+                    // renderer must not suppress notices for remembered background loops.
+                    if (priority is null && blockingPriorities[index] is { } blockedBy)
+                        _priorityEvents.Report(targeted, output.Display, output.Screen.Name, blockedBy);
                     if (priority is null && !request.Loop)
                     {
                         Telemetry.Info("VideoRequestSkippedLowerPriority", new { request.Value, DisplayName = output.Display, ScreenName = output.Screen.Name, Priority = request.EffectivePriority }, request.RequestId);
-                        if (blockingPriorities[index] is { } blockedBy) _priorityEvents.Report(targeted, output.Display, output.Screen.Name, blockedBy);
                         continue;
                     }
                     try
@@ -848,8 +840,7 @@ internal sealed class ExperienceHost : IAsyncDisposable
         await _listener.DisposeAsync();
         await _announcements.DisposeAsync();
         await _priorityEvents.DisposeAsync();
-        await _definitions.DisposeAsync();
-        await _mediaDiscovery.DisposeAsync();
+        await _localController.DisposeAsync();
         await _screenMedia.DisposeAsync();
         foreach (var window in _displays.Windows) await window.FinishFramingAsync();
         await _configuration.DisposeAsync();

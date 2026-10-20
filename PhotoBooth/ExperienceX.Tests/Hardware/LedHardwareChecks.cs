@@ -85,7 +85,7 @@ internal static class LedHardwareChecks
             await Task.Delay(120);Check(ddp.Available==0,"Last LED screen removal ends streaming and permits WLED's timeout fallback");
         }
         source.Hide();
-        var options=new ExperienceOptions{ConfigurationMode=true,DeveloperMode=true,MediaDiscovery=new(){Enabled=false},DisplayScreens=new(){[primary.DeviceName]=[a,m]},DisplayBackgrounds=new(){[primary.DeviceName]=new(){BackgroundColor="#FF0000",IsTransparent=false}}};
+        var options=new ExperienceOptions{ConfigurationMode=true,DeveloperMode=true,LocalController=new(){Enabled=false},DisplayScreens=new(){[primary.DeviceName]=[a,m]},DisplayBackgrounds=new(){[primary.DeviceName]=new(){BackgroundColor="#FF0000",IsTransparent=false}}};
         var window=new MainWindow(primary.DeviceName,options);
         try
         {

@@ -109,19 +109,6 @@ class Fixture {
     @'
 param([string]$SourceDirectory)
 $ErrorActionPreference = 'Stop'
-Add-Type -TypeDefinition @"
-using System;
-using System.IO;
-namespace HomeTechnologies {
-    public static class MediaCredentialStore {
-        public static void Save(string hostname, string username, string password) {
-            if (hostname != "fixture-controller" || username != @"fixture-controller\SaftThings" || String.IsNullOrEmpty(password))
-                throw new Exception("Unexpected media credential target or empty password.");
-            File.WriteAllText(Environment.GetEnvironmentVariable("MEDIA_CREDENTIAL_MARKER"), hostname + "|" + username);
-        }
-    }
-}
-"@
 function global:Start-Process {
     param($FilePath, $ArgumentList, $Verb, $WindowStyle, [switch]$Wait, [switch]$PassThru)
     if ($Verb -ne 'RunAs' -or $ArgumentList -notmatch '-ConfigureMachine') { throw 'Unexpected installer elevation.' }
@@ -131,7 +118,7 @@ function global:Start-Process {
     [IO.File]::WriteAllText((Join-Path $SourceDirectory 'admin-setup-requested.txt'), 'one setup request')
     return [pscustomobject]@{ExitCode=0}
 }
-& (Join-Path $SourceDirectory 'Install-Experience.ps1') -Source $SourceDirectory -ControllerHostnames 'fixture-controller'
+& (Join-Path $SourceDirectory 'Install-Experience.ps1') -Source $SourceDirectory
 exit $LASTEXITCODE
 '@ | Set-Content -LiteralPath $driver -Encoding ascii
     $installStart = New-Object Diagnostics.ProcessStartInfo
@@ -147,10 +134,7 @@ exit $LASTEXITCODE
     if (!$installer.WaitForExit(20000)) { $installer.Kill(); throw 'Installer fixture timed out.' }
     $installOutput = $installer.StandardOutput.ReadToEnd()+$installer.StandardError.ReadToEnd()
     if ($installer.ExitCode -ne 0) { throw $installOutput }
-    if (!(Test-Path -LiteralPath $credentialMarker) -or
-        [IO.File]::ReadAllText($credentialMarker) -ne 'fixture-controller|fixture-controller\SaftThings') {
-        throw 'Installer did not save the per-controller credentials before restarting.'
-    }
+    if (Test-Path -LiteralPath $credentialMarker) { throw 'Experience must not set up remote Controller credentials.' }
     $installedId = [int]([IO.File]::ReadAllText((Join-Path $cache 'started.txt'))).Split('|')[0]
     if ($installedId -eq $firstId -or (Get-Process -Id $firstId -ErrorAction SilentlyContinue) -or
         !(Test-Path -LiteralPath (Join-Path $source 'admin-setup-requested.txt'))) { throw 'Installer did not call the shared restart script after setup.' }

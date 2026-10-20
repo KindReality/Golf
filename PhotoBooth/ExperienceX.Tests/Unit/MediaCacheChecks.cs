@@ -3,7 +3,7 @@ using System.Text.Json;
 using ExperienceX;
 using PhotoBooth.Networking;
 
-internal static class MediaDiscoveryChecks
+internal static class MediaCacheChecks
 {
     public static async Task Run()
     {
@@ -22,7 +22,7 @@ internal static class MediaDiscoveryChecks
             await File.WriteAllTextAsync(Path.Combine(first,"Ghosts","Deep","Same.mp4"),"ghost-video");
             await File.WriteAllTextAsync(Path.Combine(first,"Witches","Same.mp4"),"witch-video");
             await File.WriteAllTextAsync(Path.Combine(local, "local-only.mp4"), "retain");
-            var cache = new ControllerMediaCache();
+            var cache = new PhotoBooth.Media.MediaCache();
             try { await cache.SynchronizeAsync("missing",Path.Combine(root,"missing-share"),local,default);throw new Exception("An unavailable Controller share was reported as an empty successful sync"); }
             catch(DirectoryNotFoundException) { }
             await cache.SynchronizeAsync("host-one", first, local, default);
@@ -50,39 +50,19 @@ internal static class MediaDiscoveryChecks
             await cache.SynchronizeAsync("host-one", first, local, default);
             Check(File.ReadAllText(Path.Combine(local, "sound.wav")) == "updated-audio-version", "A previously locked file updates when it is available");
 
+            await cache.SynchronizeAsync("local-gateway", first, local, default, acceptManagedOwnershipTransfer: true);
+            await File.WriteAllTextAsync(Path.Combine(first, "sound.wav"), "gateway-updated");
+            await cache.SynchronizeAsync("local-gateway", first, local, default, acceptManagedOwnershipTransfer: true);
+            Check(File.ReadAllText(Path.Combine(local, "sound.wav")) == "gateway-updated" && File.ReadAllText(Path.Combine(local, "ping.mp4")) == "local-edit",
+                "Moving managed caches behind the local Controller keeps future updates working while preserving local edits");
+
             await File.WriteAllTextAsync(Path.Combine(local, ".controller-media-state.json"), "{\"ping.mp4\":null,\"sound.wav\":{}}");
             await cache.SynchronizeAsync("host-one", first, local, default);
             Check(File.ReadAllText(Path.Combine(local, "ping.mp4")) == "local-edit", "Invalid ownership metadata cannot crash synchronization or overwrite local media");
 
-            var clientOptions = new ExperienceOptions { DeviceName = "experience-client", VideoDirectory = Path.Combine(root, "video"), AudioDirectory = Path.Combine(root, "audio"), MediaDiscovery = new() { Attempts = 1 } };
-            var sent = new ConcurrentQueue<BroadcastEnvelope>();
-            await using var service = new ControllerMediaDiscovery(() => clientOptions, hostname => hostname == "host-one" ? first : second,
-                (bytes, _, _) => { sent.Enqueue(BroadcastEnvelope.Parse(bytes)); return Task.CompletedTask; });
-            service.Configure(clientOptions);
-            await Until(() => sent.Count == 1);
-            var probe = sent.Single();
-            Check(ControllerDiscovery.IsRequest(probe) && probe.Device == "*", "Startup discovery is broadcast to every Controller");
-            BroadcastEnvelope Reply(string hostname, string id) => BroadcastEnvelope.Parse(BroadcastEnvelope.Create(new() { DeviceName = hostname }, "event", clientOptions.EffectiveDeviceName,
-                new { @event = ControllerDiscovery.ResponseEvent, input = "controller", hostname, discoveryRequestId = id }));
-            service.Receive(Reply("host-one", "not-our-probe"));
-            await Until(() => File.Exists(Path.Combine(clientOptions.VideoDirectory, "sound.wav")));
-            Check(Directory.Exists(clientOptions.VideoDirectory), "Unsolicited controller announcements start local media synchronization");
-            service.Receive(Reply("host-one", probe.RequestId));
-            service.Receive(Reply("host-one", probe.RequestId));
-            await Until(() => File.Exists(Path.Combine(clientOptions.VideoDirectory, "sound.wav")) && File.Exists(Path.Combine(clientOptions.AudioDirectory, "sound.wav")));
-            service.Receive(Reply("host-two", probe.RequestId));
-            await Until(() => File.Exists(Path.Combine(clientOptions.VideoDirectory, "other.wav")) && File.Exists(Path.Combine(clientOptions.AudioDirectory, "other.wav")));
-            Check(File.ReadAllText(Path.Combine(clientOptions.VideoDirectory, "ping.mp4")) == "later-remote-version", "Multiple discovered Controllers populate both local audio and video directories without filename races");
-            try { ControllerDiscovery.MediaShare(@"host\other-share"); throw new Exception("An injected UNC path was accepted as a hostname."); }
-            catch (ArgumentException) { }
-            Check(ControllerDiscovery.MediaShare("ALPHA") == @"\\ALPHA\media", "Responses build only the fixed hostname/media UNC share");
-            clientOptions = clientOptions with { MediaDiscovery = new() { Enabled = false } };
-            service.Configure(clientOptions);
-            service.Receive(Reply("new-host", probe.RequestId));
-            Check(sent.Count == 1, "Disabling media discovery cancels discovery without sending more requests");
         }
         finally { Directory.Delete(root, true); }
-        Console.WriteLine("Passed Controller unsolicited announcements, multiple hosts, hierarchical local caching, atomic replacement, conflicts, locked files, UNC validation and disable/shutdown.");
+        Console.WriteLine("Passed hierarchical local caching, atomic replacement, ownership conflicts and locked-file retry.");
     }
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
     private static async Task Until(Func<bool> ready)

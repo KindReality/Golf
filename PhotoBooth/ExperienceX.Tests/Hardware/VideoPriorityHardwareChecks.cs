@@ -40,7 +40,7 @@ internal static class VideoPriorityHardwareChecks
                     screens[first].Add(new() { Id = "a", Name = "screen1" }); screens[second].Add(new() { Id = "b", Name = "screen2" });
                     var options = new ExperienceOptions
                     {
-                        DeveloperMode = true, DeviceName = "priority-client", MediaDiscovery = new() { Enabled = false },
+                        DeveloperMode = true, DeviceName = "priority-client", LocalController = new() { Enabled = false },
                         VideoDirectory = folder, AudioDirectory = folder, UdpCommandsPort = commands, UdpEventsPort = events, InventoryPort = FreeTcpPort(),
                         DisplayBackgrounds = displays.ToDictionary(display => display, _ => new DisplayBackgroundOptions { IsTransparent = true }),
                         DisplayScreens = screens, TransitionInSeconds = .05, TransitionOutSeconds = .1

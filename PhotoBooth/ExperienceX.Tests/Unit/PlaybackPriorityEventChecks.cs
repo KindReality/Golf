@@ -42,5 +42,15 @@ internal static class PlaybackPriorityEventChecks
         Check(leases[0] is null && blockers[0] == CommandPriority.High && leases[1] is not null && blockers[1] is null,
             "Blocking priority is captured atomically per output without reporting eligible screens");
         foreach (var lease in leases) lease?.Dispose();
+        events.Report(request with { RequestId = "last-hop-command", Chain = request.Chain! with { HopCount = BroadcastEnvelope.MaximumHops } },
+            @"\\.\DISPLAY1", "screen1", CommandPriority.High);
+        end = Environment.TickCount64 + 2000;
+        while (packets.Count < 3) { if (Environment.TickCount64 > end) throw new TimeoutException("Terminal conflict event not sent."); await Task.Delay(5); }
+        var terminal = BroadcastEnvelope.Parse(packets.Last());
+        Check(terminal.Event == PlaybackPriorityEvent.EventName && terminal.HopCount == BroadcastEnvelope.MaximumHops &&
+            BroadcastChain.From(terminal).CorrelationId == request.Chain!.CorrelationId,
+            "An exhausted causal chain still announces its conflict without resetting the loop-prevention budget");
+        try { BroadcastChain.From(terminal).Enter("another-trigger"); throw new Exception("Terminal event reopened the chain."); }
+        catch (InvalidOperationException) { Check(true, "Terminal conflict events cannot trigger an event feedback loop"); }
     }
 }

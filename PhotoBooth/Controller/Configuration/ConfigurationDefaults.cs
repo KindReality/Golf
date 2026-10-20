@@ -5,9 +5,17 @@ internal static class ConfigurationDefaults
 {
     public static string Populate(string text, BuildEnvironment build)
     {
-        var options = ControllerOptions.Parse(text, build);
+        using var document = System.Text.Json.JsonDocument.Parse(text);
+        ControllerOptions.RejectDuplicates(document.RootElement);
         var root = JsonNode.Parse(text)!.AsObject();
         var changed = false;
+        // Remove the retired scene assignment without deleting its playlist content.
+        if (root.FirstOrDefault(entry => ControllerOptions.Same(entry.Key, "Scenes")).Value is JsonArray existingScenes)
+            foreach (var scene in existingScenes.OfType<JsonObject>())
+                foreach (var key in scene.Select(entry => entry.Key).Where(key => ControllerOptions.Same(key, "DeactivatingPlaylist")).ToArray())
+                    changed |= scene.Remove(key);
+        var options = ControllerOptions.Parse(changed ? root.ToJsonString() : text, build);
+        if (!root.Any(p => ControllerOptions.Same(p.Key, "PeerDiscovery"))) { root["PeerDiscovery"] = System.Text.Json.JsonSerializer.SerializeToNode(options.PeerDiscovery); changed = true; }
         if (!root.Any(p => ControllerOptions.Same(p.Key, "ExperienceSupervisionEnabled"))) { root["ExperienceSupervisionEnabled"] = true; changed = true; }
         var existingPlaylists = root.FirstOrDefault(entry => ControllerOptions.Same(entry.Key, "Playlists")).Value as JsonArray;
         if (existingPlaylists is not null)
@@ -29,18 +37,27 @@ internal static class ConfigurationDefaults
         }
         if (options.Scenes.Length != 0)
             return changed ? root.ToJsonString(ControllerOptions.Json) : text;
-        var name = "default-ambient";
-        for (var index = 2; options.Playlists.Any(p => ControllerOptions.Same(p.Name, name)); ++index) name = "default-ambient" + index;
         var playlistKey = root.Select(p => p.Key).FirstOrDefault(k => ControllerOptions.Same(k, "Playlists")) ?? "Playlists";
         var sceneKey = root.Select(p => p.Key).FirstOrDefault(k => ControllerOptions.Same(k, "Scenes")) ?? "Scenes";
         var playlists = root[playlistKey] as JsonArray ?? new();
         if (root[playlistKey] is null) root[playlistKey] = playlists;
-        playlists.Add(new JsonObject { ["Name"] = name, ["Type"] = "ambient", ["Items"] = new JsonArray() });
-        root[sceneKey] = new JsonArray(new JsonObject { ["Name"] = "idle", ["AmbientPlaylist"] = name });
-        var activeAmbient = "active-ambient";
-        for (var index = 2; playlists.OfType<JsonObject>().Any(p => ControllerOptions.Same(p["Name"]?.GetValue<string>(), activeAmbient)); index++) activeAmbient = "active-ambient" + index;
-        playlists.Add(new JsonObject { ["Name"] = activeAmbient, ["Type"] = "ambient", ["Items"] = new JsonArray() });
-        ((JsonArray)root[sceneKey]!).Add(new JsonObject { ["Name"] = "active", ["AmbientPlaylist"] = activeAmbient });
+        var names = options.Playlists.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string AddEmptyPlaylist(string prefix, string type)
+        {
+            var name = prefix;
+            for (var suffix = 2; !names.Add(name); suffix++) name = prefix + suffix;
+            playlists.Add(new JsonObject { ["Name"] = name, ["Type"] = type, ["Items"] = new JsonArray() });
+            return name;
+        }
+        var scenes = new JsonArray();
+        foreach (var name in new[] { "idle", "active" })
+            scenes.Add(new JsonObject
+            {
+                ["Name"] = name,
+                ["ActivatingPlaylist"] = AddEmptyPlaylist(name + "-activating", "storyboard"),
+                ["AmbientPlaylist"] = AddEmptyPlaylist(name + "-ambient", "ambient")
+            });
+        root[sceneKey] = scenes;
         for (var zone = 1; zone <= 3; zone++)
         {
             var zoneName = "active-zone-" + zone;

@@ -18,7 +18,7 @@ internal static class MediaPathChecks
             var share = Path.Combine(root, "controller-share"); Directory.CreateDirectory(share);
             await File.WriteAllTextAsync(Path.Combine(share, "test.mp4"), "video-content");
             await File.WriteAllTextAsync(Path.Combine(share, "test.wav"), "audio-content");
-            var cache = new ControllerMediaCache();
+            var cache = new PhotoBooth.Media.MediaCache();
             Check(await cache.SynchronizeAsync("controller", share, expected, default), "Media could not be copied to the profile cache.");
             Directory.Move(share, share + "-offline");
             foreach (var file in new[] { "test.mp4", "test.wav" })

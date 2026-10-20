@@ -28,12 +28,12 @@ internal sealed class ConfigurationService : IAsyncDisposable
         if (!File.Exists(path))
         {
             var source = PhotoBooth.Configuration.MachineConfigurationFiles.Initialize(path,
-                applicationDirectory ?? AppContext.BaseDirectory, json => ControllerOptions.Parse(json, environment));
+                applicationDirectory ?? AppContext.BaseDirectory, json => ControllerOptions.Parse(ConfigurationDefaults.Populate(json, environment), environment));
             if (source is not null)
                 _log.Info("MachineConfigurationCreated", "Created computer configuration from shipped defaults", new { Path, Source = source, Hostname = Environment.MachineName });
             else if (!File.Exists(path) && File.Exists(path + ".bak"))
             {
-                var backup = File.ReadAllText(path + ".bak");
+                var backup = ConfigurationDefaults.Populate(File.ReadAllText(path + ".bak"), environment);
                 ControllerOptions.Parse(backup, environment);
                 ConfigurationDefaults.Write(path, backup);
                 _log.Info("ConfigurationRecoveredFromBackup", "Recovered computer configuration from backup", new { Path });
@@ -67,6 +67,21 @@ internal sealed class ConfigurationService : IAsyncDisposable
     }
 
     public Task SetConfigurationModeAsync(bool enabled) => EditAsync(root => root["ConfigurationMode"] = enabled);
+    public Task SavePinnedActionAsync(PinnedActionOptions? expected, PinnedActionOptions? next) => EditAsync(root =>
+    {
+        var current = ControllerOptions.Parse(root.ToJsonString(), _environment);
+        var id = next?.Id ?? expected?.Id ?? throw new ArgumentException("Choose a pinned action.");
+        var previous = current.PinnedActions.FirstOrDefault(p => p.Id == id);
+        if (PinnedActionOptions.Signature(previous) != PinnedActionOptions.Signature(expected))
+            throw new InvalidOperationException("This pin changed elsewhere. Reopen it before saving; your edit is retained.");
+        if (expected is not null && expected.Id != id) throw new ArgumentException("Pinned action IDs cannot change.");
+        next?.Validate(current);
+        var pins = current.PinnedActions.ToList();
+        var index = pins.FindIndex(p => p.Id == id);
+        if (index >= 0) { if (next is null) pins.RemoveAt(index); else pins[index] = next; }
+        else if (next is not null) pins.Add(next);
+        root["PinnedActions"] = System.Text.Json.JsonSerializer.SerializeToNode(pins, ControllerOptions.Json);
+    });
     public Task SaveShowAsync(ShowConfiguration expected, ShowConfiguration next) => EditAsync(root =>
     {
         var current = ControllerOptions.Parse(root.ToJsonString(), _environment);

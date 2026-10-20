@@ -100,12 +100,13 @@ internal sealed class PointConfigurationStore(string path)
         var changed = ConfigurationSchema.Upgrade(root);
         var defaults = JsonSerializer.SerializeToNode(new ExperienceOptions())!.AsObject();
         foreach (var name in new[] { "configurationMode", "PointHitDiameterPercent", "CalibrationGridEnabled", "RequestDeduplicationSeconds", "DisplayBackgrounds",
-            "DeviceName", "UdpEventsPort", "UdpCommandsPort", "UdpBroadcastAddress", "UdpInterfaceAddress", "UdpSendAttempts", "UdpRetryDelayMilliseconds", "RequestLifetimeSeconds", "MediaDiscovery", "VideoDirectory", "AudioDirectory", "AudioDevices" })
+            "DeviceName", "UdpEventsPort", "UdpCommandsPort", "UdpBroadcastAddress", "UdpInterfaceAddress", "UdpSendAttempts", "UdpRetryDelayMilliseconds", "RequestLifetimeSeconds", "LocalController", "VideoDirectory", "AudioDirectory", "AudioDevices" })
             if (!root.ContainsKey(name))
             {
                 root[name] = defaults[name]?.DeepClone();
                 changed = true;
             }
+        changed |= root.Remove("MediaDiscovery");
         if (root["DisplayScreens"] is not JsonObject configured)
         {
             configured = new JsonObject(new JsonNodeOptions { PropertyNameCaseInsensitive = true });

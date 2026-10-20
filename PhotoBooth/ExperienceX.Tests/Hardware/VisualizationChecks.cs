@@ -43,7 +43,7 @@ internal static class VisualizationChecks
                         ConfigurationMode = true, CalibrationGridEnabled = false, DefaultDisplayName = primary,
                         UdpCommandsPort = ((IPEndPoint)commands.Client.LocalEndPoint!).Port,
                         UdpEventsPort = ((IPEndPoint)events.Client.LocalEndPoint!).Port,
-                        MediaDiscovery = new() { Enabled = false }, TransitionInSeconds = .1,
+                        LocalController = new() { Enabled = false }, TransitionInSeconds = .1,
                         DisplayScreens = displays.ToDictionary(d => d.DeviceName, _ => new List<ScreenOptions>()),
                         DisplayBackgrounds = displays.ToDictionary(d => d.DeviceName, _ => new DisplayBackgroundOptions { BackgroundColor = "#102030" })
                     };

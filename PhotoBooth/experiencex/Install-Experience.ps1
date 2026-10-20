@@ -1,4 +1,4 @@
-param([string]$Source = $PSScriptRoot, [switch]$Plan, [switch]$ConfigureMachine, [string]$ResultFile, [string[]]$ControllerHostnames = @(), [string]$RuntimePath, [switch]$RepairMachine)
+param([string]$Source = $PSScriptRoot, [switch]$Plan, [switch]$ConfigureMachine, [string]$ResultFile, [string]$RuntimePath, [switch]$RepairMachine)
 $ErrorActionPreference = 'Stop'
 
 
@@ -16,7 +16,7 @@ try {
     }
     $restart = Join-Path $sourcePath 'Restart-Experience.ps1'
     if ($Plan) {
-        [pscustomobject]@{Source=$sourcePath;Restart=$restart;MediaUser='SaftThings';CredentialStorage='Windows Credential Manager (current user)';FirewallProfile='Private, Public';FirewallScope='LocalSubnet';UdpPorts=@(54242,54243,5353);TcpPorts=@(54245)} | ConvertTo-Json
+        [pscustomobject]@{Source=$sourcePath;Restart=$restart;Controller='127.0.0.1:54244';FirewallProfile='Private, Public';FirewallScope='LocalSubnet';UdpPorts=@(54242,54243,5353);TcpPorts=@(54245)} | ConvertTo-Json
         exit 0
     }
     # Create the current user's entry before runtime, network or application startup can fail.
@@ -28,17 +28,6 @@ try {
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $restart -SourceDirectory $sourcePath -ValidateOnly
     if ($LASTEXITCODE -ne 0) { throw 'Experience startup checks failed; installation canceled.' }
-    if ($ControllerHostnames.Count -eq 0) {
-        $ControllerHostnames = @((Read-Host 'Controller computer name(s), separated by commas'))
-    }
-    $controllerNames = @($ControllerHostnames | ForEach-Object { $_ -split ',' } |
-        ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
-    if ($controllerNames.Count -eq 0) { throw 'Enter at least one Controller computer name.' }
-    foreach ($controllerName in $controllerNames) {
-        if ($controllerName.Length -gt 253 -or $controllerName -notmatch '^[A-Za-z0-9_]+(?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?$') {
-            throw 'Use Controller computer names only, such as ALPHA; do not enter a UNC path or share name.'
-        }
-    }
     $result = Join-Path ([IO.Path]::GetTempPath()) ('Experience-install-'+[Guid]::NewGuid().ToString('N')+'.txt')
     $setup = Join-Path $sourcePath 'Install-Experience.ps1'
     $arguments = '-NoProfile -ExecutionPolicy Bypass -File "'+$setup+'" -ConfigureMachine -ResultFile "'+$result+'" -RuntimePath "'+(Join-Path ([IO.Path]::GetTempPath()) 'Experience\ExperienceX.exe')+'"'
@@ -51,47 +40,6 @@ try {
             }
         } finally { if (Test-Path -LiteralPath $result) { Remove-Item -LiteralPath $result -Force } }
     } else { Write-Host 'Network setup is already current; no administrator prompt is needed.' }
-    # Save for the current user, outside OneDrive and outside the elevated firewall process.
-    # Native CredWrite keeps the password out of child-process command lines.
-    if (!('HomeTechnologies.MediaCredentialStore' -as [type])) {
-        Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-namespace HomeTechnologies {
-    public static class MediaCredentialStore {
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        private struct Credential {
-            public uint Flags, Type;
-            public string TargetName, Comment;
-            public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
-            public uint CredentialBlobSize;
-            public IntPtr CredentialBlob;
-            public uint Persist, AttributeCount;
-            public IntPtr Attributes;
-            public string TargetAlias, UserName;
-        }
-        [DllImport("advapi32.dll", EntryPoint = "CredWriteW", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool CredWrite(ref Credential credential, uint flags);
-        public static void Save(string hostname, string username, string password) {
-            IntPtr secret = Marshal.StringToCoTaskMemUni(password);
-            try {
-                var credential = new Credential {
-                    Type = 2, TargetName = hostname, UserName = username,
-                    CredentialBlobSize = checked((uint)(password.Length * 2)),
-                    CredentialBlob = secret, Persist = 2
-                };
-                if (!CredWrite(ref credential, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
-            } finally { Marshal.ZeroFreeCoTaskMemUnicode(secret); }
-        }
-    }
-}
-'@
-    }
-    foreach ($controllerName in $controllerNames) {
-        [HomeTechnologies.MediaCredentialStore]::Save($controllerName, ($controllerName+'\SaftThings'), '10375Saft')
-        Write-Host ('Saved media credentials for \\'+$controllerName+'\media as '+$controllerName+'\SaftThings')
-    }
     & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $restart -SourceDirectory $sourcePath
     if ($LASTEXITCODE -ne 0) { throw 'Experience restart failed. Review the error above.' }
     Write-Host 'Experience installation complete. Use Restart-Experience.cmd for future updates.'

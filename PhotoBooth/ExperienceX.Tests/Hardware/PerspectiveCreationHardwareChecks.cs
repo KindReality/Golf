@@ -40,7 +40,7 @@ internal static class PerspectiveCreationHardwareChecks
                     var display=Forms.Screen.PrimaryScreen!;var width=.5*display.Bounds.Height/display.Bounds.Width;
                     var points=new PointOptions{Enabled=true,TopLeft=new(.5-width/2,.25),TopRight=new(.5+width/2,.25),BottomLeft=new(.5-width/2,.75),BottomRight=new(.5+width/2,.75)};
                     var media=Path.Combine(root,"Media");Directory.CreateDirectory(media);
-                    var options=new ExperienceOptions{DeviceName="crop-experience-test",DeveloperMode=true,ConfigurationMode=true,MediaDiscovery=new(){Enabled=false},VideoDirectory=media,AudioDirectory=media,UdpCommandsPort=commands,UdpEventsPort=events,UdpSendAttempts=3,
+                    var options=new ExperienceOptions{DeviceName="crop-experience-test",DeveloperMode=true,ConfigurationMode=true,LocalController=new(){MediaSyncEnabled=false},VideoDirectory=media,AudioDirectory=media,UdpCommandsPort=commands,UdpEventsPort=events,UdpSendAttempts=3,
                         DisplayBackgrounds=Forms.Screen.AllScreens.ToDictionary(d=>d.DeviceName,_=>new DisplayBackgroundOptions{IsTransparent=true}),
                         DisplayScreens=Forms.Screen.AllScreens.ToDictionary(d=>d.DeviceName,d=>d.Primary ? new List<ScreenOptions>{new(){Id="shape",Name="Shape",Points=points}} : [])};
                     var xPath=Path.Combine(root,"experience.json");File.WriteAllText(xPath,JsonSerializer.Serialize(options));

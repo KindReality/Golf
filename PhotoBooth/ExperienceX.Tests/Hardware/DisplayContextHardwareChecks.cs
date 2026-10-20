@@ -36,7 +36,7 @@ internal static class DisplayContextHardwareChecks
                     var options = new ExperienceOptions
                     {
                         DeveloperMode = true, ConfigurationMode = true, DefaultDisplayName = defaultDisplay,
-                        MediaDiscovery = new() { Enabled = false }, VideoDirectory = root, AudioDirectory = root,
+                        LocalController = new() { Enabled = false }, VideoDirectory = root, AudioDirectory = root,
                         UdpCommandsPort = commands, UdpEventsPort = events,
                         DisplayBackgrounds = displays.ToDictionary(d => d.DeviceName, _ => new DisplayBackgroundOptions { IsTransparent = true }),
                         DisplayScreens = displays.ToDictionary(d => d.DeviceName, _ => new List<ScreenOptions>())

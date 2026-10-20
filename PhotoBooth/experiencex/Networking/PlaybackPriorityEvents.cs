@@ -38,11 +38,22 @@ internal sealed class PlaybackPriorityEvents : IAsyncDisposable
                 {
                     var settings = _options(); var request = notice.Request;
                     var label = settings.DisplayAliases.FirstOrDefault(p => p.Value.Equals(notice.Display, StringComparison.OrdinalIgnoreCase)).Key ?? notice.Display;
-                    var chain = request.Chain?.Enter($"{settings.EffectiveDeviceName}/event:{PlaybackPriorityEvent.EventName}");
+                    var chain = request.Chain;
+                    if (chain is not null)
+                    {
+                        try { chain = chain.Enter($"{settings.EffectiveDeviceName}/event:{PlaybackPriorityEvent.EventName}"); }
+                        catch (InvalidOperationException)
+                        {
+                            // Still announce the conflict, but do not reopen an exhausted
+                            // event chain. Receivers cannot trigger further work from it.
+                            chain = chain with { HopCount = BroadcastEnvelope.MaximumHops };
+                        }
+                    }
                     var bytes = PlaybackPriorityEvent.Create(settings, request.Source!, request.RequestId, request.Value,
                         notice.Display, label, notice.Screen, request.EffectivePriority, notice.ActivePriority, request.Loop, request.Context, chain);
                     await _send(bytes, settings, _stop.Token).ConfigureAwait(false);
-                    Telemetry.Info("PlaybackPriorityEventSent", new { request.RequestId, notice.Display, notice.Screen, request.Value, Deferred = request.Loop });
+                    Telemetry.Info("PlaybackPriorityEventSent", new { request.RequestId, notice.Display, notice.Screen, request.Value,
+                        RequestedPriority = request.EffectivePriority, notice.ActivePriority, Deferred = request.Loop });
                 }
                 catch (OperationCanceledException) when (_stop.IsCancellationRequested) { break; }
                 catch (Exception ex) { Telemetry.Error("PlaybackPriorityEventFailed", ex, new { notice.Request.RequestId, notice.Display, notice.Screen }); }

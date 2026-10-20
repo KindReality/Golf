@@ -45,7 +45,7 @@ internal static class ScreenMediaBindingHardwareChecks
                     PointOptions Region(double left, double right) => new() { Enabled = true, TopLeft = new(left, 0), TopRight = new(right, 0), BottomLeft = new(left, 1), BottomRight = new(right, 1) };
                     var options = new ExperienceOptions
                     {
-                        DeviceName = "binding-client", DeveloperMode = true, MediaDiscovery = new() { Enabled = false },
+                        DeviceName = "binding-client", DeveloperMode = true, LocalController = new() { Enabled = false },
                         VideoDirectory = media, UdpCommandsPort = commands, UdpEventsPort = events, UdpSendAttempts = 1,
                         TransitionInSeconds = .05, TransitionOutSeconds = .1,
                         DisplayBackgrounds = Forms.Screen.AllScreens.ToDictionary(s => s.DeviceName, _ => new DisplayBackgroundOptions { IsTransparent = true }),
