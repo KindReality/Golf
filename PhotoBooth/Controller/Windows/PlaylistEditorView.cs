@@ -13,9 +13,11 @@ internal sealed class PlaylistEditorView : UserControl
     private readonly ExperiencePeer[] _peers;
     private readonly string[] _media;
     private readonly string[] _serialDevices;
+    private readonly string[] _knownRoles;
     private readonly Action _changed;
     private readonly TextBox _name;
     private readonly TextBox _duration;
+    private readonly TextBox? _minimumDuration, _maximumDuration;
     private readonly ComboBox _audioOutputMode;
     private readonly Label _error = new() { AutoSize = true, ForeColor = DarkTheme.Error, Dock = DockStyle.Top };
     private readonly ListView _items = List("Item", "Timing (ms)", "Commands");
@@ -23,7 +25,7 @@ internal sealed class PlaylistEditorView : UserControl
     private readonly Panel _inspector = new() { Dock = DockStyle.Fill, Padding = new(10), BackColor = DarkTheme.Surface };
     private TextBox? _itemName;
     private ComboBox? _roles, _mode;
-    private CheckBox? _enabled, _subwoofer;
+    private CheckBox? _enabled;
     private NumericUpDown? _delay, _minimum, _maximum, _cooldown;
     private ListView? _commands;
     private Panel? _commandPanel;
@@ -31,19 +33,34 @@ internal sealed class PlaylistEditorView : UserControl
     private List<PlaylistCommand> _commandValues = [];
     private int _item = -1, _command = -1, _dragItem = -1;
     private bool _loading;
-    internal PlaylistEditorView(PlaylistOptions playlist, ShowConfiguration show, ControllerOptions options, ExperiencePeer[] peers, string[] media, string[] uses, Action changed, string[]? serialDevices = null)
+    internal PlaylistEditorView(PlaylistOptions playlist, ShowConfiguration show, ControllerOptions options, ExperiencePeer[] peers, string[] media, string[] uses, Action changed, string[]? serialDevices = null, string[]? roles = null)
     {
         _value = playlist; _show = show; _options = options; _peers = peers; _media = media; _changed = changed;
         _serialDevices = serialDevices ?? [];
+        _knownRoles = roles ?? [];
         Dock = DockStyle.Fill; BackColor = DarkTheme.Background;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Margin = Padding.Empty };
-        layout.RowStyles.Add(new(SizeType.Absolute, 168)); layout.RowStyles.Add(new(SizeType.Absolute, 108));
+        layout.RowStyles.Add(new(SizeType.Absolute, playlist.Type == "storyboard" ? 220 : 168)); layout.RowStyles.Add(new(SizeType.Absolute, 108));
         layout.RowStyles.Add(new(SizeType.Percent, 100)); layout.RowStyles.Add(new(SizeType.Absolute, 24));
         var heading = new ShowEditorFields(); _name = TextField(playlist.Name); heading.Field(playlist.Type == "ambient" ? "Ambient playlist" : "Storyboard playlist", _name);
         _duration = TextField(playlist.DurationMilliseconds?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "");
         _duration.PlaceholderText = playlist.Type == "ambient" ? "Empty = indefinite" : "Empty = automatic";
-        heading.Field("Duration (ms)", _duration); Watch(_duration, changed);
-        _duration.AccessibleName = "Playlist duration milliseconds";
+        if (playlist.Type == "ambient")
+        {
+            heading.Field("Scheduling duration (ms)", _duration); Watch(_duration, changed);
+            _duration.AccessibleName = "Playlist duration milliseconds";
+        }
+        else
+        {
+            var limits = new ShowEditorFields(fieldColumns: 2);
+            _minimumDuration = TextField((playlist.EffectiveMinimumDurationMilliseconds / 1000m).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+            _maximumDuration = TextField(playlist.MaximumDurationMilliseconds is { } maximum ? (maximum / 1000m).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) : "");
+            _minimumDuration.PlaceholderText = "Default = 5 seconds"; _maximumDuration.PlaceholderText = "Empty = no maximum";
+            limits.Field("Minimum duration (seconds)", _minimumDuration); limits.Field("Maximum duration (seconds)", _maximumDuration);
+            heading.Wide(limits); Watch(_minimumDuration, changed); Watch(_maximumDuration, changed);
+            _minimumDuration.AccessibleName = "Playlist minimum duration seconds";
+            _maximumDuration.AccessibleName = "Playlist maximum duration seconds";
+        }
         _audioOutputMode = Choice(["Configured", "Random"], playlist.AudioOutputMode);
         heading.Field("Audio outputs", _audioOutputMode); Watch(_audioOutputMode, changed);
         var usage = Note(uses.Length == 0 ? "Standalone playlist • available to manual and network commands" : "Used by " + string.Join(" · ", uses)); usage.Height = 30; heading.Wide(usage);
@@ -70,14 +87,28 @@ internal sealed class PlaylistEditorView : UserControl
     private void Changed() { if (!_loading) _changed(); }
     internal PlaylistOptions Read()
     {
-        CommitItem(); int? duration = null;
-        if (!string.IsNullOrWhiteSpace(_duration.Text))
+        CommitItem(); int? duration = null, minimum = null, maximum = null;
+        if (_value.Type == "ambient" && !string.IsNullOrWhiteSpace(_duration.Text))
         {
             if (!int.TryParse(_duration.Text, out var parsed) || parsed is < 0 or > 86400000)
                 throw new ArgumentException("Playlist duration must be 0–86400000 milliseconds, or empty for automatic/indefinite.");
             duration = parsed;
         }
-        return _value with { Name = _name.Text.Trim(), DurationMilliseconds = duration, AudioOutputMode = _audioOutputMode.Text };
+        if (_value.Type == "storyboard")
+        {
+            minimum = ReadSeconds(_minimumDuration!, false); maximum = ReadSeconds(_maximumDuration!, true);
+            if (maximum is { } cap && cap < (minimum ?? 5000)) throw new ArgumentException("Maximum duration must be at least the minimum duration.");
+        }
+        return _value with { Name = _name.Text.Trim(), DurationMilliseconds = duration, MinimumDurationMilliseconds = minimum,
+            MaximumDurationMilliseconds = maximum, AudioOutputMode = _audioOutputMode.Text };
+    }
+    private static int? ReadSeconds(TextBox control, bool maximum)
+    {
+        if (string.IsNullOrWhiteSpace(control.Text)) return null;
+        if (!decimal.TryParse(control.Text.Trim(), System.Globalization.NumberStyles.AllowDecimalPoint | System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture, out var seconds) || seconds < (maximum ? .001m : 0) || seconds > 86400 || decimal.Truncate(seconds * 1000) != seconds * 1000)
+            throw new ArgumentException("Use seconds with up to three decimal places; minimum can be zero, maximum must be positive, and the limit is 86400 seconds.");
+        return (int)(seconds * 1000);
     }
     private void CommitCommand()
     { if (_commandEditor is not null && _command >= 0) _commandValues[_command] = _commandEditor.Read(); }
@@ -88,7 +119,7 @@ internal sealed class PlaylistEditorView : UserControl
         var next = _value.Items.ToArray(); next[_item] = next[_item] with { Name = _itemName.Text.Trim(), Enabled = _enabled!.Checked,
             DelayMilliseconds = _delay is null ? 0 : (int)_delay.Value, MinIntervalMilliseconds = _minimum is null ? null : (int)_minimum.Value,
             MaxIntervalMilliseconds = _maximum is null ? null : (int)_maximum.Value, CooldownMilliseconds = (int)_cooldown!.Value,
-            Roles = _roles!.Text.Trim(), BroadcastMode = _mode!.Text, IncludeSubwoofer = _subwoofer!.Checked, Commands = _commandValues.ToArray() };
+            Roles = _roles!.Text.Trim(), BroadcastMode = _mode!.Text, Commands = _commandValues.ToArray() };
         _value = _value with { Items = next };
     }
     private void RenderItems()
@@ -118,9 +149,9 @@ internal sealed class PlaylistEditorView : UserControl
         { _minimum = Number(item.MinIntervalMilliseconds ?? 10000); _minimum.Minimum = 1; _maximum = Number(item.MaxIntervalMilliseconds ?? 30000); _maximum.Minimum = 1; fields.Field("Minimum interval (ms)", _minimum); fields.Field("Maximum interval (ms)", _maximum); }
         else { _delay = Number(item.DelayMilliseconds); fields.Field("Wait before item (ms)", _delay); }
         _cooldown = Number(item.CooldownMilliseconds); fields.Field("Cooldown (ms)", _cooldown);
-        _roles = Choice(LivePlayback.Roles(_peers).Select(r => r.Name), item.Roles, true); fields.Field("Roles (comma-separated)", _roles);
+        var roles = PhotoBooth.Networking.RoleCatalog.Names(_knownRoles.Concat(PlaylistRoles.Names(_show.Playlists.Append(_value))).Concat(LivePlayback.Roles(_peers).Select(r => r.Name)));
+        _roles = Choice(roles, item.Roles, true); fields.Field("Roles (comma-separated)", _roles);
         _mode = Choice(["Broadcast", "Random"], item.BroadcastMode); fields.Field("Role selection", _mode);
-        _subwoofer = Check("Include subwoofer", item.IncludeSubwoofer); fields.Wide(_subwoofer);
         fields.Wide(Note(_value.Type == "ambient" ? "Each enabled item runs independently at a random interval. Cooldown must fit within its maximum interval." : "Items run in order. The delay is measured after the previous item's commands are dispatched; media can continue playing."));
         _commandValues = item.Commands.ToList();
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
@@ -139,7 +170,7 @@ internal sealed class PlaylistEditorView : UserControl
         itemTab = Button("Item", () => Tab(false)); commandTab = Button("Commands", () => Tab(true));
         root.Controls.Add(Toolbar(itemTab, commandTab), 0, 0); body.Controls.Add(itemPage); body.Controls.Add(commandsPage); root.Controls.Add(body, 0, 1);
         _inspector.Controls.Add(root); Tab(false);
-        foreach (var c in new Control?[] { _itemName, _enabled, _delay, _minimum, _maximum, _cooldown, _roles, _mode, _subwoofer }.OfType<Control>()) Watch(c, Changed);
+        foreach (var c in new Control?[] { _itemName, _enabled, _delay, _minimum, _maximum, _cooldown, _roles, _mode }.OfType<Control>()) Watch(c, Changed);
         foreach (var number in new[] { _delay, _minimum, _maximum }.OfType<NumericUpDown>()) number.ValueChanged += (_, _) =>
         { if (!_loading && Attempt(CommitItem)) RenderItems(); };
         RenderCommands(); _loading = false; if (_commandValues.Count > 0) SelectCommand(0);

@@ -30,9 +30,9 @@ internal static class RolePlaylistChecks
         }
         var scoped = PlaylistRoleTarget.Apply(video with { Device = "projection-pc" }, "Scary");
         Check(scoped.Device == "projection-pc", "An explicit device limits role targeting to that computer.");
-        Check(ControllerOptions.Text(PlaylistRoleTarget.Apply(audio, "^subwoofer,*", true).Payload, "roles") == "^subwoofer,*,subwoofer" &&
-            !RoleList.Matches("subwoofer", ControllerOptions.Text(PlaylistRoleTarget.Apply(audio, "^subwoofer,*", true).Payload, "roles")),
-            "An earlier exclusion takes precedence over the later IncludeSubwoofer rule.");
+        Check(ControllerOptions.Text(PlaylistRoleTarget.Apply(audio, "^subwoofer,*").Payload, "roles") == "^subwoofer,*" &&
+            !RoleList.Matches("subwoofer", ControllerOptions.Text(PlaylistRoleTarget.Apply(audio, "^subwoofer,*").Payload, "roles")),
+            "Audio exclusion rules are sent unchanged and take precedence over the wildcard.");
         Check(PlaylistRoleTarget.Select(item with { Roles = "^subwoofer,Left,Right", BroadcastMode = "Random" }, null, count => { Check(count == 2, "Exclusions are not random choices."); return 1; }) == "^subwoofer,Right",
             "Random role targeting retains every exclusion with the selected positive role.");
         var loop = video with { Payload = JsonSerializer.SerializeToElement(new { experience = "video", value = "Eye.mp4", loop = true, mute = true }) };
@@ -60,14 +60,14 @@ internal static class RolePlaylistChecks
         Reject(() => PlaylistRoleTarget.Apply(video with { Payload = JsonSerializer.SerializeToElement(new { experience = "video", value = "Eye.mp4", roles = "Scary", screen = "*" }) }, ""));
         Reject(() => PlaylistRoleTarget.Apply(video with { Payload = JsonSerializer.SerializeToElement(new { experience = "video", value = "Eye.mp4", roles = 42 }) }, ""));
         Reject(() => Valid(options with { Playlists = [new() { Name = "background", Type = "ambient" }, new() { Name = "invalid", Items = [item with { Roles = "^" }] }] }));
-        var randomItem = new PlaylistItem { Name = "random", Roles = "Left,Right,left", BroadcastMode = "Random", IncludeSubwoofer = true, MinIntervalMilliseconds = 20, MaxIntervalMilliseconds = 20, Commands = [video, audio] };
+        var randomItem = new PlaylistItem { Name = "random", Roles = "Left,Right,left", BroadcastMode = "Random", MinIntervalMilliseconds = 20, MaxIntervalMilliseconds = 20, Commands = [video, audio] };
         var randomOptions = Valid(options with { Playlists = [new() { Name = "background", Type = "ambient", Items = [randomItem] }] });
         recorder = new(); var choices = 0;
         await using (var engine = new PlaylistEngine(randomOptions, recorder, new ActivityLog()) { ChooseRole = count => { Check(count == 2, "Random role candidates must be distinct ignoring case."); return choices++ == 0 ? 1 : 0; } })
         {
             await engine.RunAmbientItem(randomOptions.Playlist("background"), randomItem, randomOptions, "idle", CancellationToken.None).Completion;
             await engine.RunAmbientItem(randomOptions.Playlist("background"), randomItem, randomOptions, "idle", CancellationToken.None).Completion;
-            Check(choices == 2 && recorder.Commands.Select(c => ControllerOptions.Text(c.Payload, "roles")).SequenceEqual(["Right", "Right,subwoofer", "Left", "Left,subwoofer"]), "Random chooses once per execution, retains that choice for all commands, and adds subwoofer only to audio.");
+            Check(choices == 2 && recorder.Commands.Select(c => ControllerOptions.Text(c.Payload, "roles")).SequenceEqual(["Right", "Right", "Left", "Left"]), "Random chooses once per execution and retains the same roles for video and audio commands.");
             Check(recorder.Commands.All(c => c.Device == "*" && c.Context?.IsAmbient == true) && recorder.Commands.Where(c => ControllerOptions.Text(c.Payload, "experience") == "audio").All(c => c.Payload.GetProperty("volume").GetInt32() == 35), "Random role targeting preserves ambient priority, broadcast destinations and audio volume.");
         }
         var broadcastItem = randomItem with { BroadcastMode = "Broadcast", Roles = "Left,Right,Subwoofer,SUBWOOFER" };
@@ -84,16 +84,17 @@ internal static class RolePlaylistChecks
         await using (var engine = new PlaylistEngine(nestedOptions, recorder, new ActivityLog()) { ChooseRole = _ => { ++choices; return 0; } })
         {
             await engine.RunAmbientItem(nestedOptions.Playlist("background"), nestedItem, nestedOptions, "idle", CancellationToken.None).Completion;
-            Check(choices == 1 && recorder.Commands.Select(c => ControllerOptions.Text(c.Payload, "roles")).SequenceEqual(["Left", "Welcome,subwoofer"]), "Nested storyboards inherit the chosen role and subwoofer option; explicit child roles still override the normal target.");
+            Check(choices == 1 && recorder.Commands.Select(c => ControllerOptions.Text(c.Payload, "roles")).SequenceEqual(["Left", "Welcome"]), "Nested storyboards inherit the chosen role; explicit child roles override the inherited target.");
         }
-        Check(ControllerOptions.Text(PlaylistRoleTarget.Apply(audio, "Left", false).Payload, "roles") == "Left" && ControllerOptions.Text(PlaylistRoleTarget.Apply(video, "Left", true).Payload, "roles") == "Left", "Subwoofer remains opt-in and never modifies video targets.");
+        Check(ControllerOptions.Text(PlaylistRoleTarget.Apply(audio, "Subwoofer").Payload, "roles") == "Subwoofer" && PlaylistRoleTarget.Apply(audio, "") == audio,
+            "Subwoofer is an ordinary role; empty roles preserve existing direct audio targeting.");
         Reject(() => Valid(randomOptions with { Playlists = [new() { Name = "background", Type = "ambient", Items = [randomItem with { Roles = "" }] }] }));
         Reject(() => Valid(randomOptions with { Playlists = [new() { Name = "background", Type = "ambient", Items = [randomItem with { BroadcastMode = "Unknown" }] }] }));
-        Reject(() => Valid(randomOptions with { Playlists = [new() { Name = "background", Type = "ambient", Items = [randomItem with { BroadcastMode = "Broadcast", Roles = "" }] }] }));
+        _ = Valid(randomOptions with { Playlists = [new() { Name = "background", Type = "ambient", Items = [randomItem with { BroadcastMode = "Broadcast", Roles = "", Commands = [audio with { Device = "*" }] }] }] });
         var populated = ConfigurationDefaults.Populate(JsonSerializer.Serialize(options, ControllerOptions.Json), new("Development", 1000));
         using (var defaultsDocument = JsonDocument.Parse(populated))
-            Check(defaultsDocument.RootElement.GetProperty("Playlists").EnumerateArray().SelectMany(p => p.GetProperty("Items").EnumerateArray()).All(i => i.TryGetProperty("BroadcastMode", out _) && i.TryGetProperty("IncludeSubwoofer", out _)), "Configuration includes editable BroadcastMode and IncludeSubwoofer defaults.");
-        Console.WriteLine("Passed role routing, Random/Broadcast selection, audio-only subwoofer inclusion, nested inheritance, loop continuity and configuration validation.");
+            Check(defaultsDocument.RootElement.GetProperty("Playlists").EnumerateArray().SelectMany(p => p.GetProperty("Items").EnumerateArray()).All(i => i.TryGetProperty("BroadcastMode", out _) && i.TryGetProperty("Roles", out _)), "Configuration includes editable BroadcastMode and Roles defaults.");
+        Console.WriteLine("Passed role routing, Random/Broadcast selection, ordered exclusions, nested inheritance, loop continuity and configuration validation.");
     }
     private sealed class Recorder : ICommandDispatcher
     {

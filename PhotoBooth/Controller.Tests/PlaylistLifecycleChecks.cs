@@ -14,7 +14,7 @@ internal static class PlaylistLifecycleChecks
     private static PlaylistCommand Cmd(object body) => new() { Device = "*", Payload = JsonSerializer.SerializeToElement(body) };
     private static PlaylistCommand Video(bool loop = false) => Cmd(new { experience = "video", value = "test.mp4", screen = "*", loop });
     private static PlaylistItem Item(string name, params PlaylistCommand[] commands) => new() { Name = name, Commands = commands };
-    private static PlaylistOptions Board(string name, int? duration, params PlaylistItem[] items) => new() { Name = name, DurationMilliseconds = duration, Items = items };
+    private static PlaylistOptions Board(string name, int? duration, params PlaylistItem[] items) => new() { Name = name, MinimumDurationMilliseconds = duration ?? 0, Items = items };
     private static ControllerOptions Options(params PlaylistOptions[] lists) => new()
     {
         DeviceName = "lifecycle-test", Build = new("Development", 1000),
@@ -35,7 +35,7 @@ internal static class PlaylistLifecycleChecks
             clock.Restart(); await engine.Run("loop").Completion;
             Check(clock.ElapsedMilliseconds >= 115 && clock.ElapsedMilliseconds < 1000, "Loop playback does not extend automatic media duration.");
             await engine.Run("bad-loop").Completion;
-            Check(log.Snapshot().Any(e => e.Message.Contains("only looping media needs an explicit duration")), "Loop-only triggered playlists require an explicit duration.");
+            Check(!log.Snapshot().Any(e => e.Level == "Error"), "Loop-only playlists complete using their minimum without waiting for looping media.");
             Check(recording.Commands.Take(2).All(c => c.Priority == CommandPriority.Medium) && recording.Commands.Skip(2).All(c => c.Priority == CommandPriority.Low), "Triggered one-shots are medium priority; loops are always low.");
         }
         options = Options(Board("zone1", 170, Item("activate", Cmd(new { command = "scene", value = "active" })), Item("one", Video())), Board("zone2", 370, Item("activate", Cmd(new { command = "scene", value = "active" })), Item("two", Cmd(new { experience = "audio", value = "test.wav" }))));

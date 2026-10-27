@@ -24,10 +24,16 @@ internal static class Program
     {
         try
         {
-            if(args.SequenceEqual(["--scene-cancellation"])) SceneCancellationChecks.Run().GetAwaiter().GetResult();
+            if(args.SequenceEqual(["--loop-announcements"])) LoopAnnouncementChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--role-catalog"])) RoleCatalogChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--video-speed"])) VideoSpeedChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--video-fade"])) VideoFadeChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--scene-cancellation"])) SceneCancellationChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--scene-next"])) SceneTransitionChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--playlist-bounds"])) PlaylistBoundsChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--scene-transitions"])) { SceneTestsAsync().GetAwaiter().GetResult(); VideoLoopTestsAsync().GetAwaiter().GetResult(); }
             else if(args.SequenceEqual(["--controller-peers"])) ControllerPeerChecks.Run().GetAwaiter().GetResult();
+            else if(args.SequenceEqual(["--media-sync"])) { PlaylistMediaValidationChecks.Run(); ControllerPeerChecks.Run().GetAwaiter().GetResult(); }
             else if(args.SequenceEqual(["--manual-actions"])) ManualActionChecks.Run().GetAwaiter().GetResult();
             else if(args.SequenceEqual(["--scene-defaults"])) SceneDefaultsChecks.Run();
             else if(args.SequenceEqual(["--scene-playlists"])) ScenePlaylistChecks.Run().GetAwaiter().GetResult();
@@ -53,6 +59,7 @@ internal static class Program
             else if (args.SequenceEqual(["--preview-playback"])) PerspectivePreviewPlaybackChecks.Run().GetAwaiter().GetResult();
             else if (args.SequenceEqual(["--perspectives"])) PerspectiveEditorChecks.Run().GetAwaiter().GetResult();
             else if (args.SequenceEqual(["--updates"])) BuildUpdateChecks.Run("Controller").GetAwaiter().GetResult();
+            else if (args.SequenceEqual(["--window-startup"])) StartupWindowChecks.Run();
             else if (args.Contains("--window")) Window();
             else if (args.Contains("--host")) HostAsync().GetAwaiter().GetResult();
             else UnitAsync().GetAwaiter().GetResult();
@@ -71,7 +78,7 @@ internal static class Program
     private static JsonElement Body(object value) => JsonSerializer.SerializeToElement(value);
     private static PlaylistCommand Command(string device = "target") => new() { Device = device, Payload = Body(new { command = "test" }) };
     private static PlaylistItem Item(string name, int delay = 0, string? device = null) => new() { Name = name, DelayMilliseconds = delay, Commands = [Command(device ?? name)] };
-    private static PlaylistOptions Board(string name, params PlaylistItem[] items) => new() { Name = name, Items = items };
+    private static PlaylistOptions Board(string name, params PlaylistItem[] items) => new() { Name = name, MinimumDurationMilliseconds = 0, Items = items };
     private static PlaylistOptions Ambient(string name, params PlaylistItem[] items) => new() { Name = name, Type = "ambient", Items = items };
     private static PlaylistItem RandomItem(string name, int min, int max, int cooldown = 0) => Item(name) with { MinIntervalMilliseconds = min, MaxIntervalMilliseconds = max, CooldownMilliseconds = cooldown };
     private static ControllerOptions Options(params PlaylistOptions[] boards) => new()
@@ -450,6 +457,8 @@ internal static class Program
             {
                 var controls = Descendants(window).ToArray(); var run = controls.OfType<Button>().Single(b => b.Text == "Run playlist"); var cancel = controls.OfType<Button>().Single(b => b.Text == "Cancel selected"); var activate = controls.OfType<Button>().Single(b => b.Text == "Activate scene");
                 await UntilAsync(() => run.Enabled && activate.Enabled); Check(window.Visible && controls.OfType<Label>().Any(l => l.Text.Contains("Development")), "Monitoring window shows identity and environment");
+                Check(window.WindowState == FormWindowState.Minimized && window.ShowInTaskbar, "Controller starts minimized when configuration mode is off");
+                window.RestoreFromTaskbar();
                 var power = controls.OfType<PowerToolbarButton>().Single();
                 Check(power.MenuButton.Enabled && power.ShutdownItem.Enabled && power.Menu.Items.Cast<ToolStripItem>().Select(i => i.Text).SequenceEqual(["Restart", "Shutdown"]), "Power menu exposes Restart and Shutdown with correct startup availability");
                 controls.OfType<ToolbarIconButton>().Single(b => b.Glyph == ToolbarGlyph.Minimize).PerformClick();

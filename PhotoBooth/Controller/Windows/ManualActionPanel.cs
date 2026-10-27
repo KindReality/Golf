@@ -18,13 +18,14 @@ internal sealed class ManualActionPanel : UserControl
     private PinnedActionOptions? _editing;
     private bool _eventSelected, _busy;
     internal PinnedActionOptions? Editing => _editing;
+    internal int ContentHeight => 114 + (_eventSelected ? 28 : 0) + ((_eventSelected ? _event : _command)?.ContentHeight ?? 0);
 
     internal ManualActionPanel(ControllerHost host)
     {
-        _host = host; Dock = DockStyle.Fill; BackColor = DarkTheme.Surface;
-        foreach (var height in new[] { 42, 0, -1, 38, 44, 40 }) _layout.RowStyles.Add(height < 0 ? new(SizeType.Percent, 100) : new(SizeType.Absolute, height));
-        var header = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        header.Controls.Add(new Label { Text = "SEND ACTION", AutoSize = true, ForeColor = DarkTheme.Accent, Padding = new(4, 10, 16, 0) });
+        _host = host; Dock = DockStyle.Fill; BackColor = DarkTheme.Surface; Font = new("Segoe UI", 9);
+        foreach (var height in new[] { 30, 0, -1, 28, 32, 24 }) _layout.RowStyles.Add(height < 0 ? new(SizeType.Percent, 100) : new(SizeType.Absolute, height));
+        var header = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
+        header.Controls.Add(new Label { Text = "SEND ACTION", AutoSize = true, ForeColor = DarkTheme.Accent, Padding = new(2, 7, 10, 0) });
         _commandMode = Button("Command", () => SelectMode(false), true); _eventMode = Button("Event", () => SelectMode(true));
         _commandMode.AccessibleName = "Compose command"; _eventMode.AccessibleName = "Compose event";
         header.Controls.AddRange([_commandMode, _eventMode]);
@@ -38,14 +39,16 @@ internal sealed class ManualActionPanel : UserControl
         _pin = Button("⚑  Pin action", () => _ = SavePinAsync()); _pin.AccessibleName = "Save pinned action";
         _new = Button("New pin", () => { _editing = null; _name.Clear(); State(); Notice("Current action is ready to pin under a new name."); });
         _remove = Button("Remove pin", () => _ = RemovePinAsync());
-        var actions = Toolbar(_send, _pin, _new, _remove); actions.AutoScroll = true; actions.WrapContents = false;
+        var actions = Toolbar(_send, _pin, _new, _remove); actions.WrapContents = false;
+        foreach (var button in new[] { _commandMode, _eventMode, _send, _pin, _new, _remove }) LiveControls.StyleButton(button, button == _send);
+        _status.AutoEllipsis = true;
         _layout.Controls.Add(actions, 0, 4); _layout.Controls.Add(_status, 0, 5); Controls.Add(_layout);
         SelectMode(false); Notice("Send an action now, or name and pin it for one-click use.");
     }
     private static TableLayoutPanel InputRow(string caption, TextBox field)
     {
         var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
-        row.ColumnStyles.Add(new(SizeType.Absolute, 110)); row.ColumnStyles.Add(new(SizeType.Percent, 100));
+        row.ColumnStyles.Add(new(SizeType.Absolute, 76)); row.ColumnStyles.Add(new(SizeType.Percent, 100));
         row.Controls.Add(new Label { Text = caption, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = DarkTheme.Muted }, 0, 0);
         field.Dock = DockStyle.Fill; row.Controls.Add(field, 1, 0); return row;
     }
@@ -69,8 +72,8 @@ internal sealed class ManualActionPanel : UserControl
         if (editor.Parent is null) _editorHost.Controls.Add(editor);
         if (_command is not null) _command.Visible = !events;
         if (_event is not null) _event.Visible = events;
-        editor.BringToFront(); _sourceRow.Visible = events; _layout.RowStyles[1].Height = events ? 38 : 0;
-        DarkTheme.Button(_commandMode, !events); DarkTheme.Button(_eventMode, events); State();
+        editor.BringToFront(); _sourceRow.Visible = events; _layout.RowStyles[1].Height = events ? 28 : 0;
+        LiveControls.StyleButton(_commandMode, !events); LiveControls.StyleButton(_eventMode, events); State();
     }
     internal void LoadPin(PinnedActionOptions pin)
     {

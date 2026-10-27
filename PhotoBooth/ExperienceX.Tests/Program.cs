@@ -4,6 +4,13 @@ internal static class TestSuites
 {
     public static async Task RunAsync(string[] arguments)
     {
+        if (arguments.SequenceEqual(["--role-catalog"])) { await RoleCatalogChecks.Run(); await PerspectiveChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--video-speed"])) { VideoSpeedChecks.Run(); await VideoSpeedHardwareChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--software-video-speed"])) { VideoSpeedChecks.Run(); await VideoSpeedHardwareChecks.Run(softwareVideoDecoding: true); return; }
+        if (arguments.SequenceEqual(["--video-fade"])) { VideoFadeChecks.Run(); await VideoFadeHardwareChecks.Run(); await PlaybackPriorityEventChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--overlap-selection"])) { await ScreenClickSelectionChecks.Run(); await PointSelectionChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--screen-lock"])) { await ScreenLockChecks.Run(); await ConfigurationHotkeyChecks.Run(); return; }
+        if (arguments.SequenceEqual(["--point-selection"])) { await PointSelectionChecks.Run(); await CalibrationChecks.Run(); return; }
         if (arguments.SequenceEqual(["--priority-events"])) { VideoPriorityChecks.Run(); await PlaybackPriorityEventChecks.Run(); return; }
         if (arguments.SequenceEqual(["--display-context"])) { await DisplayContextChecks.Run(); await DisplayContextHardwareChecks.Run(); return; }
         if (arguments.SequenceEqual(["--calibration-performance"])) { await CalibrationOptimizationChecks.Run(); await CalibrationVisibilityChecks.Run(); return; }
@@ -231,7 +238,13 @@ internal static class TestSuites
         }
         if (arguments.SequenceEqual(["--screen-dialog"]))
         {
-            await VideoScreenDialogChecks.Run();
+            await ScreenPropertiesDialogChecks.Run();
+            return;
+        }
+        if (arguments.SequenceEqual(["--screen-properties"]))
+        {
+            await ScreenPropertiesDialogChecks.Run();
+            await ConfigurationHotkeyChecks.Run();
             return;
         }
         if (arguments.SequenceEqual(["--mats"]))

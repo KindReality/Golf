@@ -19,6 +19,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _submenu = menu;
         if (menu != ConfigurationSubmenu.None)
         {
+            CancelPendingNameClick();
             _modifierFraming.Suspend();
             if (_mouseHeld)
             {
@@ -83,9 +84,13 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     private bool RotateModifier => (ModifierKeys & Forms.Keys.Alt) != 0;
     private ScreenSurface? _dragScreen;
     private ScreenSurface? _pendingNameEdit;
+    private ScreenSurface? _pendingNameClick;
+    private readonly Forms.Timer _nameClickTimer = new() { Interval = Forms.SystemInformation.DoubleClickTime };
+    internal Action<System.Drawing.Point>? PointerPositionForTest;
     private System.Drawing.Point _mouseDownPosition;
     private readonly Dictionary<string, ScreenSurface> _surfaces = new(StringComparer.OrdinalIgnoreCase);
-    private readonly PointHitCycle _pointCycle = new(), _screenCycle = new();
+    private readonly PointHitCycle _pointCycle = new();
+    private readonly ScreenClickSelection _screenSelection = new();
     private readonly PointHitCycle _edgeCycle = new();
     private readonly PointHitCycle _edgeDragCycle = new();
     private ScreenNameEditor? _nameEditor;
@@ -168,10 +173,19 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             screen => VideoFramingOptions.ScreenAspect(screen.Points, Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height)));
         _modifierFraming = new(_framing, () =>
         {
+            _screenSelection.Reset();
             var selected = _calibration?.SelectedScreen;
             if (selected is not null) _calibration?.SelectScreen(selected);
         });
         _modifierPoll.Tick += (_, _) => PollModifierFraming();
+        _nameClickTimer.Tick += (_, _) =>
+        {
+            var surface = _pendingNameClick;
+            CancelPendingNameClick();
+            if (!_closing && _options.ConfigurationMode && _submenu == ConfigurationSubmenu.None && surface is not null &&
+                _calibration?.SelectedScreen == surface && ScreenDefinition(surface.ScreenId)?.IsLocked != true && !_calibration.PointSelectionMode && !_mouseHeld && !_framing.Dragging)
+                BeginNameEdit(surface);
+        };
         Text = "ExperienceX — " + display;
         using (var icon = typeof(MainWindow).Assembly.GetManifestResourceStream("ExperienceX.Assets.Application.ico")
             ?? throw new InvalidOperationException("The Experience icon is missing."))
@@ -304,11 +318,11 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         if (wasDragging && !_framing.Dragging) ReleaseCalibrationCapture();
         _options = options;
         if (options.ConfigurationMode) _modifierPoll.Start();
-        else { _modifierPoll.Stop(); _modifierFraming.Cancel("ConfigurationModeDisabled"); }
+        else { _modifierPoll.Stop(); _modifierFraming.Cancel("ConfigurationModeDisabled"); _screenSelection.Reset(); }
         foreach (var id in _surfaces.Keys.Where(id => ScreenDefinition(id) is null).ToArray())
             _surfaces.Remove(id);
         if (_editingScreen is not null && (!options.ConfigurationMode ||
-            (ScreenDefinition(_editingScreen.ScreenId)?.Name != _originalName)))
+            (ScreenDefinition(_editingScreen.ScreenId)?.Name != _originalName || ScreenDefinition(_editingScreen.ScreenId)?.IsLocked == true)))
             FinishNameEdit(false);
         _renderer?.Configure(options);
         if (changed && IsHandleCreated)
@@ -339,11 +353,31 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _pendingNameEdit = null;
         Capture = false;
     }
+    private void CancelPendingNameClick() { _nameClickTimer.Stop(); _pendingNameClick = null; }
+    internal void MovePointerToPoint(ScreenPoint point)
+    {
+        if (_closing || !_options.ConfigurationMode) return;
+        var position = PointToScreen(new((int)Math.Round(point.X * Math.Max(1, ClientSize.Width - 1)),
+            (int)Math.Round(point.Y * Math.Max(1, ClientSize.Height - 1))));
+        if (PointerPositionForTest is { } move) move(position); else Forms.Cursor.Position = position;
+    }
+    internal bool BeginPointSelection(ScreenSurface surface)
+    {
+        _screenSelection.Reset();
+        CancelPendingNameClick();
+        if (_calibration is null || _calibration.Busy) return false;
+        ReleaseCalibrationCapture();
+        _modifierFraming.Suspend();
+        return _calibration.BeginPointSelection(surface);
+    }
     protected override void OnMouseDown(Forms.MouseEventArgs e)
     {
         base.OnMouseDown(e);
         if (_submenu != ConfigurationSubmenu.None || !_options.ConfigurationMode || e.Button != Forms.MouseButtons.Left)
             return;
+        CancelPendingNameClick();
+        // Let the double-click handler choose between edge insertion and point mode.
+        if (e.Clicks > 1) return;
         _modifierFraming.Suspend();
         Activate();
         Focus();
@@ -358,6 +392,19 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         var x = (double)e.X / Math.Max(1, ClientSize.Width - 1);
         var y = (double)e.Y / Math.Max(1, ClientSize.Height - 1);
         var screens = _options.ScreensFor(_display);
+        if (_calibration?.PointSelectionMode == true && selected?.DisplayName == _display &&
+            _calibration.SelectedPoint(selected) is { } selectedPoint)
+        {
+            var point = PointEditing.Points(_options.PointsFor(_display, selected.ScreenId))[selectedPoint];
+            var grab = PointEditing.HitRadius(ClientSize.Width, ClientSize.Height, _options.PointHitDiameterPercent);
+            if (Math.Pow((point.X - x) * Math.Max(1, ClientSize.Width - 1), 2) + Math.Pow((point.Y - y) * Math.Max(1, ClientSize.Height - 1), 2) <= grab * grab)
+            {
+                _mouseHeld = _calibration.Begin(selected, x, y, selectedPoint);
+                _dragScreen = _mouseHeld ? selected : null;
+                Capture = _mouseHeld;
+                return;
+            }
+        }
         if ((ZoomModifier || PanModifier || RotateModifier) && selected?.DisplayName == _display &&
             ScreenDefinition(selected.ScreenId) is { IsVideo: true } selectedVideo && ScreenSelection.Contains(selectedVideo.Points, x, y))
         {
@@ -387,7 +434,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         if (hits.Length > 0)
         {
             chosen = _pointCycle.Pick(hits);
-            _screenCycle.Pick([]);
+            _screenSelection.Reset();
             var dragging = Surface(allPoints[chosen].screen.Id);
             _mouseHeld = _calibration?.Begin(dragging, x, y, allPoints[chosen].point) == true;
             _dragScreen = _mouseHeld ? dragging : null;
@@ -401,6 +448,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             var pickedEdge = _edgeDragCycle.Pick(edges.Select(item => item.index).ToArray());
             if (pickedEdge >= 0)
             {
+                _screenSelection.Reset();
                 var edge = edges.Single(item => item.index == pickedEdge); var dragging = Surface(edge.screen.Id);
                 _mouseHeld = _calibration?.BeginEdgeDrag(dragging, edge.edge.Edge, x, y) == true;
                 _dragScreen = _mouseHeld ? dragging : null; Capture = _mouseHeld; return;
@@ -408,6 +456,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             if (selected?.DisplayName == _display && ScreenDefinition(selected.ScreenId) is { } selectedDefinition &&
                 ScreenNameLabel.Bounds(selected.ScreenName, selectedDefinition.Points, ClientSize.Width, ClientSize.Height).Contains(e.Location))
             {
+                _screenSelection.Reset();
                 if (selectedDefinition.IsVisualization || !(selectedDefinition.IsLed ? LedGeometry.Contains(selectedDefinition,x,y,ClientSize.Width,ClientSize.Height) : ScreenSelection.Contains(selectedDefinition.Points, x, y)))
                 {
                     BeginNameEdit(selected);
@@ -419,12 +468,13 @@ public sealed class MainWindow : Forms.Form, IPointSurface
                 Capture = _mouseHeld;
                 return;
             }
-            chosen = _screenCycle.Pick(screens.Select((screen, index) => (screen, index)).Where(item => item.screen.IsVisualization || (item.screen.IsLed ? LedGeometry.Contains(item.screen,x,y,ClientSize.Width,ClientSize.Height) : ScreenSelection.Contains(item.screen.Points, x, y))).Select(item => item.index).ToArray());
-            if (chosen < 0)
+            var candidates = screens.Where(screen => screen.IsVisualization || (screen.IsLed ? LedGeometry.Contains(screen,x,y,ClientSize.Width,ClientSize.Height) : ScreenSelection.Contains(screen.Points, x, y))).Select(screen => screen.Id).ToArray();
+            var picked = _screenSelection.Pick(candidates, selected?.DisplayName == _display ? selected.ScreenId : null);
+            if (picked is null)
                 _calibration?.SelectDisplay(_display);
             else
             {
-                var dragging = Surface(screens[chosen].Id);
+                var dragging = Surface(picked);
                 _mouseHeld = BeginSurfaceDrag(dragging, x, y);
                 _dragScreen = _mouseHeld ? dragging : null;
                 Capture = _mouseHeld;
@@ -433,8 +483,10 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     }
     private bool BeginSurfaceDrag(ScreenSurface screen, double x, double y)
     {
+        if (ScreenDefinition(screen.ScreenId)?.IsLocked == true) { _calibration?.SelectScreen(screen); return false; }
         if ((ZoomModifier || PanModifier || RotateModifier) && ScreenDefinition(screen.ScreenId) is { IsVideo: true } video)
         {
+            _screenSelection.Reset();
             if (_calibration?.Busy == true) return false;
             _calibration?.SelectScreen(screen);
             var width = Math.Max(1, ClientSize.Width - 1) * 96.0 / DeviceDpi;
@@ -449,9 +501,10 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     protected override void OnMouseWheel(Forms.MouseEventArgs e)
     {
         base.OnMouseWheel(e);
+        CancelPendingNameClick();
         if (_submenu != ConfigurationSubmenu.None || _closing || !_options.ConfigurationMode || _mouseHeld || _framing.Dragging || _calibration?.Busy == true ||
             _calibration?.SelectedScreen is not ScreenSurface selected || selected.DisplayName != _display ||
-            ScreenDefinition(selected.ScreenId) is not { IsVideo: true } video) return;
+            ScreenDefinition(selected.ScreenId) is not { IsVideo: true, IsLocked: false } video) return;
         if (_nameEditor is not null)
         {
             if (_nameEditor.Text != _originalName || _browsingMedia) return;
@@ -468,7 +521,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _modifierFraming.Suspend();
         if (_submenu != ConfigurationSubmenu.None || _closing || !_options.ConfigurationMode || _nameEditor is not null || _mouseHeld || _framing.Dragging || _calibration?.Busy == true ||
             _calibration?.SelectedScreen is not ScreenSurface selected || selected.DisplayName != _display ||
-            ScreenDefinition(selected.ScreenId) is not { IsVideo: true } video) return;
+            ScreenDefinition(selected.ScreenId) is not { IsVideo: true, IsLocked: false } video) return;
         var position = PointToClient(Forms.Cursor.Position);
         var x = (double)position.X / Math.Max(1, ClientSize.Width - 1);
         var y = (double)position.Y / Math.Max(1, ClientSize.Height - 1);
@@ -491,7 +544,15 @@ public sealed class MainWindow : Forms.Form, IPointSurface
                 !PointEditing.Points(item.screen.Points).Any(p => Math.Sqrt(Math.Pow((p.X - item.edge.Point.X) * (ClientSize.Width - 1), 2) +
                     Math.Pow((p.Y - item.edge.Point.Y) * (ClientSize.Height - 1), 2)) < 2)).ToArray();
         var chosen = _edgeCycle.Pick(candidates.Select(item => item.index).ToArray());
-        if (chosen < 0) return;
+        if (chosen < 0)
+        {
+            var screens = _options.ScreensFor(_display);
+            bool Hit(ScreenOptions screen) => screen.IsVisualization || (screen.IsLed
+                ? LedGeometry.Contains(screen, x, y, ClientSize.Width, ClientSize.Height) : ScreenSelection.Contains(screen.Points, x, y));
+            var screen = screens.FirstOrDefault(s => s.Id == selected?.ScreenId && Hit(s)) ?? screens.FirstOrDefault(Hit);
+            if (screen is not null) BeginPointSelection(Surface(screen.Id));
+            return;
+        }
         var target = candidates.First(item => item.index == chosen);
         _calibration?.Cancel("InsertPoint");
         ReleaseCalibrationCapture();
@@ -506,6 +567,8 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     }
     private void BeginNameEdit(ScreenSurface surface)
     {
+        if (ScreenDefinition(surface.ScreenId)?.IsLocked == true) return;
+        CancelPendingNameClick();
         _modifierFraming.Suspend();
         if (_nameEditor is not null) FinishNameEdit(false);
         _calibration?.Cancel("ScreenNameEdit");
@@ -617,7 +680,13 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             _pendingNameEdit = null;
         }
         if (_mouseHeld && _dragScreen is not null)
+        {
+            var threshold = Forms.SystemInformation.DragSize;
+            if (Math.Abs(e.X - _mouseDownPosition.X) >= Math.Max(1, threshold.Width / 2) ||
+                Math.Abs(e.Y - _mouseDownPosition.Y) >= Math.Max(1, threshold.Height / 2))
+                _screenSelection.Reset();
             _calibration?.Move(_dragScreen, (double)e.X / Math.Max(1, ClientSize.Width - 1), (double)e.Y / Math.Max(1, ClientSize.Height - 1));
+        }
     }
     protected override void OnMouseUp(Forms.MouseEventArgs e)
     {
@@ -634,10 +703,13 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         var dragged = _dragScreen;
         var editName = _pendingNameEdit;
         ReleaseCalibrationCapture();
-        if (editName is not null)
-            BeginNameEdit(editName);
-        else if (dragged is not null)
+        if (dragged is not null)
             _calibration?.RequestFinish(dragged);
+        if (editName is not null)
+        {
+            _pendingNameClick = editName;
+            _nameClickTimer.Start();
+        }
     }
     protected override void OnMouseCaptureChanged(EventArgs e)
     {
@@ -655,7 +727,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         var selected = _calibration?.SelectedScreen as ScreenSurface;
         var screen = selected?.DisplayName == _display ? ScreenDefinition(selected.ScreenId) : null;
         var allowed = _submenu == ConfigurationSubmenu.None && !_closing && _available && Visible && _options.ConfigurationMode && _nameEditor is null &&
-            !_mouseHeld && _calibration?.Busy != true && _calibration?.Editing != true && !ConfigurationDialog.Active;
+            !_mouseHeld && screen?.IsLocked != true && _calibration?.Busy != true && _calibration?.Editing != true && _calibration?.PointSelectionMode != true && !ConfigurationDialog.Active;
         var input = ModifierInputForTest?.Invoke() ?? ReadModifierInput();
         _modifierFraming.Update(input, screen, allowed, Math.Max(1,ClientSize.Width-1)*96.0/DeviceDpi, Math.Max(1,ClientSize.Height-1)*96.0/DeviceDpi);
     }
@@ -672,6 +744,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     }
     protected override void OnDeactivate(EventArgs e)
     {
+        CancelPendingNameClick();
         _modifierFraming?.Cancel("FocusLost"); base.OnDeactivate(e);
     }
     private bool HandleScreenKey(Forms.Keys key)
@@ -682,6 +755,10 @@ public sealed class MainWindow : Forms.Form, IPointSurface
             return true;
         }
         if (_nameEditor is not null) return false;
+        CancelPendingNameClick();
+        if (_mouseHeld && (key & Forms.Keys.KeyCode) == Forms.Keys.Tab) return true;
+        if (_calibration?.SelectedScreen is ScreenSurface locked && locked.DisplayName == _display && ScreenDefinition(locked.ScreenId)?.IsLocked == true)
+            return _calibration.Key(locked, key);
         if (key == Forms.Keys.Escape && _framing.Dragging)
         {
             if (_modifierFraming.Active) _modifierFraming.Cancel("Escape"); else _framing.Cancel("Escape");
@@ -746,6 +823,14 @@ public sealed class MainWindow : Forms.Form, IPointSurface
         _guard?.EnsureTopmost("VideoRequest", true);
     }
     public void StopVideoPlayback(string? source, string playbackRequestId) => _renderer?.StopPlayback(source, playbackRequestId);
+    public void FadeVideoScreen(ExperienceRequest request)
+    {
+        if (!_available) throw new InvalidOperationException("Assigned display is unavailable.");
+        if (State == RendererState.Failed || _recovering || _waitingForRenderer)
+            throw new InvalidOperationException("The DirectX renderer is recovering. Retry with a new request ID once ready.");
+        _renderer!.FadeScreen(request);
+        _guard?.EnsureTopmost("VideoFadeRequest", true);
+    }
     // Production awaits recovery and worker shutdown without blocking the dispatcher.
     public async Task ShutdownWindowAsync()
     {
@@ -799,7 +884,7 @@ public sealed class MainWindow : Forms.Form, IPointSurface
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] private static extern nint SetWindowLongPtr(nint hwnd, int index, nint value);
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _modifierPoll?.Dispose(); _modifierFraming?.Cancel("WindowDisposed"); }
+        if (disposing) { _nameClickTimer.Dispose(); _modifierPoll?.Dispose(); _modifierFraming?.Cancel("WindowDisposed"); }
         base.Dispose(disposing);
         if (disposing) _applicationIcon.Dispose();
     }

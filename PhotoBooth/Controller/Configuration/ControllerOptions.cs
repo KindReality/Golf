@@ -71,6 +71,15 @@ internal sealed record ControllerOptions : BroadcastOptions
             if (!Same(playlist.AudioOutputMode, "Configured") && !Same(playlist.AudioOutputMode, "Random"))
                 throw new ArgumentException($"AudioOutputMode must be Configured or Random: {playlist.Name}.");
             if (playlist.DurationMilliseconds is < 0 or > 86400000) throw new ArgumentException($"Playlist duration must be 0–86400000 milliseconds or empty for automatic: {playlist.Name}.");
+            if (playlist.Type == "storyboard")
+            {
+                if (playlist.DurationMilliseconds is not null) throw new ArgumentException("Storyboard playlists use minimum and maximum duration.");
+                if (playlist.MinimumDurationMilliseconds is < 0 or > 86400000 || playlist.MaximumDurationMilliseconds is < 1 or > 86400000 ||
+                    playlist.MaximumDurationMilliseconds is { } maximum && maximum < playlist.EffectiveMinimumDurationMilliseconds)
+                    throw new ArgumentException($"Playlist {playlist.Name}: maximum duration must be at least the minimum; use 0–86400000 ms for minimum and 1–86400000 ms for maximum.");
+            }
+            else if (playlist.MinimumDurationMilliseconds is not null || playlist.MaximumDurationMilliseconds is not null)
+                throw new ArgumentException("Ambient playlists use scheduling duration, not storyboard duration limits.");
             if (playlist.Type is not ("ambient" or "storyboard") || playlist.Items is null || playlist.Items.Any(i => i is null) || playlist.Items.Length > 1000) throw new ArgumentException($"Invalid playlist type/items: {playlist.Name}.");
             Unique(playlist.Items.Select(i => i.Name), $"item in {playlist.Name}");
             foreach (var item in playlist.Items)
@@ -78,8 +87,8 @@ internal sealed record ControllerOptions : BroadcastOptions
                 var itemRoles = RoleList.ParseTargets(item.Roles);
                 if (!Same(item.BroadcastMode, "Broadcast") && !Same(item.BroadcastMode, "Random"))
                     throw new ArgumentException($"BroadcastMode must be Broadcast or Random: {playlist.Name}/{item.Name}.");
-                if (itemRoles.Length == 0 && (Same(item.BroadcastMode, "Random") || item.IncludeSubwoofer))
-                    throw new ArgumentException($"Random targeting and IncludeSubwoofer require a nonempty Roles list: {playlist.Name}/{item.Name}.");
+                if (itemRoles.Length == 0 && Same(item.BroadcastMode, "Random"))
+                    throw new ArgumentException($"Random targeting requires a nonempty Roles list: {playlist.Name}/{item.Name}.");
                 if (Same(item.BroadcastMode, "Random") && RoleList.RandomChoices(item.Roles).Length == 0)
                     throw new ArgumentException($"Random role selection requires a positive rule or '*': {playlist.Name}/{item.Name}.");
                 if (item.DelayMilliseconds is < 0 or > 86400000 || item.CooldownMilliseconds is < 0 or > 86400000 || item.Commands is null || item.Commands.Any(c => c is null) || item.Commands.Length is 0 or > 1000) throw new ArgumentException($"Invalid timing/commands: {playlist.Name}/{item.Name}.");
@@ -97,12 +106,14 @@ internal sealed record ControllerOptions : BroadcastOptions
                         continue;
                     }
                     if (command.Transport is not ("udp" or "arduino") || command.Type is not ("command" or "event") || command.Payload.ValueKind != JsonValueKind.Object) throw new ArgumentException($"Invalid command: {playlist.Name}/{item.Name}.");
+                    if (VideoFadeCommand.IsFade(Text(command.Payload, "command"))) VideoFadeCommand.Validate(command.Payload);
+                    VideoPlaybackSpeed.Read(command.Payload);
                     if (command.Transport == "arduino" && (command.Type != "command" || command.Device == "*" || string.IsNullOrWhiteSpace(Text(command.Payload, "command"))))
                         throw new ArgumentException("Serial commands require a named device and a command. The device may be discovered later.");
                     // Check every possible random destination rather than treating the entire list as one packet.
                     foreach (var roles in Same(item.BroadcastMode, "Random") ? RoleList.RandomChoices(item.Roles) : [item.Roles])
                     {
-                        var routed = PlaylistRoleTarget.Apply(command, roles, item.IncludeSubwoofer);
+                        var routed = PlaylistRoleTarget.Apply(command, roles);
                         if (Same(playlist.AudioOutputMode, "Random") && Controller.Scheduling.PlaylistAudioTarget.IsAudio(routed))
                             Controller.Scheduling.PlaylistAudioTarget.Validate(routed);
                         BroadcastEnvelope.Create(this, routed.Type, routed.Device!, routed.Payload);
@@ -130,8 +141,6 @@ internal sealed record ControllerOptions : BroadcastOptions
             {
                 ValidateName(transition.Scene, "next scene", false);
                 ValidateName(transition.Device, "scene destination", true);
-                if (!double.IsFinite(transition.MinimumSceneDurationSeconds) || transition.MinimumSceneDurationSeconds is < .001 or > 86400)
-                    throw new ArgumentException("Minimum scene duration must be 0.001–86400 seconds.");
                 if (Same(transition.Device, "*") || Same(transition.Device, EffectiveDeviceName))
                 {
                     Scene(transition.Scene);

@@ -107,7 +107,7 @@ internal static class ConfigurationSubmenuChecks
                         {
                             cancel.Tick += (_, _) =>
                             {
-                                var dialog = Forms.Application.OpenForms.OfType<VideoScreenDialog>().FirstOrDefault();
+                                var dialog = Forms.Application.OpenForms.OfType<ScreenPropertiesDialog>().FirstOrDefault();
                                 if (dialog is null) return;
                                 cancel.Stop(); dialog.DialogResult = Forms.DialogResult.Cancel;
                             };

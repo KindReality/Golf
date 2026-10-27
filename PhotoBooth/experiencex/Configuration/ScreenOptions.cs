@@ -11,6 +11,12 @@ public sealed record ScreenOptions
     public string Type { get; init; } = "video";
     // Mat polygons can cover their exterior instead of their interior.
     public bool IsNegative { get; init; }
+    // Editing only; playback and command routing remain independent.
+    public bool IsLocked { get; init; }
+    internal void RequireEditable()
+    {
+        if (IsLocked) throw new InvalidOperationException($"{Name} is locked. Press L to unlock.");
+    }
     public string Roles { get; init; } = "";
     public double Brightness { get; init; } = 100;
     public VideoFramingOptions Framing { get; init; } = new();

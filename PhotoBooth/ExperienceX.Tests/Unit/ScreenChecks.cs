@@ -176,8 +176,18 @@ internal static class ScreenChecks
                 int editing = 0;
                 window.TextEditingChanged += enabled => editing += enabled ? 1 : -1;
                 window.RenameRequested += (_, _, name) => committed = name;
+                ScreenNameEditor NameEditor()
+                {
+                    var until = Environment.TickCount64 + Forms.SystemInformation.DoubleClickTime + 2000;
+                    while (!window.Controls.OfType<ScreenNameEditor>().Any())
+                    {
+                        if (Environment.TickCount64 > until) throw new TimeoutException("Single-click name editor did not open.");
+                        Forms.Application.DoEvents(); Thread.Sleep(5);
+                    }
+                    return window.Controls.OfType<ScreenNameEditor>().Single();
+                }
                 Click((int)center.X, (int)center.Y);
-                var text = window.Controls.OfType<ScreenNameEditor>().Single();
+                var text = NameEditor();
                 Check(editing == 1 && text.Text == "screen1", "Clicking name did not enter editing.");
                 text.Text = "Cancelled";
                 SendMessage(text.Handle, 0x100, 27, 0);
@@ -185,7 +195,7 @@ internal static class ScreenChecks
                 foreach (var key in new[] { 13, 9 })
                 {
                     Click((int)center.X, (int)center.Y);
-                    text = window.Controls.OfType<ScreenNameEditor>().Single();
+                    text = NameEditor();
                     text.Text = "Renamed";
                     SendMessage(text.Handle, 0x100, key, 0);
                     Check(committed == "Renamed" && editing == 0, "Enter/Tab did not commit name editing.");

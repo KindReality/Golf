@@ -98,7 +98,7 @@ internal sealed class LocalControllerConnection(Dispatcher dispatcher, Func<Cont
             foreach (var destination in destinations)
             {
                 if (Path.GetFullPath(source).Equals(destination, StringComparison.OrdinalIgnoreCase)) continue;
-                complete &= await _cache.SynchronizeAsync(Environment.MachineName, source, destination, token, acceptManagedOwnershipTransfer: true);
+                complete &= await _cache.SynchronizeAsync(Environment.MachineName, source, destination, token);
             }
             Telemetry.Info("LocalControllerMediaSyncCompleted", new { Source = source, Destinations = destinations, Complete = complete });
         }

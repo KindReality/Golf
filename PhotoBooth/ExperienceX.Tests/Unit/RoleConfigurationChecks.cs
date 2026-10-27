@@ -45,6 +45,14 @@ internal static class RoleConfigurationChecks
         var excludedRequest = ExperienceRequest.Parse("{\"experience\":\"audio\",\"value\":\"Bell.wav\",\"roles\":\"^subwoofer,*\"}"u8);
         Check(AudioDeviceSelection.Resolve(excludedRequest, excludedOptions, outputs, "id-b").Devices.Select(d => d.Id).SequenceEqual(["id-a", "id-c"]),
             "Actual audio routing excludes subwoofers and includes unassigned endpoints without a default fallback.");
+        Check(AudioDeviceSelection.Resolve(excludedRequest with { Roles = "*" }, excludedOptions, outputs, "id-b").Devices.Length == 3,
+            "A wildcard includes every speaker, including Subwoofer outputs.");
+        Check(AudioDeviceSelection.Resolve(excludedRequest with { Roles = "Subwoofer" }, excludedOptions, outputs, "id-b").Devices.Select(d => d.Id).SequenceEqual(["id-b"]),
+            "A Subwoofer role request selects only assigned subwoofers.");
+        Check(AudioDeviceSelection.Resolve(excludedRequest with { Roles = "Ambient,Subwoofer,ambient" }, excludedOptions, outputs, "id-b").Devices.Select(d => d.Id).SequenceEqual(["id-a", "id-b"]),
+            "Combined roles select each endpoint once even when it matches multiple roles.");
+        Check(AudioDeviceSelection.Resolve(excludedRequest with { Roles = "Subwoofer" }, excludedOptions, [outputs[0], outputs[2]], "id-a").Devices.Length == 0,
+            "An unavailable Subwoofer role never falls back to another output.");
         var videoOptions = options with { DisplayScreens = new() { ["DISPLAY1"] = [new() { Id = "a", Roles = "Front" }, new() { Id = "b", Roles = "Subwoofer" }, new() { Id = "c" }] } };
         Check(ScreenSelection.VideoOutputs(request with { Roles = "^subwoofer,*" }, videoOptions, ["DISPLAY1"], "DISPLAY1").Count == 2,
             "Video role targeting applies the same wildcard and exclusion rules.");
@@ -64,16 +72,24 @@ internal static class RoleConfigurationChecks
             var store = new PointConfigurationStore(file);
             store.EnsureDisplays(["DISPLAY1"]);
             AudioOutput[] devices = [new("id-a", "Front", 2), new("id-b", "Rear", 2)];
-            await store.EnsureAudioDevicesAsync(devices);
+            await store.EnsureAudioDevicesAsync(devices, "ID-A");
             var seeded = ExperienceOptions.Parse(await File.ReadAllTextAsync(file));
-            Check(seeded.AudioDevices["id-a"].Name == "Front" && seeded.AudioDevices["id-a"].Roles == "" && seeded.ScreensFor("DISPLAY1")[0].Roles == "", "New hardware stores empty configurable roles and descriptive speaker names.");
+            Check(seeded.AudioDevices["id-a"].Name == "Front" && seeded.AudioDevices["id-a"].Roles == "Subwoofer" && seeded.AudioDevices["id-b"].Roles == "" && seeded.ScreensFor("DISPLAY1")[0].Roles == "",
+                "New default audio output receives the Subwoofer role; other hardware keeps empty roles and descriptive names.");
             var root = JsonNode.Parse(await File.ReadAllTextAsync(file))!;
-            root["AudioDevices"]!["id-a"]!["Roles"] = "Scary";
+            root["AudioDevices"]!["id-a"]!["Roles"] = "";
+            root["AudioDevices"]!["id-b"]!["Roles"] = "Subwoofer";
             await File.WriteAllTextAsync(file, root.ToJsonString());
-            await store.EnsureAudioDevicesAsync([devices[0], new("id-c", "Side", 2)]);
+            await store.EnsureAudioDevicesAsync([devices[0], new("id-c", "Side", 2)], "id-a");
             var before = await File.ReadAllTextAsync(file);
-            await store.EnsureAudioDevicesAsync([devices[0], new("id-c", "Side", 2)]);
-            Check(await File.ReadAllTextAsync(file) == before && ExperienceOptions.Parse(before).AudioDevices["id-a"].Roles == "Scary" && JsonNode.Parse(before)!["Custom"]!.GetValue<int>() == 17, "Hardware population preserves roles, disconnected outputs and unrelated configuration without repeated rewrites.");
+            await store.EnsureAudioDevicesAsync([devices[0], new("id-c", "Side", 2)], "id-c");
+            var retained = ExperienceOptions.Parse(before);
+            Check(await File.ReadAllTextAsync(file) == before && retained.AudioDevices["id-a"].Roles == "" && retained.AudioDevices["id-b"].Roles == "Subwoofer" && retained.AudioDevices["id-c"].Roles == "" && JsonNode.Parse(before)!["Custom"]!.GetValue<int>() == 17,
+                "Clearing or moving the Subwoofer role persists, including disconnected outputs and default-output changes, without repeated rewrites.");
+            await store.EnsureAudioDevicesAsync([new("id-d", "New default", 2)], "id-d");
+            Check(ExperienceOptions.Parse(await File.ReadAllTextAsync(file)).AudioDevices["id-d"].Roles == "Subwoofer", "A newly detected default endpoint receives its initial role.");
+            await store.EnsureAudioDevicesAsync([new("id-e", "No default", 2)], null);
+            Check(ExperienceOptions.Parse(await File.ReadAllTextAsync(file)).AudioDevices["id-e"].Roles == "", "No Subwoofer role is guessed when the default endpoint is unavailable.");
         }
         finally { Directory.Delete(folder, true); }
         Console.WriteLine("Passed role configuration, validation, physical/virtual speaker membership and atomic hardware population.");

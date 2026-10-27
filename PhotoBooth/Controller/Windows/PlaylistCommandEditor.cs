@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Controller.Configuration;
 using Controller.Networking;
+using PhotoBooth.Networking;
 using static Controller.Windows.ShowEditorControls;
 
 namespace Controller.Windows;
@@ -21,19 +22,20 @@ internal sealed class PlaylistCommandEditor : UserControl
     private string _loadedKind;
     private ComboBox? _device, _value, _target;
     private CheckBox? _loop, _mute;
-    private NumericUpDown? _volume, _channel;
+    private NumericUpDown? _volume, _channel, _fadeDuration, _playbackSpeed;
     private TextBox? _raw, _event, _input;
     private bool _loading;
+    internal int ContentHeight => _fields.Height + 8;
     internal PlaylistCommandEditor(PlaylistCommand command, ShowConfiguration show, ControllerOptions options, ExperiencePeer[] peers, string[] media, Action changed, string[]? serialDevices = null, bool manual = false)
     {
-        _manual = manual; _fields = new(manual ? 2 : 1);
+        _manual = manual; _fields = new(manual ? 2 : 1, compact: manual);
         _show = show; _options = options; _peers = peers; _media = media; _changed = changed; _original = command;
         _serialDevices = options.Arduinos.Select(a => a.Name).Concat(serialDevices ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         Dock = DockStyle.Top; AutoSize = false; Height = 480; BackColor = DarkTheme.Surface;
         _loadedKind = Kind(command);
-        string[] kinds = ["Video", "Audio", "Scene command", "Local playlist", "Network playlist", "Event", "Arduino", "Advanced JSON"];
+        string[] kinds = ["Video", "Audio", "Fade in", "Fade out", "Scene command", "Local playlist", "Network playlist", "Event", "Arduino", "Advanced JSON"];
         _kind = Choice(manual ? _loadedKind == "Event" ? ["Event"] : kinds.Where(k => k != "Event") : kinds, _loadedKind);
-        if (manual) { Dock = DockStyle.Fill; Controls.Add(ScrollContainer(_fields)); }
+        if (manual) { Dock = DockStyle.Fill; Controls.Add(ScrollContainer(_fields, compact: true)); }
         else { var layout = new ShowEditorFields(); layout.Field("Command type", _kind); layout.Wide(_fields); Controls.Add(layout); }
         Render();
         _kind.SelectedIndexChanged += (_, _) =>
@@ -54,7 +56,8 @@ internal sealed class PlaylistCommandEditor : UserControl
         if (c.Playlist is not null) return "Local playlist";
         if (c.Transport == "arduino") return "Arduino";
         if (c.Type == "event") return "Event";
-        if (ControllerOptions.Text(c.Payload, "command") is { } cmd) return cmd == "scene" ? "Scene command" : cmd == "playlist" ? "Network playlist" : "Advanced JSON";
+        if (ControllerOptions.Text(c.Payload, "command") is { } cmd) return !string.IsNullOrWhiteSpace(ControllerOptions.Text(c.Payload, "roles")) ? "Advanced JSON" :
+            cmd.ToLowerInvariant() switch { "play" when ControllerOptions.Text(c.Payload, "experience") is "video" or "audio" => ControllerOptions.Text(c.Payload, "experience") == "video" ? "Video" : "Audio", "fadein" => "Fade in", "fadeout" => "Fade out", "scene" => "Scene command", "playlist" => "Network playlist", _ => "Advanced JSON" };
         var p = c.Payload;
         if (!string.IsNullOrWhiteSpace(ControllerOptions.Text(p, "roles"))) return "Advanced JSON";
         if (p.ValueKind == JsonValueKind.Object && p.EnumerateObject().Any(f => f.Name.Equals("audioDevices", StringComparison.OrdinalIgnoreCase))) return "Advanced JSON";
@@ -64,6 +67,7 @@ internal sealed class PlaylistCommandEditor : UserControl
     {
         "Video" => Application.ShowEditSession.DefaultCommand(),
         "Audio" => new() { Device = "*", Payload = JsonSerializer.SerializeToElement(new { experience = "audio", value = "", audioDevice = "*", volume = 100 }) },
+        "Fade in" or "Fade out" => new() { Device = "*", Payload = JsonSerializer.SerializeToElement(new { experience = "video", command = kind == "Fade in" ? "fadeIn" : "fadeOut", screen = "*", durationSeconds = 1 }) },
         "Local playlist" => new() { Playlist = _show.Playlists.FirstOrDefault(p => p.Type == "storyboard")?.Name ?? "" },
         "Scene command" => new() { Device = _options.EffectiveDeviceName, Payload = JsonSerializer.SerializeToElement(new { command = "scene", value = _show.Scenes.FirstOrDefault()?.Name ?? "" }) },
         "Network playlist" => new() { Device = _options.EffectiveDeviceName, Payload = JsonSerializer.SerializeToElement(new { command = "playlist", value = _show.Playlists.FirstOrDefault(p => p.Type == "storyboard")?.Name ?? "" }) },
@@ -78,7 +82,7 @@ internal sealed class PlaylistCommandEditor : UserControl
         if (_manual) _kind.Parent?.Controls.Remove(_kind);
         foreach (Control c in _fields.Controls.Cast<Control>().ToArray()) c.Dispose();
         _fields.Controls.Clear(); _fields.RowStyles.Clear(); _fields.RowCount = 0;
-        _device = _value = _target = null; _loop = _mute = null; _volume = _channel = null; _raw = _event = _input = null;
+        _device = _value = _target = null; _loop = _mute = null; _volume = _channel = _fadeDuration = _playbackSpeed = null; _raw = _event = _input = null;
         string T(string name, string fallback = "") => ControllerOptions.Text(_original.Payload, name) ?? fallback;
         JsonNode? Node(string name) => Payload()[name];
         void Field(string label, Control c) { _fields.Field(label, c); Watch(c, () => { if (!_loading) _changed(); }); }
@@ -95,7 +99,15 @@ internal sealed class PlaylistCommandEditor : UserControl
             var devices = new[] { "*", _options.EffectiveDeviceName }.Concat(_peers.Select(p => p.Inventory.DeviceName));
             if (_loadedKind == "Arduino") devices = _serialDevices;
             _device = Choice(devices, _original.Device ?? "*", true); Field("Destination device", _device);
-            if (_loadedKind is "Video" or "Audio")
+            if (_loadedKind is "Fade in" or "Fade out")
+            {
+                _target = Choice(new[] { "*" }.Concat(_peers.SelectMany(p => p.Inventory.Screens.Where(s => s.Kind == "video").Select(s => s.Display + "/" + s.Name))), T("screen", "*"), true);
+                Field("Screen", _target);
+                _fadeDuration = Number(0, 86400); _fadeDuration.DecimalPlaces = 3; _fadeDuration.Increment = .1m;
+                _fadeDuration.Value = Math.Clamp(Node("durationSeconds")?.GetValue<decimal>() ?? 1, 0, 86400); Field("Fade duration (seconds)", _fadeDuration);
+                _fields.Wide(Note("Fade out reveals the background or lower layers. Fade in restores visibility. Playback continues; item roles can target groups."));
+            }
+            else if (_loadedKind is "Video" or "Audio")
             {
                 var audio = _loadedKind == "Audio";
                 var extensions = audio ? Application.LivePlayback.Audio : Application.LivePlayback.Videos;
@@ -104,11 +116,18 @@ internal sealed class PlaylistCommandEditor : UserControl
                 _target = Choice(targets, T(audio ? "audioDevice" : "screen", "*"), true); Field(audio ? "Audio output" : "Screen", _target);
                 _volume = Number(Node("volume")?.GetValue<decimal>() ?? 100, 100); Field("Volume (%)", _volume);
                 _mute = Check("Mute", Node("mute")?.GetValue<bool>() ?? false); Watch(_mute, _changed);
-                if (!audio) { _loop = Check("Loop video", Node("loop")?.GetValue<bool>() ?? false); Watch(_loop, _changed); }
+                if (!audio)
+                {
+                    _loop = Check("Loop video", Node("loop")?.GetValue<bool>() ?? false); Watch(_loop, _changed);
+                    _playbackSpeed = Number(1, 2); _playbackSpeed.Minimum = .5m; _playbackSpeed.DecimalPlaces = 2; _playbackSpeed.Increment = .1m;
+                    _playbackSpeed.Value = (decimal)VideoPlaybackSpeed.Read(_original.Payload); _playbackSpeed.Width = 66; _playbackSpeed.AccessibleName = "Playback speed";
+                    if (_manual) Watch(_playbackSpeed, _changed); else Field("Playback speed", _playbackSpeed);
+                }
                 if (_manual)
                 {
                     var playback = new FlowLayoutPanel { Height = 32, WrapContents = false };
                     playback.Controls.Add(_mute); if (_loop is not null) playback.Controls.Add(_loop);
+                    if (_playbackSpeed is not null) { playback.Controls.Add(new Label { Text = "Speed ×", AutoSize = true, Padding = new(0, 5, 0, 0) }); playback.Controls.Add(_playbackSpeed); }
                     _fields.Field("Playback", playback);
                 }
                 else { _fields.Wide(_mute); if (_loop is not null) _fields.Wide(_loop); }
@@ -130,12 +149,18 @@ internal sealed class PlaylistCommandEditor : UserControl
         if (kind == "Advanced JSON") return JsonSerializer.Deserialize<PlaylistCommand>(_raw!.Text, ControllerOptions.Json) ?? throw new ArgumentException("Missing command JSON.");
         if (kind == "Local playlist") return new() { Playlist = _value!.Text };
         var body = Payload();
-        if (kind is "Video" or "Audio")
+        if (kind is "Fade in" or "Fade out")
+        {
+            body["experience"] = "video"; body["command"] = kind == "Fade in" ? "fadeIn" : "fadeOut";
+            body["screen"] = _target!.Text.Trim(); body["durationSeconds"] = _fadeDuration!.Value;
+            VideoFadeCommand.Validate(JsonSerializer.SerializeToElement(body));
+        }
+        else if (kind is "Video" or "Audio")
         {
             var file = _value!.Text.Trim(); PhotoBooth.Media.MediaLibrary.Normalize(file);
             body["value"] = file; body[kind == "Audio" ? "audioDevice" : "screen"] = _target!.Text.Trim();
             body["mute"] = _mute!.Checked; body["volume"] = _volume!.Value;
-            if (kind == "Video") body["loop"] = _loop!.Checked;
+            if (kind == "Video") { body["loop"] = _loop!.Checked; body["playbackSpeed"] = _playbackSpeed!.Value; }
             else { if (_channel!.Value > 0) body["channel"] = (int)_channel.Value; else body.Remove("channel"); }
         }
         else if (kind is "Scene command" or "Network playlist") body["value"] = _value!.Text.Trim();

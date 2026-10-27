@@ -19,6 +19,8 @@ internal sealed class DisplayScreenTrack : IDisposable
     private readonly CalibrationOverlay _overlay = new();
     private readonly PlaybackMetrics _metrics = new();
     private readonly VideoPlaybackTimeline _timeline = new();
+    private readonly ScreenOpacityFade _screenOpacity = new();
+    private ExperienceRequest? _fadeRequest;
     private readonly PointTransformCache _transforms = new();
     private readonly PointTransformCache _overlayTransforms = new();
     private readonly RendererStateMachine _state = new();
@@ -56,10 +58,10 @@ internal sealed class DisplayScreenTrack : IDisposable
     public bool IsOpen => _media.IsOpen || _stillImage;
     public bool IsVideoOpen => _media.IsOpen;
     public bool NameLocked => _binding is not null;
-    internal ScreenPlaybackSnapshot Snapshot => new(Screen.Id, Screen.Name, State, _media.Position, _alpha, _stillImage ? 1 : _metrics.TransferredFrames, RequestId, _loops, NameLocked, _binding?.Path, Screen.Brightness);
+    internal ScreenPlaybackSnapshot Snapshot => new(Screen.Id, Screen.Name, State, _media.Position, _alpha * _screenOpacity.Value, _stillImage ? 1 : _metrics.TransferredFrames, RequestId, _loops, NameLocked, _binding?.Path, Screen.Brightness, _screenOpacity.Value, _screenOpacity.Animating, _media.PlaybackSpeed);
     public RendererState State => _state.Current;
-    public bool Animating => _overlay.Animating(_options) || _stillImage && _alpha < 1;
-    internal bool ContentAnimating => _stillImage && _alpha < 1;
+    public bool Animating => _overlay.Animating(_options) || ContentAnimating;
+    internal bool ContentAnimating => _stillImage && _alpha < 1 || _fadeRequest is not null;
     public long TransformComputations => _transforms.Computations + _overlayTransforms.Computations;
     public DisplayScreenTrack(GraphicsResources graphics, string display, ScreenOptions screen, ExperienceOptions options, Action wake, Action present, RendererProgress? progress = null)
     {
@@ -171,10 +173,10 @@ internal sealed class DisplayScreenTrack : IDisposable
     {
         if (!Screen.IsVideo) throw new ArgumentException("Only video screens receive playback commands.");
         path = System.IO.Path.GetFullPath(path);
-        if (request.Loop) _background = (path, request with { VideoPriority = null });
         var sameVideo = _media.IsOpen && !_media.Ended && string.Equals(_path, path, StringComparison.OrdinalIgnoreCase);
         if ((request.VideoPriority is null && request.PriorityCoordinator is not null) || (IsOpen && request.EffectivePriority < _currentPriority))
         {
+            if (request.Loop) _background = (path, request with { VideoPriority = null });
             if (sameVideo && request.Loop) ContinueLoop();
             request.VideoPriority?.Dispose();
             Telemetry.Info(request.Loop ? "VideoBackgroundRemembered" : "VideoRequestSkippedLowerPriority", new { DisplayName = _display, ScreenName = Screen.Name, Path = path, Priority = request.EffectivePriority }, request.RequestId);
@@ -183,8 +185,17 @@ internal sealed class DisplayScreenTrack : IDisposable
             if (blockedBy is { } activePriority) request.PriorityRejected?.Invoke(request, _display, Screen.Name, activePriority);
             return;
         }
+        if (sameVideo && _loop && request.Loop && !_timeline.Stopping && (_priority is not null || request.PriorityCoordinator is null) &&
+            _media.PlaybackSpeed == request.EffectivePlaybackSpeed && _media.Engine!.Muted == request.Mute)
+        {
+            request.VideoPriority?.Dispose();
+            Telemetry.Info("VideoLoopAlreadyPlaying", new { DisplayName = _display, ScreenName = Screen.Name, Path = path, ActiveRequestId = RequestId }, request.RequestId);
+            return;
+        }
+        if (request.Loop) _background = (path, request with { VideoPriority = null });
         if (sameVideo)
         {
+            _media.SetPlaybackSpeed(request.EffectivePlaybackSpeed);
             _progress?.ContinueVideo(Screen.Id, request);
             var previousRequestId = RequestId;
             var previousPriority = _priority;
@@ -201,7 +212,7 @@ internal sealed class DisplayScreenTrack : IDisposable
             Telemetry.Info("VideoPlaybackContinued", new
             {
                 Path = path, DisplayName = _display, ScreenName = Screen.Name,
-                PreviousRequestId = previousRequestId, PositionSeconds = _media.Position, SurfaceOpacity = _alpha, Loop = _loop, Priority = _currentPriority, Muted = request.Mute
+                PreviousRequestId = previousRequestId, PositionSeconds = _media.Position, SurfaceOpacity = _alpha, Loop = _loop, Priority = _currentPriority, Muted = request.Mute, PlaybackSpeed = _media.PlaybackSpeed
             }, RequestId);
             return;
         }
@@ -232,6 +243,7 @@ internal sealed class DisplayScreenTrack : IDisposable
             _options.SoftwareVideoDecoding,
             FrameTransfer = _options.SoftwareVideoDecoding ? "SoftwareWicUpload" : "DxgiSurface",
             request.Loop,
+            PlaybackSpeed = request.EffectivePlaybackSpeed,
             request.IsAmbient,
             Priority = _currentPriority,
             SurfaceOpacity = 0
@@ -261,6 +273,12 @@ internal sealed class DisplayScreenTrack : IDisposable
     public void Tick()
     {
         if (StopInterrupted()) return;
+        if (_fadeRequest is { } fade && !_screenOpacity.Animating)
+        {
+            _fadeRequest = null;
+            Telemetry.Info("VideoScreenFadeCompleted", new { DisplayName = _display, ScreenId = Screen.Id, ScreenName = Screen.Name, fade.Command, fade.DurationSeconds, ScreenOpacity = _screenOpacity.Value }, fade.RequestId);
+        }
+        if (!IsOpen) return;
         if (_stillImage)
         {
             Draw(_timeline.Advance(_options, null, 0, false).Opacity);
@@ -316,7 +334,7 @@ internal sealed class DisplayScreenTrack : IDisposable
         }
         _lastPosition = position;
         var duration = _media.Duration;
-        var frame = _timeline.Advance(_options, double.IsFinite(duration) && duration > 0 ? duration : null, _media.Position, _media.Ended);
+        var frame = _timeline.Advance(_options, double.IsFinite(duration) && duration > 0 ? duration : null, _media.Position, _media.Ended, _media.PlaybackSpeed);
         if (frame.FadeStarted)
         {
             _state.TransitionTo(RendererState.FadingOut);
@@ -337,6 +355,22 @@ internal sealed class DisplayScreenTrack : IDisposable
     private void Draw(double opacity)
     {
         _alpha = opacity;
+    }
+    internal void FadeScreen(ExperienceRequest request)
+    {
+        var blocked = request.PriorityCoordinator?.BlockingPriorityFor(request.EffectivePriority, _display, Screen.Id);
+        if (IsOpen && _currentPriority > request.EffectivePriority && (blocked is null || _currentPriority > blocked)) blocked = _currentPriority;
+        if (blocked is { } priority)
+        {
+            request.PriorityRejected?.Invoke(request, _display, Screen.Name, priority);
+            Telemetry.Info("VideoFadeSkippedLowerPriority", new { DisplayName = _display, ScreenName = Screen.Name, request.Command, Priority = request.EffectivePriority, ActivePriority = priority }, request.RequestId);
+            return;
+        }
+        var from = _screenOpacity.Value;
+        _screenOpacity.Start(PhotoBooth.Networking.VideoFadeCommand.Target(request.Command), request.DurationSeconds!.Value);
+        _fadeRequest = request;
+        Telemetry.Info("VideoScreenFadeStarted", new { DisplayName = _display, ScreenId = Screen.Id, ScreenName = Screen.Name, request.Command, request.DurationSeconds, FromOpacity = from,
+            TargetOpacity = PhotoBooth.Networking.VideoFadeCommand.Target(request.Command), PlaybackRequestId = RequestId }, request.RequestId);
     }
     public void StopPlayback(string? source, string playbackRequestId)
     {
@@ -367,7 +401,7 @@ internal sealed class DisplayScreenTrack : IDisposable
         var (aspect,framing) = _outlineCache.Get(points,_graphics.Width,_graphics.Height,_framingPreview ?? Screen.Framing);
         var polygon = points.Vertices.Count > 4;
         if (polygon) _videoOutline.Configure(points);
-        _graphics.DrawLayer(_view, _alpha, _options, inverse, Screen.EffectiveBlackKey(_options), _stillImage, Screen.Brightness,
+        _graphics.DrawLayer(_view, _alpha * _screenOpacity.Value, _options, inverse, Screen.EffectiveBlackKey(_options), _stillImage, Screen.Brightness,
             Screen.Perspective?.Rectangle, framing,aspect,polygon ? _videoOutline : null);
     }
     public void DrawMask()
@@ -401,7 +435,7 @@ internal sealed class DisplayScreenTrack : IDisposable
     private void Report()
     {
         using var operation = _progress?.Begin("PlaybackStatistics", Screen.Id);
-        _metrics.Report(_graphics, _media, _display, RequestId, _alpha, TransformComputations, Screen.Name);
+        _metrics.Report(_graphics, _media, _display, RequestId, _alpha * _screenOpacity.Value, TransformComputations, Screen.Name);
     }
     internal bool StopInterrupted()
     {

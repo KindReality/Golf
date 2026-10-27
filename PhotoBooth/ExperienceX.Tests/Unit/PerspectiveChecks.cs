@@ -15,7 +15,7 @@ internal static class PerspectiveChecks
             var path = Path.Combine(root, "appsettings.json");
             File.WriteAllText(path, JsonSerializer.Serialize(new ExperienceOptions { DisplayScreens = new() { ["display1"] = [new ScreenOptions { Perspective = remote.Select(perspective) }] } }, ConfigurationSchema.Json));
             var store = new PointConfigurationStore(path);
-            var client = new ControllerDefinitionsCache(d => store.ApplyPerspectivesAsync(d));
+            var client = new ControllerDefinitionsCache(d => store.ApplyControllerDefinitionsAsync(d));
             ControllerCatalog Catalog() => new() { LocalControllerId = local.ControllerId, Controllers = [local, remote] };
             await client.ApplyAsync(Catalog());
             Check(client.Perspectives.Count == 2, "Local Controller catalog includes distinct perspectives from multiple Controllers");

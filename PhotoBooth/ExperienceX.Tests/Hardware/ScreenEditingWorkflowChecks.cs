@@ -68,7 +68,7 @@ internal static class ScreenEditingWorkflowChecks
                         using var accept = new Forms.Timer { Interval = 20 };
                         accept.Tick += (_, _) =>
                         {
-                            var picker = Forms.Application.OpenForms.OfType<VideoScreenDialog>().FirstOrDefault();
+                            var picker = Forms.Application.OpenForms.OfType<ScreenPropertiesDialog>().FirstOrDefault();
                             if (picker is null) return;
                             if (Read().ScreensFor(primary).Count == 0)
                                 foreach (var list in Descendants(picker).OfType<Forms.CheckedListBox>())
@@ -147,6 +147,7 @@ internal static class ScreenEditingWorkflowChecks
                     {
                         var center = ScreenNameLabel.Center(created.Points, target.ClientSize.Width, target.ClientSize.Height);
                         Click(target, (int)center.X, (int)center.Y);
+                        await Until(() => target.Controls.OfType<ScreenNameEditor>().Any());
                         var text = target.Controls.OfType<ScreenNameEditor>().Single();
                         text.Text = name;
                         SendMessage(text.Handle, 0x100, key, 0);
@@ -218,6 +219,7 @@ internal static class ScreenEditingWorkflowChecks
                     var toDelete = host.SelectedScreen!;
                     var label = ScreenNameLabel.Center(Read().PointsFor(other, toDelete.ScreenId), target.ClientSize.Width, target.ClientSize.Height);
                     Click(target, (int)label.X, (int)label.Y);
+                    await Until(() => target.Controls.OfType<ScreenNameEditor>().Any());
                     var nameEditor = target.Controls.OfType<ScreenNameEditor>().Single();
                     nameEditor.Text = "Typing";
                     nameEditor.SelectAll();

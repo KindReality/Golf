@@ -49,6 +49,23 @@ internal static class LivePageChecks
                     Announce(inventory); await Until(() => host.Experiences.Snapshot().Any(p => p.Usable));
                     using var form = new Form { ClientSize = new(1180, 760), ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new(-32000, -32000) };
                     using var page = new LivePage(host); form.Controls.Add(page); form.Show(); page.RefreshState();
+                    foreach (var size in new[] { new Size(1920, 952), new Size(1180, 700) })
+                    {
+                        form.ClientSize = size; page.PerformLayout(); page.RefreshState();
+                        var toolbar = Descendants(page).Single(c => c.AccessibleName == "Live target toolbar");
+                        Check(!Descendants(page.Manual).OfType<Panel>().Any(p => p.AutoScroll && p.VerticalScroll.Visible), "Video composer fits without scrolling at " + size);
+                        Check(toolbar.Controls.Cast<Control>().Max(c => c.Bottom) <= toolbar.ClientSize.Height &&
+                            toolbar.Controls.Cast<Control>().Select(c => c.Top).Max() - toolbar.Controls.Cast<Control>().Select(c => c.Top).Min() < 12,
+                            "Target modes, selection, discovery and volume share one unclipped toolbar at " + size);
+                        foreach (var panel in Descendants(page).OfType<Panel>().Where(p => p.AutoScroll))
+                            Check(!panel.HorizontalScroll.Visible, "No horizontal scrollbar: " + (panel.AccessibleName ?? panel.GetType().Name) + " at " + size);
+                    }
+                    var kind = Descendants(page.Manual).OfType<ComboBox>().Single(c => c.AccessibleName == "Command type");
+                    kind.SelectedItem = "Audio"; page.RefreshState(); page.PerformLayout();
+                    Check(!Descendants(page.Manual).OfType<Panel>().Any(p => p.AutoScroll && p.VerticalScroll.Visible), "Audio composer includes output, volume and channel without scrolling");
+                    page.Manual.SelectMode(true); page.RefreshState(); page.PerformLayout();
+                    Check(!Descendants(page.Manual).OfType<Panel>().Any(p => p.AutoScroll && p.VerticalScroll.Visible), "Event composer includes source, input and event name without scrolling");
+                    page.Manual.SelectMode(false); kind.SelectedItem = "Video"; page.RefreshState();
                     Button Choice(string text) => Descendants(page).OfType<Button>().Single(b => b.Text == text);
                     LiveTile[] Tiles() => Descendants(page).OfType<LiveTile>().ToArray();
                     Check(Tiles().Length == 1 && Tiles()[0].Tag is LiveTarget { Audio: false }, "Video mode shows only screens");
@@ -68,7 +85,7 @@ internal static class LivePageChecks
                     form.PerformLayout(); page.PerformLayout();
                     using (var image = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
                     {
-                        form.DrawToBitmap(image, new(0, 0, image.Width, image.Height));
+                        page.DrawToBitmap(image, new(0, 0, image.Width, image.Height));
                         var screenshot = Path.Combine(Path.GetTempPath(), "Controller-Live-Roles.png"); image.Save(screenshot);
                         Console.WriteLine("Live screenshot: " + screenshot);
                     }

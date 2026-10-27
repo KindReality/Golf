@@ -47,8 +47,8 @@ internal static class ShowEditorControls
         return list;
     }
     internal static Label Note(string text) => new() { Text = text, AutoSize = false, Height = text.Length > 90 ? 62 : 34, ForeColor = DarkTheme.Muted, Dock = DockStyle.Top, Padding = new(0, 6, 0, 8), AutoEllipsis = true };
-    internal static Panel ScrollContainer(Control content)
-    { var panel = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = DarkTheme.Surface, Padding = new(12) }; panel.Controls.Add(content); return panel; }
+    internal static Panel ScrollContainer(Control content, bool compact = false)
+    { var panel = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = DarkTheme.Surface, Padding = new(compact ? 3 : 12) }; panel.Controls.Add(content); return panel; }
     internal static void Watch(Control control, Action changed)
     {
         switch (control)
@@ -67,10 +67,12 @@ internal static class ShowEditorControls
 internal sealed class ShowEditorFields : TableLayoutPanel
 {
     private readonly int _fieldColumns;
+    private readonly bool _compact;
     private int _nextColumn;
-    internal ShowEditorFields(int fieldColumns = 1)
+    internal ShowEditorFields(int fieldColumns = 1, bool compact = false)
     {
         _fieldColumns = fieldColumns;
+        _compact = compact;
         Dock = DockStyle.Top; AutoSize = false; Height = 4; ColumnCount = fieldColumns == 1 ? 2 : fieldColumns; GrowStyle = TableLayoutPanelGrowStyle.AddRows;
         BackColor = DarkTheme.Surface; Padding = new(2);
         if (fieldColumns == 1) { ColumnStyles.Add(new(SizeType.Percent, 34)); ColumnStyles.Add(new(SizeType.Percent, 66)); }
@@ -81,13 +83,15 @@ internal sealed class ShowEditorFields : TableLayoutPanel
         if (_fieldColumns > 1)
         {
             if (RowCount == 0) _nextColumn = 0;
-            var rowHeight = Math.Max(70, control.Height + 30);
+            if (_compact && control is ComboBox combo) combo.ItemHeight = 19;
+            if (_compact && control is FlowLayoutPanel flow) { flow.Height = 24; foreach (Control child in flow.Controls) child.Padding = Padding.Empty; }
+            var rowHeight = Math.Max(_compact ? 48 : 70, control.Height + (_compact ? 20 : 30));
             if (_nextColumn == 0) { RowCount++; RowStyles.Add(new(SizeType.Absolute, rowHeight)); }
             else RowStyles[RowCount - 1].Height = Math.Max(RowStyles[RowCount - 1].Height, rowHeight);
             control.AccessibleName = label; control.Dock = DockStyle.Top; control.Margin = Padding.Empty;
-            var cell = new Panel { Dock = DockStyle.Fill, Margin = new(4), Padding = new(0, 2, 4, 0) };
+            var cell = new Panel { Dock = DockStyle.Fill, Margin = new(_compact ? 2 : 4), Padding = new(0, 2, _compact ? 2 : 4, 0) };
             cell.Controls.Add(control);
-            cell.Controls.Add(new Label { Text = label, Dock = DockStyle.Top, Height = 24, ForeColor = DarkTheme.Muted });
+            cell.Controls.Add(new Label { Text = label, Dock = DockStyle.Top, Height = _compact ? 18 : 24, ForeColor = DarkTheme.Muted });
             Controls.Add(cell, _nextColumn, RowCount - 1);
             _nextColumn = (_nextColumn + 1) % _fieldColumns;
             Height = (int)RowStyles.Cast<RowStyle>().Sum(r => r.Height) + Padding.Vertical;

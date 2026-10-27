@@ -16,6 +16,8 @@ internal sealed class ControlWindow : Form
     private readonly ComboBox _playlists = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 250 };
     private readonly ComboBox _scenes = new DarkComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 250 };
     private readonly Button _activate = new() { Text = "Activate scene", AutoSize = true, Enabled = false };
+    private readonly Button _activeScene = new() { Text = "Active", Name = "ActivateActiveScene", Enabled = false, Dock = DockStyle.Fill };
+    private readonly Button _inactiveScene = new() { Text = "Inactive", Name = "ActivateIdleScene", Enabled = false, Dock = DockStyle.Fill };
     private readonly Label _sceneStatus = new() { AutoSize = true, Dock = DockStyle.Fill };
     private readonly Label _connectionStatus = new() { Text = "CONNECTING", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight };
     private readonly Button _run = new() { Text = "Run playlist", AutoSize = true, Enabled = false };
@@ -80,6 +82,9 @@ internal sealed class ControlWindow : Form
         DarkTheme.Choices(_playlists);
         DarkTheme.Choices(_scenes);
         DarkTheme.Button(_activate, true);
+        DarkTheme.Button(_activeScene, true); DarkTheme.Button(_inactiveScene);
+        _toolbarTips.SetToolTip(_activeScene, "Activate the active scene");
+        _toolbarTips.SetToolTip(_inactiveScene, "Activate the idle scene");
         DarkTheme.Button(_run, true);
         DarkTheme.Button(_cancel);
         DarkTheme.Button(_clearRunning); DarkTheme.Button(_clearActivity);
@@ -89,7 +94,7 @@ internal sealed class ControlWindow : Form
         layout.ColumnStyles.Add(new(SizeType.Percent, 42));
         layout.ColumnStyles.Add(new(SizeType.Percent, 58));
         layout.RowStyles.Add(new(SizeType.Absolute, 100));
-        layout.RowStyles.Add(new(SizeType.Absolute, 152));
+        layout.RowStyles.Add(new(SizeType.Absolute, 192));
         layout.RowStyles.Add(new(SizeType.Percent, 100));
         layout.RowStyles.Add(new(SizeType.Absolute, 30));
         var configuration = _configurationButton = new ToolbarIconButton(ToolbarGlyph.Configure, "Enter configuration mode");
@@ -119,7 +124,11 @@ internal sealed class ControlWindow : Form
         header.Controls.Add(navigation, 1, 2);
         header.SetColumnSpan(navigation, 2); header.SetColumn(navigation, 0);
         layout.RowStyles[0].Height = 0;
-        layout.Controls.Add(CommandCard("SCENE CONTROL", _scenes, _activate, _sceneStatus, null, new Padding(0, 0, 8, 12)), 0, 1);
+        var sceneShortcuts = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        sceneShortcuts.ColumnStyles.Add(new(SizeType.Percent, 50)); sceneShortcuts.ColumnStyles.Add(new(SizeType.Percent, 50));
+        _activeScene.Margin = new Padding(0, 0, 4, 4); _inactiveScene.Margin = new Padding(4, 0, 0, 4);
+        sceneShortcuts.Controls.Add(_activeScene, 0, 0); sceneShortcuts.Controls.Add(_inactiveScene, 1, 0);
+        layout.Controls.Add(CommandCard("SCENE CONTROL", _scenes, _activate, _sceneStatus, null, new Padding(0, 0, 8, 12), sceneShortcuts), 0, 1);
         layout.Controls.Add(CommandCard("STORYBOARD PLAYBACK", _playlists, _run, DarkTheme.Caption("Select an active run below to cancel it."), _cancel, new Padding(8, 0, 0, 12)), 1, 1);
         var devices = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = Padding.Empty };
         devices.RowStyles.Add(new(SizeType.Percent, 50)); devices.RowStyles.Add(new(SizeType.Percent, 50));
@@ -140,9 +149,10 @@ internal sealed class ControlWindow : Form
         };
         _activate.Click += (_, _) =>
         {
-            try { if (_scenes.SelectedItem is string name) _host?.Scenes.Request(name); }
-            catch (Exception ex) { _host?.Log.Error("ManualSceneFailed", ex); }
+            if (_scenes.SelectedItem is string name) RequestScene(name);
         };
+        _activeScene.Click += (_, _) => RequestScene("active");
+        _inactiveScene.Click += (_, _) => RequestScene("idle");
         _cancel.Click += (_, _) =>
         {
             if (_running.SelectedItems.Count == 1 && _running.SelectedItems[0].Tag is string id) _host?.Engine.Cancel(id);
@@ -161,18 +171,29 @@ internal sealed class ControlWindow : Form
         FormClosing += StopAsync;
     }
 
-    private static DarkCard CommandCard(string heading, ComboBox choices, Button action, Control status, Button? secondary, Padding margin)
+    private void RequestScene(string name)
+    {
+        if (_closing) return;
+        try { _host?.Scenes.Request(name); }
+        catch (Exception ex) { _host?.Log.Error("ManualSceneFailed", ex); }
+    }
+
+    private static DarkCard CommandCard(string heading, ComboBox choices, Button action, Control status, Button? secondary, Padding margin, Control? shortcuts = null)
     {
         var card = new DarkCard { Margin = margin };
-        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Margin = Padding.Empty, Padding = new Padding(24, 8, 24, 0), BackColor = DarkTheme.Surface };
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = shortcuts is null ? 3 : 4, Margin = Padding.Empty, Padding = new Padding(24, 8, 24, 0), BackColor = DarkTheme.Surface };
         content.ColumnStyles.Add(new(SizeType.Percent, 100)); content.ColumnStyles.Add(new(SizeType.AutoSize));
-        content.RowStyles.Add(new(SizeType.Absolute, 26)); content.RowStyles.Add(new(SizeType.Absolute, 42)); content.RowStyles.Add(new(SizeType.Percent, 100));
+        content.RowStyles.Add(new(SizeType.Absolute, 26)); content.RowStyles.Add(new(SizeType.Absolute, 42));
+        if (shortcuts is not null) content.RowStyles.Add(new(SizeType.Absolute, 40));
+        content.RowStyles.Add(new(SizeType.Percent, 100));
         var caption = DarkTheme.Caption(heading); content.Controls.Add(caption, 0, 0); content.SetColumnSpan(caption, 2);
         choices.Dock = DockStyle.Fill; choices.Margin = new Padding(0, 3, 12, 0);
         action.Margin = new Padding(0, 0, 0, 4);
         content.Controls.Add(choices, 0, 1); content.Controls.Add(action, 1, 1);
-        content.Controls.Add(status, 0, 2);
-        if (secondary is not null) { secondary.Margin = new Padding(0, 2, 0, 0); content.Controls.Add(secondary, 1, 2); }
+        if (shortcuts is not null) { content.Controls.Add(shortcuts, 0, 2); content.SetColumnSpan(shortcuts, 2); }
+        var statusRow = shortcuts is null ? 2 : 3;
+        content.Controls.Add(status, 0, statusRow);
+        if (secondary is not null) { secondary.Margin = new Padding(0, 2, 0, 0); content.Controls.Add(secondary, 1, statusRow); }
         else content.SetColumnSpan(status, 2);
         card.Controls.Add(content); return card;
     }
@@ -211,6 +232,11 @@ internal sealed class ControlWindow : Form
             _experience = new(experienceSource, () => !_closing && _host.Options.ExperienceSupervisionEnabled, _host.Log);
             _refresh.Start();
             RefreshState();
+            if (!_host.Options.ConfigurationMode)
+            {
+                WindowState = FormWindowState.Minimized;
+                _host.Log.Info("ControllerStartedMinimized", "Controller started in the taskbar with configuration mode off");
+            }
             Opacity = 1;
         }
         catch (Exception ex)
@@ -249,6 +275,8 @@ internal sealed class ControlWindow : Form
         _sceneStatus.Text = $"Scene: {scene.Active ?? "none"} • {scene.Phase}";
         _run.Enabled = _playlists.SelectedItem is not null;
         _activate.Enabled = _scenes.SelectedItem is not null;
+        _activeScene.Enabled = options.Scenes.Any(s => s.Name.Equals("active", StringComparison.OrdinalIgnoreCase));
+        _inactiveScene.Enabled = options.Scenes.Any(s => s.Name.Equals("idle", StringComparison.OrdinalIgnoreCase));
         _hardware.BeginUpdate();
         _hardware.Items.Clear();
         var statuses = _host.ArduinoStatus;
@@ -308,7 +336,7 @@ internal sealed class ControlWindow : Form
         var placement = (selected.DeviceName, selected.Bounds);
         if (_displayPlacement == placement) return;
         _displayPlacement = placement;
-        WindowState = FormWindowState.Normal;
+        if (WindowState != FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         MinimumSize = new Size(Math.Min(980, selected.Bounds.Width), Math.Min(660, selected.Bounds.Height));
         Bounds = selected.Bounds;
         _host!.Log.Info("ControllerWindowPositioned", $"Controller window on {selected.DeviceName}", new { RequestedDisplay = options.DefaultDisplayName, Display = selected.DeviceName, Bounds = new { Left, Top, Width, Height }, WindowState = WindowState.ToString() });
@@ -443,6 +471,8 @@ internal sealed class ControlWindow : Form
     internal static bool TextInputFocused(Control parent) => parent.Controls.Cast<Control>().Any(c => c.ContainsFocus && (c is TextBoxBase or ComboBox or UpDownBase || TextInputFocused(c)));
     protected override bool ProcessCmdKey(ref Message m, Keys key)
     {
+        if (key == Keys.Back && !TextInputFocused(this))
+        { ShowDashboard(); return true; }
         if (_host?.Options.ConfigurationMode == true && key == Keys.E && !TextInputFocused(this))
         { _configurationShortcut.SwitchTo("Experience"); return true; }
         return base.ProcessCmdKey(ref m,key);

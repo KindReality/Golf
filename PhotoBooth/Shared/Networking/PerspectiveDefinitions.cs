@@ -66,6 +66,7 @@ public sealed record ControllerSharedDefinitions
     public string ControllerName { get; init; } = "";
     public string Hostname { get; init; } = "";
     public PerspectiveDefinition[] Perspectives { get; init; } = [];
+    public string[] Roles { get; init; } = [];
     public static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true };
     public const int MaximumBytes = 4 * 1024 * 1024;
     public void Validate()
@@ -73,6 +74,9 @@ public sealed record ControllerSharedDefinitions
         if (SchemaVersion != 1 || !Guid.TryParse(ControllerId, out _) || string.IsNullOrWhiteSpace(ControllerName) || ControllerName.Length > 128 || Perspectives is null || Perspectives.Length > 4096)
             throw new ArgumentException("Invalid controller shared definitions.");
         ControllerDiscovery.MediaShare(Hostname);
+        if (Roles is null || Roles.Length > 4096 || Roles.Distinct(StringComparer.OrdinalIgnoreCase).Count() != Roles.Length ||
+            Roles.Any(role => role is null || RoleList.Parse(role) is not [var name] || name != role))
+            throw new ArgumentException("Shared roles require distinct assigned role names, without wildcards or exclusions.");
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var perspective in Perspectives)

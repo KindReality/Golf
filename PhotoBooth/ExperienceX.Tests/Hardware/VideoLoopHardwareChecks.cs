@@ -53,11 +53,11 @@ internal static class VideoLoopHardwareChecks
                         var sender = new BroadcastOptions { DeviceName = source, UdpCommandsPort = commands, UdpEventsPort = events, UdpSendAttempts = 1 };
                         await UdpBroadcastSender.SendAsync(BroadcastEnvelope.Create(sender, "command", "loop-client", body, id), sender);
                     }
-                    object Play() => new { experience = "video", value = Path.GetFileName(video), screen = display + "/screen1", loop = true, mute = true };
+                    object Play(bool mute = true) => new { experience = "video", value = Path.GetFileName(video), screen = display + "/screen1", loop = true, mute };
                     object Stop(string id) => new { experience = "video", command = "stop", playbackRequestId = id };
                     await Send("controller-a", "original", Play());
                     await Until(s => s.RequestId == "original" && s.Position > .2 && s.Frames > 2 && s.Opacity > .9);
-                    await Send("controller-a", "replacement", Play());
+                    await Send("controller-a", "replacement", Play(false));
                     await Until(s => s.RequestId == "replacement" && s.Position > .2 && s.Opacity > .9);
                     await Send("controller-a", "stop-old", Stop("original"));
                     await Send("other-controller", "stop-wrong-source", Stop("replacement"));

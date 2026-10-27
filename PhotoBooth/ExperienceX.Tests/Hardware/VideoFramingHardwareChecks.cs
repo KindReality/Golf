@@ -57,6 +57,7 @@ internal static class VideoFramingHardwareChecks
                     await UntilAsync(async () => (await window.Renderer!.SnapshotAsync()).Single().Frames > 20,"Video playing");
                     var center = ScreenNameLabel.Center(points,window.ClientSize.Width,window.ClientSize.Height);
                     SendMessage(window.Handle,0x201,1,Position((int)center.X,(int)center.Y)); SendMessage(window.Handle,0x202,0,Position((int)center.X,(int)center.Y));
+                    await Until(() => window.Controls.OfType<ScreenNameEditor>().Any(), "Single-click name editing waits for a possible double-click");
                     var nameEditor = window.Controls.OfType<ScreenNameEditor>().Single();
                     var nativeCenter = window.PointToScreen(new((int)center.X,(int)center.Y));
                     SendMessage(nameEditor.Handle,0x20A,(nint)(1200 << 16),Position(nativeCenter.X,nativeCenter.Y));

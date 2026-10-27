@@ -7,6 +7,11 @@ internal sealed class VideoPlaybackPriority
 {
     private readonly object _gate = new();
     private readonly HashSet<VideoPriorityLease> _active = [];
+    internal CommandPriority? BlockingPriorityFor(CommandPriority requested, string display, string screen)
+    {
+        lock (_gate) return _active.Where(l => l.Priority > requested && l.Identity.Display.Equals(display, StringComparison.OrdinalIgnoreCase) &&
+            l.Identity.Screen.Equals(screen, StringComparison.OrdinalIgnoreCase)).Select(l => (CommandPriority?)l.Priority).Max();
+    }
     public VideoPriorityLease? TryBegin(CommandPriority priority, VideoPlaybackIdentity identity) => TryBeginBatch(priority, [identity])[0];
     public VideoPriorityLease?[] TryBeginBatch(CommandPriority priority, VideoPlaybackIdentity[] identities)
         => TryBeginBatch(priority, identities, out _);

@@ -25,9 +25,17 @@ internal static class RandomAudioChecks
         Check(first.Command.Device == "alpha" && repeat.Command.Device == "alpha", "Each file is selected independently; repeating a speaker is allowed.");
         var scoped = PlaylistAudioTarget.Random(audio with { Device = "beta" }, peers, count => { Check(count == 1, "Explicit device scoping limits the candidate pool."); return 0; });
         Check(scoped.SpeakerName == "Right", "Device-scoped requests retain the requested computer.");
+        PlaylistCommand Roles(string roles) => audio with { Payload = JsonSerializer.SerializeToElement(new { experience = "audio", value = "Whispers/First.wav", roles, volume = 65 }) };
+        var all = PlaylistAudioTarget.Random(Roles("*"), peers, count => { Check(count == 3, "Random wildcard candidates include Subwoofer outputs."); return 1; });
+        Check(ControllerOptions.Text(all.Command.Payload, "audioDevice") == "woofer", "Wildcard random playback can select the subwoofer.");
+        var subwoofer = PlaylistAudioTarget.Random(Roles("Subwoofer"), peers, count => { Check(count == 1, "A Subwoofer role restricts random playback to subwoofers."); return 0; });
+        Check(ControllerOptions.Text(subwoofer.Command.Payload, "audioDevice") == "woofer", "Subwoofer-only selection uses the normal role resolver.");
+        _ = PlaylistAudioTarget.Random(Roles("Whispers,Subwoofer,whispers"), [a, b, a], count => { Check(count == 3, "Combined roles and duplicate inventories never duplicate an endpoint."); return 0; });
+        try { PlaylistAudioTarget.Random(Roles("Subwoofer"), [b, offline, ambiguous, missing], _ => 0); throw new Exception("An absent subwoofer fell back to another speaker."); }
+        catch (InvalidOperationException) { Console.WriteLine("PASS Unavailable role targets report failure without default-speaker fallback."); }
         try { PlaylistAudioTarget.Random(audio, [a with { Online = false }], _ => 0); throw new Exception("An unavailable output was selected."); }
         catch (InvalidOperationException) { Console.WriteLine("PASS Missing eligible outputs are reported without broadcasting or fallback."); }
-        var board = new PlaylistOptions { Name = "sequence", AudioOutputMode = "Random", DurationMilliseconds = 80, Items = [new() { Name = "First", Commands = [audio] }, new() { Name = "Second", DelayMilliseconds = 40, Commands = [audio] }] };
+        var board = new PlaylistOptions { Name = "sequence", AudioOutputMode = "Random", MinimumDurationMilliseconds = 80, Items = [new() { Name = "First", Commands = [audio] }, new() { Name = "Second", DelayMilliseconds = 40, Commands = [audio] }] };
         var ambient = new PlaylistOptions { Name = "idle-ambient", Type = "ambient", Items = [new() { Name = "whispers", MinIntervalMilliseconds = 1, MaxIntervalMilliseconds = 1, Commands = [new() { Playlist = "sequence" }] }] };
         var options = new ControllerOptions { DeviceName = "test", Scenes = [new() { Name = "idle", AmbientPlaylist = "idle-ambient" }], Playlists = [ambient, board] };
         options = ControllerOptions.Parse(JsonSerializer.Serialize(options, ControllerOptions.Json), new("Development", 1000));

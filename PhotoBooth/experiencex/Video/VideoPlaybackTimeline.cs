@@ -49,11 +49,11 @@ internal sealed class VideoPlaybackTimeline
         _fadeDuration = fadeSeconds;
         _fadeFrom = Opacity;
     }
-    public VideoPlaybackFrame Advance(ExperienceOptions options, double? duration, double position, bool ended)
-        => AdvanceAt(_clock.Elapsed.TotalSeconds, options, duration, position, ended);
-    internal VideoPlaybackFrame AdvanceAt(double elapsed, ExperienceOptions options, double? duration, double position, bool ended)
+    public VideoPlaybackFrame Advance(ExperienceOptions options, double? duration, double position, bool ended, double playbackSpeed = 1)
+        => AdvanceAt(_clock.Elapsed.TotalSeconds, options, duration, position, ended, playbackSpeed);
+    internal VideoPlaybackFrame AdvanceAt(double elapsed, ExperienceOptions options, double? duration, double position, bool ended, double playbackSpeed = 1)
     {
-        var timing = PlaybackTiming.Evaluate(_loop || _stopping ? null : duration, position, options.TransitionOutSeconds);
+        var timing = PlaybackTiming.Evaluate(_loop || _stopping ? null : duration, position, options.TransitionOutSeconds, playbackSpeed);
         bool fadeStarted = _reportFade || !_fading && timing.ShouldFade;
         _reportFade = false;
         if (fadeStarted && !_stopping)

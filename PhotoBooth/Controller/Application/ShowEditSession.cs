@@ -84,6 +84,7 @@ internal sealed class ShowEditSession(ControllerOptions options)
         if (command.Playlist is not null) return "Playlist • " + command.Playlist;
         var payload = command.Payload;
         string? Text(string field) => ControllerOptions.Text(payload, field);
+        if (PhotoBooth.Networking.VideoFadeCommand.IsFade(Text("command"))) return $"{Text("command")} • {Text("screen") ?? Text("roles") ?? "*"}";
         return command.Type == "event" ? "Event • " + Text("event") :
             (Text("experience") ?? Text("command") ?? "Command") + " • " + (Text("value") ?? command.Device ?? "*");
     }

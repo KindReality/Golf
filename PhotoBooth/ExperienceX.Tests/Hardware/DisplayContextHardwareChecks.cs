@@ -63,7 +63,7 @@ internal static class DisplayContextHardwareChecks
                     {
                         accept.Tick += (_, _) =>
                         {
-                            var dialog = Forms.Application.OpenForms.OfType<VideoScreenDialog>().FirstOrDefault();
+                            var dialog = Forms.Application.OpenForms.OfType<ScreenPropertiesDialog>().FirstOrDefault();
                             if (dialog is null) return;
                             accept.Stop();
                             try

@@ -25,6 +25,12 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action rest
     internal const int LedId = 0x584C;
     public Action? AddLedScreen { get; set; }
     private bool _ledRegistered;
+    internal const int LockScreenId = 0x5891;
+    public Action? ToggleScreenLock { get; set; }
+    private bool _lockRegistered;
+    internal const int ScreenPropertiesId = 0x5892;
+    public Action? EditScreenProperties { get; set; }
+    private bool _propertiesRegistered;
     internal const int NameId = 0x584E, MatId = 0x584D;
     internal const int TransparencyId = 0x5854;
     internal const int BrightnessPlusId = 0x5860, BrightnessShiftPlusId = 0x5861,
@@ -168,12 +174,14 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action rest
                 Register(VideoId, 0x56, modifiers, "V", "AddVideoScreenHotkey", ref _videoRegistered, unavailable);
             if (EditScreenName is not null)
                 Register(NameId, 0x4E, modifiers, "N", "ScreenNameHotkey", ref _nameRegistered, unavailable);
+            if (EditScreenProperties is not null)
+                Register(ScreenPropertiesId, 0x0D, modifiers, "Enter", "ScreenPropertiesHotkey", ref _propertiesRegistered, unavailable);
             if (AddVisualizationScreen is not null)
                 Register(VisualizationId, 0x47, modifiers, "G", "AddVisualizationScreenHotkey", ref _visualizationRegistered, unavailable);
             if (AddMatScreen is not null)
                 Register(MatId, 0x4D, modifiers, "M", "AddMatScreenHotkey", ref _matRegistered, unavailable);
-            if (AddLedScreen is not null)
-                Register(LedId, 0x4C, modifiers, "L", "AddLedScreenHotkey", ref _ledRegistered, unavailable);
+            if (ToggleScreenLock is not null)
+                Register(LockScreenId, 0x4C, modifiers, "L", "ScreenLockHotkey", ref _lockRegistered, unavailable);
         }
         return unavailable.ToArray();
     }
@@ -292,6 +300,8 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action rest
                 EditScreenName?.Invoke();
                 return;
             }
+            if (message.WParam == ScreenPropertiesId && key == 0x0D && _propertiesRegistered)
+            { EditScreenProperties?.Invoke(); return; }
             if (message.WParam == VisualizationId && key == 0x47 && _visualizationRegistered)
             {
                 AddVisualizationScreen?.Invoke();
@@ -302,6 +312,8 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action rest
                 AddMatScreen?.Invoke();
                 return;
             }
+            if (message.WParam == LockScreenId && key == 0x4C && _lockRegistered)
+            { ToggleScreenLock?.Invoke(); return; }
             if (message.WParam == LedId && key == 0x4C && _ledRegistered) { AddLedScreen?.Invoke(); return; }
         }
         base.WndProc(ref message);
@@ -321,6 +333,10 @@ internal sealed class ApplicationHotkeys(Action toggleConfiguration, Action rest
 
     private void Unregister()
     {
+        if (_propertiesRegistered) UnregisterHotKey(Handle, ScreenPropertiesId);
+        _propertiesRegistered = false;
+        if (_lockRegistered) UnregisterHotKey(Handle, LockScreenId);
+        _lockRegistered = false;
         if (_resetVideoRegistered) UnregisterHotKey(Handle, ResetVideoId);
         _resetVideoRegistered = false;
         if (_cancelRegistered) UnregisterHotKey(Handle, CancelSubmenuId);

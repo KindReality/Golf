@@ -16,16 +16,15 @@ internal static class PlaylistRoleTarget
         return choices[choices.Length == 1 ? 0 : choose(choices.Length)];
     }
 
-    internal static PlaylistCommand Apply(PlaylistCommand command, string? roles, bool includeSubwoofer = false)
+    internal static PlaylistCommand Apply(PlaylistCommand command, string? roles)
     {
         if (command.Playlist is not null) return command;
         var body = command.Payload;
         var assigned = RoleList.ParseTargets(roles);
         var experience = ControllerOptions.Text(body, "experience")?.ToLowerInvariant();
         var media = experience is "video" or "audio";
-        var playback = media && (ControllerOptions.Text(body, "command")?.ToLowerInvariant() is null or "play");
-        if (assigned.Length > 0 && includeSubwoofer && experience == "audio")
-            assigned = assigned.Append("subwoofer").Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var action = ControllerOptions.Text(body, "command");
+        var playback = media && (action?.ToLowerInvariant() is null or "play" || experience == "video" && VideoFadeCommand.IsFade(action));
         if (assigned.Length > 0 && playback && command.Transport == "udp" && command.Type == "command")
         {
             var payload = JsonNode.Parse(body.GetRawText())!.AsObject();

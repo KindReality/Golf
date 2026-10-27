@@ -41,4 +41,5 @@ internal sealed class ScreenSurface(MainWindow owner, string id) : IPointSurface
     }
     public Task<bool> ConfirmCalibrationAsync(PointOptions expected) => owner.Renderer?.ConfirmPointsAsync(expected, id) ?? Task.FromResult(false);
     public void ReleaseCalibrationCapture() => owner.ReleaseCalibrationCapture();
+    public void MovePointerToPoint(ScreenPoint point) => owner.MovePointerToPoint(point);
 }

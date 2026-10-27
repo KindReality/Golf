@@ -18,7 +18,7 @@ internal static class SceneCancellationChecks
     private static PlaylistOptions Entry(string name) => new() { Name = name + "-entry", Items = [new() { Name = "video", Commands = [Video(name + ".mp4")] }] };
     private static ControllerOptions Delayed() => Options() with
     {
-        Playlists = Options().Playlists.Select(p => p.Type == "ambient" ? p : p with { DurationMilliseconds = 600000,
+        Playlists = Options().Playlists.Select(p => p.Type == "ambient" ? p : p with { MinimumDurationMilliseconds = 600000,
             Items = [p.Items[0], new() { Name = "late", DelayMilliseconds = 60000, Commands = [Video("must-not-send.mp4")] }] }).ToArray()
     };
     internal static async Task Run()

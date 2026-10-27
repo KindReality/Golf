@@ -9,6 +9,7 @@ internal sealed class ControllerDefinitionsCache(Func<ControllerSharedDefinition
     private string? _localControllerId;
     private long _seen;
     private ControllerCatalog? _currentCatalog;
+    public string[] Roles => RoleCatalog.Names(_loaded.Values.SelectMany(c => c.Definitions.Roles));
     public ControllerSharedDefinitions? LocalController => Environment.TickCount64 - _seen < 10000 &&
         _localControllerId is not null && _loaded.TryGetValue(_localControllerId, out var local) ? local.Definitions : null;
     public PerspectiveSelection? FindPerspective(string controllerId, string perspectiveId) =>

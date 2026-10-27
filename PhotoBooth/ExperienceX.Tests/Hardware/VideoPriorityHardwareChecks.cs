@@ -87,14 +87,14 @@ internal static class VideoPriorityHardwareChecks
                         await Send("background", Play("*", loop: true));
                         var start = await Until(i => i.All(s => s.RequestId == "background" && s.Frames > 4 && s.Opacity > .9));
                         await Send("repeat", Play("*", loop: true));
-                        await Until(i => i.All(s => s.RequestId == "repeat" && s.Frames > start.Single(p => p.Id == s.Id).Frames && s.Opacity > .9));
+                        await Until(i => i.All(s => s.RequestId == "background" && s.Frames > start.Single(p => p.Id == s.Id).Frames && s.Opacity > .9));
                         await Send("foreground", Play(targetA, "Other.mp4"));
-                        await Until(i => A(i).RequestId == "foreground" && A(i).Frames > 3 && B(i).RequestId == "repeat");
+                        await Until(i => A(i).RequestId == "foreground" && A(i).Frames > 3 && B(i).RequestId == "background");
                         await Send("blocked", Play(targetA), CommandPriority.Low);
                         await Send("latest-background", Play(targetA, loop: true));
                         await Task.Delay(150);
                         Check(A(await Read()).RequestId == "foreground", "A lower-priority background interrupted the foreground video.");
-                        await Until(i => A(i).RequestId == "latest-background" && A(i).Frames > 3 && B(i).RequestId == "repeat");
+                        await Until(i => A(i).RequestId == "latest-background" && A(i).Frames > 3 && B(i).RequestId == "background");
                         Console.WriteLine("PASS Foreground finishes; latest background resumes on its screen; another screen continues.");
 
                         var before = A(await Read());
@@ -110,7 +110,7 @@ internal static class VideoPriorityHardwareChecks
                         await Send("other-screen", Play(targetB, "Other.mp4"));
                         await Until(i => A(i).RequestId == "high" && B(i).RequestId == "other-screen" && B(i).Frames > 2);
                         await Send("stop-background", Stop("latest-background"));
-                        await Until(i => A(i).RequestId is null && B(i).RequestId == "repeat");
+                        await Until(i => A(i).RequestId is null && B(i).RequestId == "background");
                         await Task.Delay(250); Check(A(await Read()).RequestId is null, "Stopped scene background returned after foreground completion.");
                         Console.WriteLine("PASS High blocks Medium only on that screen; scene cleanup prevents obsolete background resumption.");
 
@@ -137,8 +137,8 @@ internal static class VideoPriorityHardwareChecks
                         bool Has(string name) => lines.Any(l => l.RootElement.GetProperty("Event").GetString() == name);
                         Check(Has("VideoRequestSkippedLowerPriority") && Has("VideoBackgroundResumed"), "Missing priority or background telemetry.");
                         Check(!lines.Any(l => l.RootElement.GetProperty("Event").GetString() == "VideoOpening" && l.RootElement.GetProperty("RequestId").GetString() is "same-one-shot" or "same-once" or "promote-loop"), "Continuing the same video reopened a decoder.");
-                        Check(lines.Count(l => l.RootElement.GetProperty("Event").GetString() == "VideoOpening" && l.RootElement.GetProperty("RequestId").GetString() == "repeat") == 1,
-                            "The repeated loop should open only once, when screen2 resumes after Other.mp4 ends.");
+                        Check(!lines.Any(l => l.RootElement.GetProperty("Event").GetString() == "VideoOpening" && l.RootElement.GetProperty("RequestId").GetString() == "repeat") && Has("VideoLoopAlreadyPlaying"),
+                            "Repeated unchanged loops preserve their original playback ownership without reopening a decoder.");
                     }
                     finally { foreach (var line in lines) line.Dispose(); }
                     Console.WriteLine("PASS Native UDP per-screen priorities, natural completion/background resumption, same-file continuity, loop promotion, stop cleanup and audio mixing.");

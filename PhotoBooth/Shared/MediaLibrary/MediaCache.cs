@@ -1,95 +1,82 @@
-using System.Security.Cryptography;
 using System.IO;
-using System.Text.Json;
 using PhotoBooth.Diagnostics;
 
 namespace PhotoBooth.Media;
 
-// Copies preserve category folders and become visible atomically; local extras are never deleted.
+// Newer UTC modification times win regardless of origin. Missing source files never delete local files.
 internal sealed class MediaCache
 {
-    private sealed record Origin(string Hostname, long Length, DateTime LastWriteUtc, string Hash);
-    private const string StateFile = ".controller-media-state.json";
-    public async Task<bool> SynchronizeAsync(string hostname, string share, string destination, CancellationToken token, bool acceptManagedOwnershipTransfer = false)
+    public async Task<bool> SynchronizeAsync(string hostname, string share, string destination, CancellationToken token, MediaInventory? inventory = null)
     {
         token.ThrowIfCancellationRequested();
         if (!Directory.Exists(share)) throw new DirectoryNotFoundException("The Controller media share is unavailable.");
         LocalMediaPath.Ensure(destination);
         Directory.CreateDirectory(destination);
-        var statePath = Path.Combine(destination, StateFile);
-        LocalMediaPath.Ensure(statePath);
-        var origins = new Dictionary<string, Origin>(StringComparer.OrdinalIgnoreCase);
-        if (File.Exists(statePath))
-        {
-            try
-            {
-                var saved = JsonSerializer.Deserialize<Dictionary<string, Origin>>(await File.ReadAllTextAsync(statePath, token));
-                if (saved is not null)
-                    foreach (var entry in saved)
-                    {
-                        if (entry.Value is null || string.IsNullOrWhiteSpace(entry.Value.Hostname) || entry.Value.Length < 0 ||
-                            entry.Value.Hash is not { Length: 64 } hash || hash.Any(c => !Uri.IsHexDigit(c)))
-                        {
-                            Telemetry.Warning("MediaCacheStateInvalid", new { destination, Filename = entry.Key, Reason = "Invalid cached file ownership metadata." });
-                            continue;
-                        }
-                        origins[entry.Key] = entry.Value;
-                    }
-            }
-            catch (JsonException ex) { Telemetry.Warning("MediaCacheStateInvalid", new { destination, Reason = ex.Message }); }
-        }
+        inventory ??= MediaInventory.Read(share);
+        inventory.Validate();
         bool complete = true;
-        // SMB enumeration may block in the OS; the caller owns a background worker, never the UI thread.
-        foreach (var entry in PhotoBooth.Media.MediaLibrary.Read(share))
+        foreach (var folder in inventory.Folders)
         {
             token.ThrowIfCancellationRequested();
-            var name = entry.RelativePath;
-            if (entry.Name.StartsWith('.')) continue; // Cache metadata and in-progress copies are never media.
-            var target = PhotoBooth.Media.MediaLibrary.Resolve(destination,name);
-            LocalMediaPath.Ensure(target);
-            if (entry.IsFolder) { Directory.CreateDirectory(target); continue; }
-            var source = PhotoBooth.Media.MediaLibrary.Resolve(share,name);
-            var info = new FileInfo(source);
-            if (info.Name == StateFile) continue;
+            try
+            {
+                var target = MediaLibrary.Resolve(destination, folder);
+                LocalMediaPath.Ensure(target);
+                Directory.CreateDirectory(target);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                complete = false;
+                Telemetry.Warning("MediaFileCopyFailed", new { Hostname = hostname, Filename = folder, destination, Reason = ex.Message });
+            }
+        }
+        bool NeedsCopy(string target, MediaFileMetadata file)
+        {
+            if (!File.Exists(target)) return true;
+            var local = new FileInfo(target);
+            if (local.LastWriteTimeUtc < file.LastWriteUtc) return true;
+            if (local.LastWriteTimeUtc == file.LastWriteUtc && local.Length != file.Length)
+            {
+                complete = false;
+                Telemetry.Warning("MediaFilenameConflict", new { Hostname = hostname, Filename = file.RelativePath, destination,
+                    Reason = "Equal modification timestamps but different file sizes.", LocalBytes = local.Length, RemoteBytes = file.Length, file.LastWriteUtc, Action = "KeepLocal" });
+            }
+            return false;
+        }
+        foreach (var file in inventory.Files)
+        {
+            token.ThrowIfCancellationRequested();
+            var name = file.RelativePath;
+            var target = MediaLibrary.Resolve(destination, name);
+            var source = MediaLibrary.Resolve(share, name);
             var temporary = Path.Combine(destination, "." + Guid.NewGuid().ToString("N") + ".download");
             try
             {
                 LocalMediaPath.Ensure(target);
+                if (!NeedsCopy(target, file)) continue;
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                var sourceLength = info.Length;
-                var sourceDate = info.LastWriteTimeUtc;
-                origins.TryGetValue(name, out var origin);
-                if (File.Exists(target) && origin is not null && origin.Hostname.Equals(hostname, StringComparison.OrdinalIgnoreCase) &&
-                    origin.Length == sourceLength && origin.LastWriteUtc == sourceDate && new FileInfo(target).Length == sourceLength)
-                    continue;
+                var info = new FileInfo(source);
+                void CheckSource()
+                {
+                    info.Refresh();
+                    if (!info.Exists || info.Length != file.Length || info.LastWriteTimeUtc != file.LastWriteUtc)
+                        throw new IOException("Media changed after its inventory was published; retain the previous local file and retry.");
+                }
+                CheckSource();
                 await using (var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
                 await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
                 {
                     await input.CopyToAsync(output, 1024 * 1024, token);
                     await output.FlushAsync(token);
                 }
-                info.Refresh();
-                if (info.Length != sourceLength || info.LastWriteTimeUtc != sourceDate || new FileInfo(temporary).Length != sourceLength)
-                    throw new IOException("Media changed while it was being copied; retain the previous local file.");
-                var hash = await HashAsync(temporary, token);
-                if (File.Exists(target))
-                {
-                    var existingHash = await HashAsync(target, token);
-                    bool sameOwner = origin is not null && (origin.Hostname.Equals(hostname, StringComparison.OrdinalIgnoreCase) || acceptManagedOwnershipTransfer) && existingHash == origin.Hash;
-                    if (existingHash != hash && !sameOwner)
-                    {
-                        Telemetry.Warning("MediaFilenameConflict", new { Hostname = hostname, Filename = name, destination, ExistingController = origin?.Hostname, Action = "KeepFirst" });
-                        continue;
-                    }
-                    // Identical files from another controller do not transfer ownership of the filename.
-                    if (existingHash == hash && origin is not null && !origin.Hostname.Equals(hostname, StringComparison.OrdinalIgnoreCase) && !acceptManagedOwnershipTransfer) continue;
-                }
+                CheckSource();
+                if (new FileInfo(temporary).Length != file.Length) throw new IOException("The media download is incomplete.");
                 token.ThrowIfCancellationRequested();
+                LocalMediaPath.Ensure(target);
+                if (!NeedsCopy(target, file)) continue; // A newer local edit may have appeared during the download.
+                File.SetLastWriteTimeUtc(temporary, file.LastWriteUtc);
                 File.Move(temporary, target, true);
-                File.SetLastWriteTimeUtc(target, sourceDate);
-                origins[name] = new(hostname, sourceLength, sourceDate, hash);
-                await SaveStateAsync(statePath, origins, token);
-                Telemetry.Info("MediaFileCached", new { Hostname = hostname, Filename = name, Bytes = sourceLength, destination });
+                Telemetry.Info("MediaFileCached", new { Hostname = hostname, Filename = name, Bytes = file.Length, file.LastWriteUtc, destination });
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -99,21 +86,5 @@ internal sealed class MediaCache
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
         return complete;
-    }
-    private static async Task<string> HashAsync(string path, CancellationToken token)
-    {
-        await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        return Convert.ToHexString(await SHA256.HashDataAsync(file, token));
-    }
-    private static async Task SaveStateAsync(string path, Dictionary<string, Origin> state, CancellationToken token)
-    {
-        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(state), token);
-            token.ThrowIfCancellationRequested();
-            File.Move(temporary, path, true);
-        }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 }

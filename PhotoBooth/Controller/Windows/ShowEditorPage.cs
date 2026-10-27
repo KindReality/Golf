@@ -58,7 +58,11 @@ internal sealed class ShowEditorPage : UserControl
         };
         _library.KeyDown += (_, e) => { if (e.KeyCode == Keys.Delete) { Delete(); e.SuppressKeyPress = true; } };
         _refresh.Tick += (_, _) => RefreshState();
-        VisibleChanged += (_, _) => { if (Visible) { _refresh.Start(); RefreshState(); } else _refresh.Stop(); };
+        VisibleChanged += (_, _) =>
+        {
+            if (Visible) { _refresh.Start(); RefreshState(); }
+            else { _refresh.Stop(); ResetNavigation(); }
+        };
         Navigate("Scenes", 0); RefreshState();
         Message("Select a scene or playlist to edit. Playback is separate from selection.");
     }
@@ -94,6 +98,13 @@ internal sealed class ShowEditorPage : UserControl
         if (index < 0) return; _history.Push((_section, _index)); Navigate("Playlists", index);
     }
     private void Back() { if (_history.Count > 0 && CommitCurrent()) { var previous = _history.Pop(); Navigate(previous.Section, previous.Index); } }
+    private void ResetNavigation()
+    {
+        if (IsDisposed || Disposing) return;
+        _history.Clear();
+        // Navigate commits the current inspector to the draft before changing tabs.
+        Navigate("Scenes", 0);
+    }
     private void RenderLibrary()
     {
         _loading = true; _library.BeginUpdate(); _library.Items.Clear();
@@ -131,7 +142,7 @@ internal sealed class ShowEditorPage : UserControl
             {
                 "Scenes" => new SceneEditorView(show.Scenes[_index], show, _index == 0, Changed, OpenPlaylist, CreateScenePlaylist),
                 "Playlists" => new PlaylistEditorView(show.Playlists[_index], show, _host.Options, _host.Experiences.Snapshot(), Media(), _session.PlaylistUses(show.Playlists[_index].Name), Changed,
-                    _host.ArduinoStatus.Where(a => a.Connected).Select(a => a.Name).ToArray()),
+                    _host.ArduinoStatus.Where(a => a.Connected).Select(a => a.Name).ToArray(), _host.KnownRoles),
                 _ => new TriggerEditorView(show.Triggers[_index], show, _host.Options.Build.DefaultTriggerCooldownMilliseconds, Changed, OpenPlaylist)
             };
             _workspace.Controls.Add(_view);
@@ -228,11 +239,11 @@ internal sealed class ShowEditorPage : UserControl
             Message(_section == "Scenes" && _index >= 0 ? SavedSceneMessage(next.Scenes[_index]) : "Saved scenes, playlists and triggers.");
         }
         catch (Exception ex) { if (!IsDisposed) { Message(ex.Message, true); _host.Log.Error("ShowConfigurationSaveFailed", ex); } }
-        finally { if (!IsDisposed) { _saving = false; _workspace.Enabled = _library.Enabled = _tools.Enabled = true; UpdateActions(); } }
+        finally { if (!IsDisposed) { _saving = false; _workspace.Enabled = _library.Enabled = _tools.Enabled = true; if (!Visible) ResetNavigation(); UpdateActions(); } }
     }
     private static string SavedSceneMessage(SceneOptions scene) =>
         $"Saved scene ‘{scene.Name}’ • Activation: {scene.ActivatingPlaylist ?? "(None)"} • " +
-        (scene.Transition is { } next ? $"Next: {next.Scene} → {next.Device} • Minimum: {next.MinimumSceneDurationSeconds:0.###} s" : $"Ambient: {scene.AmbientPlaylist}");
+        (scene.Transition is { } next ? $"Next: {next.Scene} → {next.Device} • Timing from activation playlist" : $"Ambient: {scene.AmbientPlaylist}");
     private void Run()
     {
         if (HasUnsavedChanges || _index < 0) { Message("Save the draft before activating or running it."); return; }

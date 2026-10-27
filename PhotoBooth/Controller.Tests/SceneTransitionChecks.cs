@@ -16,9 +16,9 @@ internal static class SceneTransitionChecks
     { Device = "*", Payload = JsonSerializer.SerializeToElement(new { experience = kind, value = file, loop }) };
     private static ControllerOptions Options(double minimum = .08) => new()
     {
-        DeviceName = "transition-test", Scenes = [new() { Name = "idle", ActivatingPlaylist = "entry", Transition = new() { Scene = "active", MinimumSceneDurationSeconds = minimum } },
+        DeviceName = "transition-test", Scenes = [new() { Name = "idle", ActivatingPlaylist = "entry", Transition = new() { Scene = "active" } },
             new() { Name = "active", AmbientPlaylist = "ambient" }],
-        Playlists = [new() { Name = "entry", Items = [new() { Name = "play", Commands = [Media("video.mp4")] }] }, new() { Name = "ambient", Type = "ambient" }]
+        Playlists = [new() { Name = "entry", MinimumDurationMilliseconds = (int)(minimum * 1000), Items = [new() { Name = "play", Commands = [Media("video.mp4")] }] }, new() { Name = "ambient", Type = "ambient" }]
     };
     internal static async Task Run()
     {
@@ -31,12 +31,12 @@ internal static class SceneTransitionChecks
             return file switch { "a.mp4" => 2000, "b.mp4" => 5000, "c.mp4" => 4000, "d.wav" => 6000, _ => null };
         }
         options = options with { Playlists = [
-            new() { Name = "entry", DurationMilliseconds = 999999, Items = [
+            new() { Name = "entry", MinimumDurationMilliseconds = 5000, Items = [
                 new() { Name = "parallel", DelayMilliseconds = 100, Commands = [Media("a.mp4"), Media("b.mp4"), Media("ignored-loop.mp4", true)] },
                 new() { Name = "nested", DelayMilliseconds = 200, Commands = [new() { Playlist = "child" }] },
                 new() { Name = "audio", DelayMilliseconds = 100, Commands = [Media("d.wav", kind: "audio")] },
                 new() { Name = "disabled", Enabled = false, DelayMilliseconds = 90000, Commands = [Media("disabled.mp4")] }] },
-            new() { Name = "child", DurationMilliseconds = 999999, Items = [new() { Name = "nested cue", DelayMilliseconds = 350, Commands = [Media("c.mp4")] }] },
+            new() { Name = "child", MinimumDurationMilliseconds = 0, Items = [new() { Name = "nested cue", DelayMilliseconds = 350, Commands = [Media("c.mp4")] }] },
             new() { Name = "ambient", Type = "ambient" }] };
         var estimate = await SceneTransitionTiming.EstimateAsync(source, options, Duration, default);
         Check(estimate.DurationMilliseconds == 6750 && !estimate.HasUnknownMedia && reads.Count == 4,
@@ -61,8 +61,7 @@ internal static class SceneTransitionChecks
         Invalid(valid.Scenes[0] with { AmbientPlaylist = "ambient" });
         Invalid(valid.Scenes[0] with { Transition = null });
         Invalid(valid.Scenes[0] with { Transition = new() { Scene = "idle" } });
-        Invalid(valid.Scenes[0] with { Transition = new() { Scene = "active", MinimumSceneDurationSeconds = -1 } });
-        Check(true, "Validation enforces exactly one scene behavior, valid minimums and a different local next scene");
+        Check(true, "Validation enforces exactly one scene behavior, a different local next scene");
         var session = new ShowEditSession(valid);
         session.SetScene(1, valid.Scenes[1] with { Name = "renamed" });
         Check(session.Current.Scenes[0].Transition?.Scene == "renamed", "Renaming a scene updates next-scene references");
@@ -70,7 +69,7 @@ internal static class SceneTransitionChecks
         Check(true, "A referenced next scene must be reassigned before deletion");
 
         var log = new ActivityLog(); var recorder = new Recorder(); options = Options(.05);
-        options = options with { Playlists = options.Playlists.Select(p => p.Name == "entry" ? p with { DurationMilliseconds = 600000,
+        options = options with { Playlists = options.Playlists.Select(p => p.Name == "entry" ? p with { MinimumDurationMilliseconds = 50,
             Items = [p.Items[0] with { DelayMilliseconds = 30 }] } : p).ToArray() };
         await using (var engine = new PlaylistEngine(options, recorder, log) { ReadMediaDurationMilliseconds = _ => { Thread.Sleep(70); return 170; } })
         await using (var scenes = new SceneManager(options, engine, log))
@@ -124,7 +123,7 @@ internal static class SceneTransitionChecks
             finally { releaseRead.TrySetResult(); }
         }
         recorder = new(); options = Options(.05);
-        options = options with { Scenes = [options.Scenes[0] with { Transition = new() { Scene = "remote-scene", Device = "other-controller", MinimumSceneDurationSeconds = .05 } }, options.Scenes[1]] };
+        options = options with { Scenes = [options.Scenes[0] with { Transition = new() { Scene = "remote-scene", Device = "other-controller" } }, options.Scenes[1]] };
         await using (var engine = new PlaylistEngine(options, recorder, new()) { ReadMediaDurationMilliseconds = _ => null })
         await using (var scenes = new SceneManager(options, engine, new()))
         {
@@ -147,7 +146,7 @@ internal static class SceneTransitionChecks
                 ArduinoDiscovery = new() { Enabled = false }, DefinitionsPort = TcpPort(), UdpCommandsPort = UdpPort(), UdpEventsPort = UdpPort(), UdpSendAttempts = 1,
                 Telemetry = JsonSerializer.SerializeToElement(new { Directory = Path.Combine(folder, "logs") }) };
             options = options with { Playlists = [options.Playlists[0] with { Items = [new() { Name = "loop", Commands = [Media("loop.mp4", true)] }] },
-                options.Playlists[1], new() { Name = "scare", DurationMilliseconds = 1000, Items = [new() { Name = "switch", Commands = [new()
+                options.Playlists[1], new() { Name = "scare", MinimumDurationMilliseconds = 1000, Items = [new() { Name = "switch", Commands = [new()
                     { Device = "*", Payload = JsonSerializer.SerializeToElement(new { command = "scene", value = "active" }) }] }] }],
                 Triggers = [new() { Name = "beam", SourceDevice = "sensor", Input = "beam1", Event = "beam.broken", Playlist = "scare", CooldownMilliseconds = 0 }] };
             var path = Path.Combine(folder, "appsettings.json"); File.WriteAllText(path, JsonSerializer.Serialize(options, ControllerOptions.Json));
@@ -164,9 +163,8 @@ internal static class SceneTransitionChecks
             Check(transition.Type == "command" && transition.Device == "*" && ControllerOptions.Text(transition.Body, "command") == "scene" &&
                 ControllerOptions.Text(transition.Body, "value") == "active", "Automatic handoff is delivered over real UDP and applies locally using the same envelope");
             var old = ShowConfiguration.From(host.Options);
-            await host.SaveShowAsync(old, old with { Scenes = old.Scenes.Select(s => s.Name == "idle" ? s with
-                { Transition = s.Transition! with { MinimumSceneDurationSeconds = 20 } } : s).ToArray() });
-            await Until(() => host.Options.Scenes[0].Transition!.MinimumSceneDurationSeconds == 20);
+            await host.SaveShowAsync(old, old with { Playlists = old.Playlists.Select(p => p.Name == "entry" ? p with { MinimumDurationMilliseconds = 20000 } : p).ToArray() });
+            await Until(() => host.Options.Playlist("entry").MinimumDurationMilliseconds == 20000);
             await host.SendManualAsync(new() { Device = "*", Payload = JsonSerializer.SerializeToElement(new { command = "scene", value = "idle" }) });
             await Until(() => host.Scenes.Snapshot() is { Active: "idle", Phase: "Waiting" });
             var clock = Stopwatch.StartNew();

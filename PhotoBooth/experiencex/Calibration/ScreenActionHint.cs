@@ -6,7 +6,7 @@ namespace ExperienceX;
 
 internal static class ScreenActionHint
 {
-    private const string CommonScreen = "Hold Click + move: screen\nDouble-click edge: add point\nN: rename\nR: reset points\nCtrl+Z: undo movement\n[ / ]: bottom / top\nDelete: delete screen";
+    private const string CommonScreen = "Hold Click + move: screen\nTab / Shift+Tab: next / previous item\nDouble-click inside: select points\nDouble-click edge: add point\nEnter: screen properties\nL: lock\nR: reset points\nCtrl+Z: undo movement\n[ / ]: bottom / top\nDelete: delete screen";
     private const string MediaMovement = "Hold Shift + move: move media\nHold Ctrl + move: zoom media\nHold Alt + move: rotate media";
     private const string Video = "↑ / ↓: media / folder\n←: parent folder\n→: enter folder\nP: perspective\nK: chroma key\n+ / −: brightness\nCtrl+R: reset video";
     private const string Mat = "M: normal / negative";
@@ -17,6 +17,7 @@ internal static class ScreenActionHint
     {
         "video" => VideoGroups,
         "mat" => MatGroups,
+        "locked" => [("Locked", "L: unlock\nTab / Shift+Tab: next / previous item")],
         _ => throw new ArgumentException("This screen type does not have an action HUD.", nameof(type))
     };
     internal static string TextFor(string type) => string.Join("\n", Groups(type).Select(group => group.Heading + "\n" + group.Body));

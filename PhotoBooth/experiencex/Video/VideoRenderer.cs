@@ -5,7 +5,7 @@ using Vortice.MediaFoundation;
 
 namespace ExperienceX;
 
-internal sealed record ScreenPlaybackSnapshot(string Id, string Name, RendererState State, double Position, double Opacity, long Frames, string? RequestId, int Loops = 0, bool NameLocked = false, string? BoundPath = null, double Brightness = 100);
+internal sealed record ScreenPlaybackSnapshot(string Id, string Name, RendererState State, double Position, double Opacity, long Frames, string? RequestId, int Loops = 0, bool NameLocked = false, string? BoundPath = null, double Brightness = 100, double ScreenOpacity = 1, bool ScreenFading = false, double PlaybackSpeed = 1);
 
 // One worker/device/swap chain per physical display. Screens own independent decoders and textures.
 internal sealed class VideoRenderer : IDisposable
@@ -178,6 +178,13 @@ internal sealed class VideoRenderer : IDisposable
         catch { request.VideoPriority?.Dispose(); throw; }
     }
     public void Stop(string reason) => Enqueue("Stop", () => { foreach (var track in _tracks) track.Complete(reason); });
+    public void FadeScreen(ExperienceRequest request) => Enqueue("ScreenFade:" + request.ScreenId, () =>
+    {
+        if (request.Expired?.Invoke() == true) return;
+        var track = request.ScreenId is null ? _tracks.FirstOrDefault(t => t.Screen.IsVideo) : Track(request.ScreenId);
+        if (track?.Screen.IsVideo != true) return;
+        track.FadeScreen(request); _needsRedraw = true;
+    });
     public void StopPlayback(string? source, string playbackRequestId) => Enqueue("Cancel:" + source + ":" + playbackRequestId, () =>
     {
         _stops.Record(source, playbackRequestId, _options.RequestDeduplicationSeconds);
@@ -275,7 +282,7 @@ internal sealed class VideoRenderer : IDisposable
                 _presentationDeadline.Check(System.Diagnostics.Stopwatch.GetTimestamp(), _framePermit, _progress.IsSuspended);
                 if (!_framePermit)
                     continue;
-                foreach (var track in _tracks.Where(t => t.IsOpen))
+                foreach (var track in _tracks.Where(t => t.IsOpen || t.ContentAnimating))
                     try
                     {
                         using var operation = _progress.Begin("VideoTick", track.Screen.Id);

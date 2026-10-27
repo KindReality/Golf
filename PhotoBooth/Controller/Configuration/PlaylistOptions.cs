@@ -13,13 +13,15 @@ internal sealed record SceneTransitionOptions
 {
     public required string Scene { get; init; }
     public string Device { get; init; } = "*";
-    public double MinimumSceneDurationSeconds { get; init; } = 5;
 }
 internal sealed record PlaylistOptions
 {
     public required string Name { get; init; }
     public string Type { get; init; } = "storyboard";
-    public int? DurationMilliseconds { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? DurationMilliseconds { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? MinimumDurationMilliseconds { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? MaximumDurationMilliseconds { get; init; }
+    [JsonIgnore] internal int EffectiveMinimumDurationMilliseconds => MinimumDurationMilliseconds ?? 5000;
     public string AudioOutputMode { get; init; } = "Configured";
     public PlaylistItem[] Items { get; init; } = [];
 }
@@ -33,7 +35,6 @@ internal sealed record PlaylistItem
     public int? MaxIntervalMilliseconds { get; init; }
     public string Roles { get; init; } = "";
     public string BroadcastMode { get; init; } = "Broadcast";
-    public bool IncludeSubwoofer { get; init; }
     public PlaylistCommand[] Commands { get; init; } = [];
 }
 internal sealed record PlaylistCommand

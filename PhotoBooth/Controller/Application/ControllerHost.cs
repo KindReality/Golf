@@ -31,6 +31,8 @@ internal sealed class ControllerHost : IAsyncDisposable
     public PlaylistEngine Engine { get; }
     public SceneManager Scenes { get; }
     public ControllerOptions Options => Volatile.Read(ref _options);
+    public string[] KnownRoles => RoleCatalog.Names(PlaylistRoles.Names(Options.Playlists)
+        .Concat(_controllers.Definitions.SelectMany(d => d.Roles)).Concat(LivePlayback.Roles(Experiences.Snapshot()).Select(r => r.Name)));
     public string ConfigurationPath => _configuration.Path;
     public Task SetConfigurationModeAsync(bool value) => _configuration.SetConfigurationModeAsync(value);
     public async Task SavePinnedActionAsync(PinnedActionOptions? expected, PinnedActionOptions? next)
@@ -100,7 +102,8 @@ internal sealed class ControllerHost : IAsyncDisposable
         _options = _configuration.Initial;
         Experiences = new(Log);
         _controllers = new(() => Options, Log, () => _announcements!.PublishCatalog());
-        _announcements = new(() => Options, Log, peers: () => _controllers.Definitions);
+        _announcements = new(() => Options, Log, peers: () => _controllers.Definitions,
+            assignedRoles: () => LivePlayback.Roles(Experiences.Snapshot()).Select(r => r.Name));
         _arduinos = new(Log, ReceiveSerialAsync);
         _dispatcher = new(_arduinos, ReceiveUdpAsync, _shutdown.Token);
         Engine = new(_options, _dispatcher, Log) { ReadExperiences = Experiences.Snapshot };
@@ -117,7 +120,7 @@ internal sealed class ControllerHost : IAsyncDisposable
             _configuration.Start();
             Log.Info("ControllerReady", $"{_options.EffectiveDeviceName}: ready ({environment.Environment})",
                 new { Path = path, environment.Environment, _options.EffectiveDeviceName, _options.UdpEventsPort, _options.UdpCommandsPort });
-            Telemetry.SetHealthProvider(() => new { Scene = Scenes.Snapshot(), Running = Engine.Snapshot(), Arduinos = ArduinoStatus });
+            Telemetry.SetHealthProvider(() => new { Scene = Scenes.Snapshot(), Running = Engine.Snapshot(), LoopVideoTargets = Engine.LoopAnnouncementCount, Arduinos = ArduinoStatus });
         }
         catch
         {

@@ -50,7 +50,7 @@ internal sealed class SceneManager : IAsyncDisposable
             var current = new Context(scene, options, ++_generation, _shutdown.Token);
             _selected = current; _phase = "Transitioning";
             // Selection is immediate; activation is cancellable work, never a lock.
-            _engine.SetSceneContext(current.Execution);
+            _engine.SetSceneContext(current.Execution, current.Lifetime.Token);
             _log.Info("SceneChangeRequested", $"Scene requested: {scene.Name}", new { PreviousScene = old?.Scene.Name, Scene = scene.Name, current.Generation, ancestry.CorrelationId });
             if (old is not null) Retire(old);
             current.Work = Task.Run(() => TransitionAsync(current, ancestry)); Track(current.Work);
@@ -133,10 +133,18 @@ internal sealed class SceneManager : IAsyncDisposable
     {
         var token = current.Lifetime.Token;
         var transition = current.Scene.Transition!;
-        var estimate = await SceneTransitionTiming.EstimateAsync(current.Scene, current.Options, _engine.ReadMediaDurationMilliseconds, token).ConfigureAwait(false);
+        var playlist = current.Scene.ActivatingPlaylist is { } activationName ? current.Options.Playlist(activationName) : null;
+        using var preparation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        if (playlist?.MaximumDurationMilliseconds is { } cap)
+            preparation.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(0, cap - Stopwatch.GetElapsedTime(current.Started).TotalMilliseconds)));
+        SceneTransitionEstimate estimate;
+        try { estimate = await SceneTransitionTiming.EstimateAsync(current.Scene, current.Options, _engine.ReadMediaDurationMilliseconds, preparation.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested && playlist?.MaximumDurationMilliseconds is not null)
+        { estimate = new(playlist.MaximumDurationMilliseconds.Value, true); }
         _log.Info("SceneTransitionScheduled", $"{current.Scene.Name} → {transition.Scene} after {estimate.DurationMilliseconds / 1000:0.###} s", new
         { Scene = current.Scene.Name, NextScene = transition.Scene, transition.Device, current.Generation, estimate.DurationMilliseconds,
-            transition.MinimumSceneDurationSeconds, estimate.HasUnknownMedia, CountdownFromSceneStart = true });
+            MinimumDurationMilliseconds = playlist?.EffectiveMinimumDurationMilliseconds ?? 5000, MaximumDurationMilliseconds = playlist?.MaximumDurationMilliseconds,
+            estimate.HasUnknownMedia, CountdownFromSceneStart = true });
         await _engine.WaitUntilAsync(current.Started + DeadlineScheduler.Ticks(estimate.DurationMilliseconds), token).ConfigureAwait(false);
         Task send;
         lock (_gate)

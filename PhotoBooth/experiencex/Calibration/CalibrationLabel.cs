@@ -15,7 +15,8 @@ internal static class CalibrationLabel
         var points = PointEditing.Points(k);
         for (int i = 0; i < points.Length; i++)
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"Point {i + 1}   X {points[i].X:0.0000}   Y {points[i].Y:0.0000}   ({points[i].X * (width - 1):0}, {points[i].Y * (height - 1):0} px)"));
-        lines.Add("Tab: select   Arrows: 1px   Shift: 10px");
+        lines.Add("Tab: next item / point in point mode   Shift+Tab: previous");
+        lines.Add("Arrows: 1px   Shift: 10px");
         lines.Add("Enter: save   Esc: cancel   Ctrl+Z: undo   R: reset");
         lines.Add("Drag: move   J: join   Delete: disconnect   [: bottom   ]: top");
         lines.Add("P: perspective   K: chroma key   B: background");

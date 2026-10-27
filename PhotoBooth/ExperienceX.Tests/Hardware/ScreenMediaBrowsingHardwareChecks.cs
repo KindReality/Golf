@@ -73,7 +73,7 @@ internal static class ScreenMediaBrowsingHardwareChecks
                     Key(Forms.Keys.Left);Key(Forms.Keys.Down);await Until(()=>window.BrowserLabel(screen.Id)=="Folder: Witches/","Another category is selectable while video plays");
                     var unchanged=await Playing("Ghosts/A.mp4");if(unchanged.RequestId!=playing.RequestId)throw new Exception("Highlighting a folder restarted playback");
                     Key(Forms.Keys.Right);Key(Forms.Keys.Down);await Until(()=>Read().MediaFile=="Witches/A.mp4","Same filenames in different folders remain distinct");await Playing("Witches/A.mp4");
-                    Key(Forms.Keys.Tab);var before=Read();Key(Forms.Keys.Down);Key(Forms.Keys.Enter);
+                    window.BeginPointSelection(window.Surface(screen.Id));var before=Read();Key(Forms.Keys.Down);Key(Forms.Keys.Enter);
                     await Until(()=>Read().Points!=before.Points&&!host.CalibrationBusy,"Arrows still move a selected point");
                     if(Read().MediaFile!="Witches/A.mp4")throw new Exception("Point movement browsed media");
                     SendMessage(window.Handle,0x100,(nint)Forms.Keys.N,0);

@@ -138,8 +138,8 @@ internal sealed class CalibrationOverlay(Func<double>? clock = null) : IDisposab
         var showTools = selectedScreen && _options.CalibrationGridEnabled && !isLed;
         if (selectedScreen)
             UpdateLabel(graphics, _options, _display, screenId, now, definition);
-        bool showHint = !_helpSuppressed && selectedScreen && (definition?.IsVideo == true || isMat);
-        if (showHint) UpdateHint(graphics, definition!.Type);
+        bool showHint = !_helpSuppressed && selectedScreen && (definition?.IsVideo == true || isMat || definition?.IsLocked == true);
+        if (showHint) UpdateHint(graphics, definition!.IsLocked ? "locked" : definition.Type);
         // Masks can have any number of points, including concave outlines. Keep their grid
         // rectangular within the polygon's bounds without treating its vertices as keystone anchors.
         var gridPoints = k;
@@ -327,6 +327,7 @@ internal sealed class CalibrationOverlay(Func<double>? clock = null) : IDisposab
         if (_labelView is not null && now - _labelUpdatedAt < 0.1)
             return;
         var text = definition?.Name ?? _options.ScreensFor(_display).FirstOrDefault(s => screenId is null || s.Id == screenId)?.Name ?? "screen1";
+        if (definition?.IsLocked == true) text += " [LOCKED]";
         var cacheKey = $"{text}|{_mediaCaption}|{graphics.Width}|{graphics.Height}";
         if (cacheKey == _labelText)
             return;

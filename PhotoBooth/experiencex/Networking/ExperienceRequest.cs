@@ -23,6 +23,8 @@ public sealed record ExperienceRequest
     public string Experience { get; init; } = "";
     public string Value { get; init; } = "";
     public bool Loop { get; init; }
+    public double? PlaybackSpeed { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] public double EffectivePlaybackSpeed => PlaybackSpeed ?? 1;
     public string? Command { get; init; }
     public string? VisualType { get; init; }
     public double? TransitionSeconds { get; init; }
@@ -32,6 +34,7 @@ public sealed record ExperienceRequest
     public string? PlaybackRequestId { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsStop => string.Equals(Command, "stop", StringComparison.OrdinalIgnoreCase);
+    [System.Text.Json.Serialization.JsonIgnore] public bool IsFade => PhotoBooth.Networking.VideoFadeCommand.IsFade(Command);
     public string? Screen
     {
         get; init;
@@ -104,8 +107,12 @@ public sealed record ExperienceRequest
         if (!string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(request.Experience, "audio", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Only video and audio experiences are supported.");
-        if (request.Command is not null && !string.Equals(request.Command, "play", StringComparison.OrdinalIgnoreCase) && !request.IsStop)
-            throw new ArgumentException("Video commands support play or stop.");
+        if (request.Command is not null && !string.Equals(request.Command, "play", StringComparison.OrdinalIgnoreCase) && !request.IsStop && !request.IsFade)
+            throw new ArgumentException("Video commands support play, stop, fadeIn or fadeOut.");
+        if (request.IsFade) PhotoBooth.Networking.VideoFadeCommand.Validate(request.Experience, request.DurationSeconds, request.Loop);
+        PhotoBooth.Networking.VideoPlaybackSpeed.Validate(request.EffectivePlaybackSpeed);
+        if (request.PlaybackSpeed is not null && (!string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase) || request.IsStop || request.IsFade))
+            throw new ArgumentException("playbackSpeed applies only to video playback commands.");
         if (request.IsStop && (!string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(request.PlaybackRequestId) || request.PlaybackRequestId.Length > 128 || request.Loop))
             throw new ArgumentException("Stopping video requires playbackRequestId and cannot enable looping.");
@@ -113,7 +120,7 @@ public sealed record ExperienceRequest
             throw new ArgumentException("playbackRequestId is only used to stop an existing video.");
         if (request.Loop && !string.Equals(request.Experience, "video", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Looping is supported for video only.");
-        if (!request.IsStop && string.IsNullOrWhiteSpace(request.Value))
+        if (!request.IsStop && !request.IsFade && string.IsNullOrWhiteSpace(request.Value))
             throw new ArgumentException("A media filename is required.");
         if (request.Channel is <= 0)
             throw new ArgumentException("Channel numbers start at 1.");

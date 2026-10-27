@@ -104,11 +104,14 @@ internal static class ScenePlaylistChecks
                     page.Navigate("Scenes", 0); page.Navigate("Scenes", 1);
                     Check(Field("Activation storyboard").Text == "idle-entry", "Save reads and retains selections even without a draft notification");
                     Select("After activation", "Go to scene"); Select("Next scene", "idle");
-                    Descendants(page).OfType<NumericUpDown>().Single(c => c.AccessibleName == "Minimum scene duration (seconds)").Value = 7.125m;
+                    Descendants(page).OfType<Button>().Single(b => b.Text == "Edit activation playlist").PerformClick();
+                    Descendants(page).OfType<TextBox>().Single(c => c.AccessibleName == "Playlist minimum duration seconds").Text = "7.125";
+                    await Save(); await Until(() => host.Options.Playlist("idle-entry").MinimumDurationMilliseconds == 7125); page.RefreshState();
+                    Descendants(page).OfType<Button>().Single(b => b.Text == "← Back").PerformClick();
                     await Save(); await Until(() => host.Options.Scenes[1].Transition is not null); page.RefreshState();
                     page.Navigate("Scenes", 0); page.Navigate("Scenes", 1);
                     Check(Field("After activation").Text == "Go to scene" && Field("Next scene").Text == "idle" &&
-                        host.Options.Scenes[1].AmbientPlaylist is null && host.Options.Scenes[1].Transition is { Device: "*", MinimumSceneDurationSeconds: 7.125 },
+                        host.Options.Scenes[1].AmbientPlaylist is null && host.Options.Scenes[1].Transition is { Device: "*" } && host.Options.Playlist("idle-entry").MinimumDurationMilliseconds == 7125,
                         "Save/reopen retains next scene, broadcast destination and millisecond-precision minimum while omitting ambient");
                     await Until(() => Descendants(page).OfType<Label>().Single(c => c.AccessibleName == "Scene transition estimate").Text.Contains("7.125 s"));
                     Check(!Field("Ambient playlist").Visible && Field("Next scene").Visible, "Only the selected after-activation behavior is shown");
@@ -125,7 +128,7 @@ internal static class ScenePlaylistChecks
                     using (var preview = new SceneEditorView(host.Options.Scenes[1], timingShow, false, () => { }, _ => { }, estimateTransition: Estimate))
                     {
                         await Until(() => Descendants(preview).OfType<Label>().Single(c => c.AccessibleName == "Scene transition estimate").Text.Contains("10 s"));
-                        Check(preview.Read().Transition!.MinimumSceneDurationSeconds == 7.125, "An automatic media estimate does not overwrite the configured scene minimum");
+                        Check(timingShow.Playlists.Single(p => p.Name == "idle-entry").MinimumDurationMilliseconds == 7125, "An automatic media estimate does not overwrite the configured scene minimum");
                     }
                     timingShow = timingShow with { Playlists = timingShow.Playlists.Select(p => p.Name == "idle-entry" ? p with { Items = [p.Items[0] with { DelayMilliseconds = 3000 }] } : p).ToArray() };
                     using (var preview = new SceneEditorView(host.Options.Scenes[1], timingShow, false, () => { }, _ => { }, estimateTransition: Estimate))

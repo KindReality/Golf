@@ -8,7 +8,6 @@ internal sealed class SceneEditorView : UserControl
 {
     private readonly TextBox _name, _destination;
     private readonly ComboBox _ambient, _entry, _after, _next;
-    private readonly NumericUpDown _minimum = new() { DecimalPlaces = 3, Increment = .1m, Minimum = .001m, Maximum = 86400, Value = 5, Height = 30 };
     private readonly Label _estimate = new() { Text = "Estimating from activation media…", AccessibleName = "Scene transition estimate",
         ForeColor = DarkTheme.Accent, Height = 56, Dock = DockStyle.Top, Padding = new(0, 6, 0, 8), AutoEllipsis = true };
     private CancellationTokenSource? _estimateStop;
@@ -45,16 +44,13 @@ internal sealed class SceneEditorView : UserControl
         if (scene.Transition is { } transition) _next.Text = transition.Scene;
         _destination = TextField(scene.Transition?.Device ?? "*");
         _destination.PlaceholderText = "* = all devices";
-        _minimum.Value = (decimal)(scene.Transition?.MinimumSceneDurationSeconds ?? 5);
-        _minimum.BackColor = DarkTheme.Raised; _minimum.ForeColor = DarkTheme.Text; _minimum.BorderStyle = BorderStyle.FixedSingle;
         fields.Wide(Note("01  /  ON ACTIVATION")); fields.Field("Activation storyboard", _entry);
         fields.Wide(Actions("activation", () => OptionalSelection(_entry)));
         fields.Wide(Note("02  /  AFTER ACTIVATION")); fields.Field("After activation", _after);
         var ambientFields = new ShowEditorFields(); ambientFields.Field("Ambient playlist", _ambient);
         ambientFields.Wide(Actions("ambient", () => _ambient.SelectedItem as string));
-        var transitionFields = new ShowEditorFields(fieldColumns: 2);
+        var transitionFields = new ShowEditorFields();
         transitionFields.Field("Next scene", _next);
-        transitionFields.Field("Minimum scene duration (seconds)", _minimum);
         transitionFields.Field("Destination device", _destination);
         transitionFields.Wide(_estimate);
         var afterFields = new Panel { Dock = DockStyle.Top };
@@ -63,7 +59,6 @@ internal sealed class SceneEditorView : UserControl
         fields.Wide(Note("Playlists are shared references. Editing one affects every scene that uses it."));
         Controls.Add(ScrollContainer(fields));
         foreach (var control in new Control[] { _name, _ambient, _entry, _after, _next, _destination }) Watch(control, changed);
-        _minimum.ValueChanged += (_, _) => { changed(); RefreshEstimate(); };
         _after.SelectedIndexChanged += (_, _) => UpdateMode();
         _entry.SelectedIndexChanged += (_, _) => RefreshEstimate();
         transitionFields.SizeChanged += (_, _) => { if (_after.SelectedIndex == 1) afterFields.Height = transitionFields.Height; };
@@ -85,18 +80,18 @@ internal sealed class SceneEditorView : UserControl
             try
             {
                 var draft = scene with { ActivatingPlaylist = OptionalSelection(_entry), AmbientPlaylist = null,
-                    Transition = new() { Scene = _next.Text, Device = _destination.Text, MinimumSceneDurationSeconds = (double)_minimum.Value } };
+                    Transition = new() { Scene = _next.Text, Device = _destination.Text } };
                 var estimate = estimateTransition is not null ? await estimateTransition(draft, show, token) :
                     await SceneTransitionTiming.EstimateAsync(draft, new() { Scenes = show.Scenes, Playlists = show.Playlists }, MediaDurations.ReadMilliseconds, token);
                 if (IsDisposed || token.IsCancellationRequested) return;
                 _estimate.Text = $"Transition after {estimate.DurationMilliseconds / 1000:0.###} s from scene start" +
-                    (estimate.HasUnknownMedia ? " • Some media durations are unavailable." : " • Minimum or latest non-looping media end.");
+                    (estimate.HasUnknownMedia ? " • Some media durations are unavailable." : " • Bounded by the activation playlist’s duration limits.");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex)
             {
                 if (IsDisposed || token.IsCancellationRequested) return;
-                _estimate.Text = $"Minimum: {_minimum.Value:0.###} s • Unable to estimate: " + ex.Message;
+                _estimate.Text = "Unable to estimate playlist timing: " + ex.Message;
             }
         }
         Control Actions(string phase, Func<string?> selected)
@@ -108,7 +103,7 @@ internal sealed class SceneEditorView : UserControl
     internal SceneOptions Read() => new() { Name = _name.Text.Trim(),
         AmbientPlaylist = _after.SelectedIndex == 0 ? _ambient.SelectedItem as string ?? throw new ArgumentException("Choose an ambient playlist.") : null,
         Transition = _after.SelectedIndex == 1 ? new() { Scene = string.IsNullOrWhiteSpace(_next.Text) ? throw new ArgumentException("Choose a next scene.") : _next.Text.Trim(),
-            Device = _destination.Text.Trim(), MinimumSceneDurationSeconds = (double)_minimum.Value } : null,
+            Device = _destination.Text.Trim() } : null,
         ActivatingPlaylist = OptionalSelection(_entry) };
     protected override void Dispose(bool disposing)
     {

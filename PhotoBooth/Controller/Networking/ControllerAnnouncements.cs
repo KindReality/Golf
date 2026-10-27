@@ -1,10 +1,11 @@
 using Controller.Configuration;
 using Controller.Diagnostics;
 using PhotoBooth.Networking;
+using PhotoBooth.Media;
 namespace Controller.Networking;
 
 internal sealed class ControllerAnnouncements(Func<ControllerOptions> options, ActivityLog log, Func<byte[], BroadcastOptions, CancellationToken, Task>? send = null,
-    Func<ControllerSharedDefinitions[]>? peers = null) : IAsyncDisposable
+    Func<ControllerSharedDefinitions[]>? peers = null, Func<string>? mediaDirectory = null, Func<IEnumerable<string>>? assignedRoles = null) : IAsyncDisposable
 {
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _signal = new(0, 1);
@@ -12,19 +13,37 @@ internal sealed class ControllerAnnouncements(Func<ControllerOptions> options, A
     private bool _started;
     private Task _announcing = Task.CompletedTask;
     private volatile Published _published = new([], "");
+    private volatile Published _media = new(MediaInventory.Empty.Serialize(), MediaInventory.EmptyRevision);
+    private bool _checkedStartupMedia;
     private sealed record Published(byte[] Bytes, string Revision);
     private ControllerSharedDefinitions OwnDefinitions()
     {
         var current = options();
-        return new() { ControllerId=current.ControllerId,ControllerName=current.EffectiveDeviceName,Hostname=Environment.MachineName,Perspectives=current.Perspectives };
+        return new() { ControllerId=current.ControllerId,ControllerName=current.EffectiveDeviceName,Hostname=Environment.MachineName,Perspectives=current.Perspectives,
+            Roles=RoleCatalog.Names(PlaylistRoles.Names(current.Playlists).Concat(assignedRoles?.Invoke() ?? [])) };
     }
     public int Port => _server.Port == 0 ? options().DefinitionsPort : _server.Port;
-    public void Start() { _started=true; Publish(); _signal.Wait(0); _announcing=AnnounceAsync(); }
+    public void Start() { _started=true; Publish(); _server.Publish(_media.Bytes, _media.Revision, "/media"); _signal.Wait(0); _announcing=Task.Run(AnnounceAsync); }
+    internal void RefreshMedia()
+    {
+        var root = mediaDirectory?.Invoke() ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Home Technologies", "Controller", "Media");
+        var inventory = MediaInventory.Read(root);
+        var bytes = inventory.Serialize();
+        var revision = MediaInventory.Revision(bytes);
+        _server.Publish(bytes, revision, "/media");
+        var previous = _media;
+        _media = new(bytes, revision);
+        if (!_checkedStartupMedia)
+        {
+            _checkedStartupMedia = true;
+            PlaylistMediaValidation.WarnMissing(options(), inventory, log);
+        }
+        if (previous.Revision != revision)
+            log.Info("ControllerMediaInventoryUpdated", $"Media library: {inventory.Files.Length} files", new { Revision = revision, Files = inventory.Files.Length, Root = root });
+    }
     public void Publish()
     {
-        var bytes=OwnDefinitions().Serialize();
-        var revision=ControllerSharedDefinitions.Revision(bytes);
-        _server.Publish(bytes,revision); _published=new(bytes,revision);
+        RefreshDefinitions();
         PublishCatalog();
         try
         {
@@ -34,6 +53,13 @@ internal sealed class ControllerAnnouncements(Func<ControllerOptions> options, A
         }
         catch(System.Net.Sockets.SocketException ex) { log.Error("DefinitionsHttpUnavailable",ex,new { Port=options().DefinitionsPort,Hint="Check for a conflicting process/port; run Install-Controller.cmd to enable remote firewall access." }); }
         if(_started && _signal.CurrentCount==0)try{_signal.Release();}catch(SemaphoreFullException){}
+    }
+    private void RefreshDefinitions()
+    {
+        var bytes = OwnDefinitions().Serialize(); var revision = ControllerSharedDefinitions.Revision(bytes);
+        if (_published.Revision == revision) return;
+        _server.Publish(bytes, revision); _published = new(bytes, revision);
+        PublishCatalog();
     }
     public void PublishCatalog()
     {
@@ -47,7 +73,8 @@ internal sealed class ControllerAnnouncements(Func<ControllerOptions> options, A
     }
     public Task SendAsync(CancellationToken token=default)
     {
-        var bytes=ControllerDiscovery.Response(options(),controllerId:options().ControllerId,revision:_published.Revision,definitionsPort:Port);
+        RefreshDefinitions();
+        var bytes=ControllerDiscovery.Response(options(),controllerId:options().ControllerId,revision:_published.Revision,definitionsPort:Port,mediaRevision:_media.Revision);
         return send is null ? UdpBroadcastSender.SendAsync(bytes,options(),token) : send(bytes,options(),token);
     }
     private async Task AnnounceAsync()
@@ -56,8 +83,11 @@ internal sealed class ControllerAnnouncements(Func<ControllerOptions> options, A
         {
             try
             {
+                try { RefreshMedia(); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                { log.Warning("ControllerMediaInventoryFailed", "Media inventory unavailable; retaining the previous revision", new { Reason = ex.Message }); }
                 await SendAsync(_stop.Token);
-                log.Info("ControllerAnnounced","Broadcast controller identity and shared definitions revision",new { options().ControllerId,_published.Revision,Port });
+                log.Info("ControllerAnnounced","Broadcast controller identity, definitions and media revisions",new { options().ControllerId,_published.Revision,MediaRevision=_media.Revision,Port });
                 await _signal.WaitAsync(TimeSpan.FromSeconds(10),_stop.Token);
             }
             catch(OperationCanceledException) when(_stop.IsCancellationRequested){break;}

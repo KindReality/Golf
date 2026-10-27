@@ -79,6 +79,7 @@ internal sealed class PlaybackMetrics
             PresentRefreshCount = stats.PresentRefreshCount,
             SyncRefreshCount = stats.SyncRefreshCount,
             MediaPositionSeconds = media.Engine?.CurrentTime,
+            media.PlaybackSpeed,
             SurfaceOpacity = opacity
         }, requestId);
     }

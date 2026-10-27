@@ -38,7 +38,9 @@ internal sealed record PinnedActionOptions
         if (command.Transport == "arduino" && (command.Type != "command" || command.Device == "*" || string.IsNullOrWhiteSpace(ControllerOptions.Text(command.Payload, "command"))))
             throw new ArgumentException("Arduino commands require a named device and command.");
         if (command.Type == "event") ControllerOptions.RequireInput(command.Payload);
-        if (ControllerOptions.Text(command.Payload, "experience") is "video" or "audio")
+        VideoPlaybackSpeed.Read(command.Payload);
+        if (VideoFadeCommand.IsFade(ControllerOptions.Text(command.Payload, "command"))) VideoFadeCommand.Validate(command.Payload);
+        else if (ControllerOptions.Text(command.Payload, "experience") is "video" or "audio")
             PhotoBooth.Media.MediaLibrary.Normalize(ControllerOptions.Text(command.Payload, "value") ?? "");
         BroadcastEnvelope.Create(options with { DeviceName = eventSource ?? options.EffectiveDeviceName }, command.Type, command.Device!, command.Payload);
     }

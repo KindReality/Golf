@@ -1,73 +1,79 @@
-using System.Collections.Concurrent;
-using System.Text.Json;
-using ExperienceX;
-using PhotoBooth.Networking;
+using PhotoBooth.Media;
 
 internal static class MediaCacheChecks
 {
     public static async Task Run()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ExperienceX-media-discovery-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "MediaCache-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
             var first = Path.Combine(root, "first"); var second = Path.Combine(root, "second"); var local = Path.Combine(root, "local");
             Directory.CreateDirectory(first); Directory.CreateDirectory(second); Directory.CreateDirectory(local);
-            Directory.CreateDirectory(Path.Combine(first, "nested"));
-            await File.WriteAllTextAsync(Path.Combine(first, "ping.mp4"), "first-version");
-            await File.WriteAllTextAsync(Path.Combine(first, "sound.wav"), "audio-version");
-            await File.WriteAllTextAsync(Path.Combine(first, "nested", "excluded.mp4"), "nested");
-            Directory.CreateDirectory(Path.Combine(first,"Ghosts","Deep"));
-            Directory.CreateDirectory(Path.Combine(first,"Witches"));
-            await File.WriteAllTextAsync(Path.Combine(first,"Ghosts","Deep","Same.mp4"),"ghost-video");
-            await File.WriteAllTextAsync(Path.Combine(first,"Witches","Same.mp4"),"witch-video");
-            await File.WriteAllTextAsync(Path.Combine(local, "local-only.mp4"), "retain");
-            var cache = new PhotoBooth.Media.MediaCache();
-            try { await cache.SynchronizeAsync("missing",Path.Combine(root,"missing-share"),local,default);throw new Exception("An unavailable Controller share was reported as an empty successful sync"); }
-            catch(DirectoryNotFoundException) { }
-            await cache.SynchronizeAsync("host-one", first, local, default);
-            Check(File.ReadAllText(Path.Combine(local,"Ghosts","Deep","Same.mp4"))=="ghost-video"&&File.ReadAllText(Path.Combine(local,"Witches","Same.mp4"))=="witch-video",
-                "Nested categories keep duplicate filenames distinct in the local cache");
-            Check(File.ReadAllText(Path.Combine(local, "ping.mp4")) == "first-version" && File.Exists(Path.Combine(local, "sound.wav")) &&
-                File.Exists(Path.Combine(local, "nested", "excluded.mp4")) && !File.Exists(Path.Combine(local, "excluded.mp4")) && File.ReadAllText(Path.Combine(local, "local-only.mp4")) == "retain", "Media folders are preserved locally without flattening; local extras are retained");
-            await File.WriteAllTextAsync(Path.Combine(second, "ping.mp4"), "other-controller");
-            await File.WriteAllTextAsync(Path.Combine(second, "other.wav"), "other-media");
-            await cache.SynchronizeAsync("host-two", second, local, default);
-            Check(File.ReadAllText(Path.Combine(local, "ping.mp4")) == "first-version" && File.Exists(Path.Combine(local, "other.wav")), "Controller filename conflicts keep the first file while unrelated files still copy");
-            await File.WriteAllTextAsync(Path.Combine(first, "ping.mp4"), "updated-first-version");
-            await cache.SynchronizeAsync("host-one", first, local, default);
-            Check(File.ReadAllText(Path.Combine(local, "ping.mp4")) == "updated-first-version", "Media updates from the owning Controller replace the cached version");
-            await File.WriteAllTextAsync(Path.Combine(local, "ping.mp4"), "local-edit");
-            await File.WriteAllTextAsync(Path.Combine(first, "ping.mp4"), "later-remote-version");
-            await cache.SynchronizeAsync("host-one", first, local, default);
-            Check(File.ReadAllText(Path.Combine(local, "ping.mp4")) == "local-edit", "A locally edited media file is retained on conflict");
-            using (var locked = new FileStream(Path.Combine(local, "sound.wav"), FileMode.Open, FileAccess.Read, FileShare.None))
+            var epoch = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            async Task Write(string directory, string name, string content, int seconds)
             {
-                await File.WriteAllTextAsync(Path.Combine(first, "sound.wav"), "updated-audio-version");
-                Check(!await cache.SynchronizeAsync("host-one", first, local, default), "Locked playback files retain their old copy and report an incomplete sync");
+                var path = MediaLibrary.Resolve(directory, name); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                await File.WriteAllTextAsync(path, content); File.SetLastWriteTimeUtc(path, epoch.AddSeconds(seconds));
             }
-            Check(!Directory.EnumerateFiles(local, "*.download").Any(), "Failed copies leave no partial playback/download files");
-            await cache.SynchronizeAsync("host-one", first, local, default);
-            Check(File.ReadAllText(Path.Combine(local, "sound.wav")) == "updated-audio-version", "A previously locked file updates when it is available");
+            await Write(first, "Ghosts/Eye.mp4", "original", 1);
+            await Write(first, "Witches/Eye.mp4", "witch", 2);
+            Directory.CreateDirectory(Path.Combine(first, "Empty"));
+            await Write(local, "local-only.mp4", "retain", 100);
+            var cache = new MediaCache();
+            try { await cache.SynchronizeAsync("missing", Path.Combine(root, "missing"), local, default); throw new Exception("Missing share accepted."); }
+            catch (DirectoryNotFoundException) { }
+            Check(await cache.SynchronizeAsync("one", first, local, default), "Initial media copy succeeds.");
+            Check(File.ReadAllText(Path.Combine(local, "Ghosts/Eye.mp4")) == "original" && File.ReadAllText(Path.Combine(local, "Witches/Eye.mp4")) == "witch" && Directory.Exists(Path.Combine(local, "Empty")),
+                "Category paths and empty folders survive copying.");
+            Check(File.GetLastWriteTimeUtc(Path.Combine(local, "Ghosts/Eye.mp4")) == epoch.AddSeconds(1), "Copied modification times are preserved exactly.");
 
-            await cache.SynchronizeAsync("local-gateway", first, local, default, acceptManagedOwnershipTransfer: true);
-            await File.WriteAllTextAsync(Path.Combine(first, "sound.wav"), "gateway-updated");
-            await cache.SynchronizeAsync("local-gateway", first, local, default, acceptManagedOwnershipTransfer: true);
-            Check(File.ReadAllText(Path.Combine(local, "sound.wav")) == "gateway-updated" && File.ReadAllText(Path.Combine(local, "ping.mp4")) == "local-edit",
-                "Moving managed caches behind the local Controller keeps future updates working while preserving local edits");
+            await Write(second, "Ghosts/Eye.mp4", "newer from another controller", 3);
+            await cache.SynchronizeAsync("two", second, local, default);
+            Check(File.ReadAllText(Path.Combine(local, "Ghosts/Eye.mp4")) == "newer from another controller", "A newer peer file replaces a copy regardless of Controller ownership.");
+            await cache.SynchronizeAsync("one", first, local, default);
+            Check(File.GetLastWriteTimeUtc(Path.Combine(local, "Ghosts/Eye.mp4")) == epoch.AddSeconds(3), "An older Controller copy cannot overwrite a newer local file.");
+            await cache.SynchronizeAsync("local", local, first, default);
+            Check(File.ReadAllText(Path.Combine(first, "Ghosts/Eye.mp4")) == "newer from another controller", "Newer files propagate back to their original Controller.");
 
-            await File.WriteAllTextAsync(Path.Combine(local, ".controller-media-state.json"), "{\"ping.mp4\":null,\"sound.wav\":{}}");
-            await cache.SynchronizeAsync("host-one", first, local, default);
-            Check(File.ReadAllText(Path.Combine(local, "ping.mp4")) == "local-edit", "Invalid ownership metadata cannot crash synchronization or overwrite local media");
+            await Write(local, "Ghosts/Eye.mp4", "local edit", 5);
+            await Write(second, "Ghosts/Eye.mp4", "remote older", 4);
+            await cache.SynchronizeAsync("two", second, local, default);
+            Check(File.ReadAllText(Path.Combine(local, "Ghosts/Eye.mp4")) == "local edit", "Newer local edits survive synchronization.");
+            await Write(second, "Ghosts/Eye.mp4", "different length at the same timestamp", 5);
+            Check(!await cache.SynchronizeAsync("two", second, local, default) && File.ReadAllText(Path.Combine(local, "Ghosts/Eye.mp4")) == "local edit",
+                "Equal timestamps with different sizes report an incomplete conflict without overwriting.");
+            await Write(second, "Ghosts/Eye.mp4", "same bytes", 5); // Same length as 'local edit': metadata is intentionally the only comparison.
+            Check(await cache.SynchronizeAsync("two", second, local, default) && File.ReadAllText(Path.Combine(local, "Ghosts/Eye.mp4")) == "local edit",
+                "Matching size and timestamp skips content reads under the agreed metadata-only rule.");
+            await Write(second, "Ghosts/Eye.mp4", "latest", 6);
+            using (var locked = new FileStream(Path.Combine(local, "Ghosts/Eye.mp4"), FileMode.Open, FileAccess.Read, FileShare.None))
+                Check(!await cache.SynchronizeAsync("two", second, local, default), "Locked playback files remain intact and are retried.");
+            await cache.SynchronizeAsync("two", second, local, default);
+            Check(File.ReadAllText(Path.Combine(local, "Ghosts/Eye.mp4")) == "latest" && !Directory.EnumerateFiles(local, "*.download").Any(), "Retry succeeds without leaving partial downloads.");
 
+            var inventory = MediaInventory.Read(second); var revision = MediaInventory.Revision(inventory.Serialize());
+            using (var locked = new FileStream(Path.Combine(second, "Ghosts/Eye.mp4"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                Check(MediaInventory.Revision(MediaInventory.Read(second).Serialize()) == revision, "Inventory revisions require metadata only, even while media contents are locked.");
+            await Write(second, ".in-progress.download", "ignore", 100);
+            Check(MediaInventory.Revision(MediaInventory.Read(second).Serialize()) == revision, "Temporary files and cache metadata do not affect revisions.");
+            await Write(local, "Ghosts/Eye.mp4", "older local", 5);
+            await Write(second, "Ghosts/Eye.mp4", "latest revision", 7);
+            Check(MediaInventory.Revision(MediaInventory.Read(second).Serialize()) != revision && !await cache.SynchronizeAsync("two", second, local, default, inventory),
+                "A changed inventory invalidates its revision, and stale advertised metadata cannot overwrite a local file.");
+            Check(File.ReadAllText(Path.Combine(local, "Ghosts/Eye.mp4")) == "older local", "Failed stale downloads preserve the complete local copy.");
+            File.Delete(Path.Combine(second, "Ghosts/Eye.mp4"));
+            await cache.SynchronizeAsync("two", second, local, default);
+            Check(File.Exists(Path.Combine(local, "Ghosts/Eye.mp4")) && File.Exists(Path.Combine(local, "local-only.mp4")), "Remote deletions never remove local media or extras.");
+            await cache.SynchronizeAsync("local", local, second, default);
+            Check(File.Exists(Path.Combine(second, "Ghosts/Eye.mp4")), "Without deletion records another Controller can restore a deleted file.");
+            var parsed = MediaInventory.Parse(MediaInventory.Read(local).Serialize());
+            Check(parsed.Files.Length == 3, "Media inventories round-trip with all category paths.");
+            try { (parsed with { Files = [new("../escape.mp4", 1, epoch)] }).Validate(); throw new Exception("Unsafe inventory accepted."); }
+            catch (ArgumentException) { }
         }
         finally { Directory.Delete(root, true); }
-        Console.WriteLine("Passed hierarchical local caching, atomic replacement, ownership conflicts and locked-file retry.");
+        Console.WriteLine("Passed metadata revisions, newer-file synchronization, conflicts, retry, bilateral propagation and no deletion.");
     }
-    private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
-    private static async Task Until(Func<bool> ready)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (!ready()) { if (DateTime.UtcNow > deadline) throw new TimeoutException("Media discovery check timed out."); await Task.Delay(10); }
-    }
+    private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); Console.WriteLine("PASS " + message); }
 }

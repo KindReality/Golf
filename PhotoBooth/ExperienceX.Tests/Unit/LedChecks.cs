@@ -91,7 +91,7 @@ internal static class LedChecks
         var options=ExperienceOptions.Parse(File.ReadAllText(path));
         Check(screen.IsLed && screen.Points==LedGeometry.Initial(false),"First matrix screen occupies the whole display and persists");
         var changed=definitions with{Perspectives=[definition with{Led=led with{FramesPerSecond=45}}]};
-        await store.ApplyPerspectivesAsync(changed);
+        await store.ApplyControllerDefinitionsAsync(changed);
         Check(ExperienceOptions.Parse(File.ReadAllText(path)).ScreensFor("display")[0].Perspective!.Led!.FramesPerSecond==45,"Controller LED edits immediately update existing Experience screen settings");
         var arrayDefinition=new PerspectiveDefinition{Name="line",Type="pixelArray",Led=device.Perspective(device.Segments[0],false)};
         var array=await store.AddScreenAsync("display",type:"fastled",perspective:definitions.Select(arrayDefinition));

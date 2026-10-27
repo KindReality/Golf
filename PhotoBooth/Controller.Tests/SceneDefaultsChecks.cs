@@ -42,8 +42,17 @@ internal static class SceneDefaultsChecks
         foreach (var scene in options.Scenes)
         {
             Check(scene.ActivatingPlaylist is not null,
-                source + ": " + scene.Name + " has activation and ambient assignments");
-            foreach (var (name, type) in new[] { (scene.ActivatingPlaylist!, "storyboard"), (scene.AmbientPlaylist!, "ambient") })
+                source + ": " + scene.Name + " has an activation playlist");
+            var assigned = new List<(string Name, string Type)> { (scene.ActivatingPlaylist!, "storyboard") };
+            if (scene.Name == "idle")
+            {
+                Check(scene.AmbientPlaylist is not null && scene.Transition is null, source + ": Idle runs its ambient playlist after activation");
+                assigned.Add((scene.AmbientPlaylist!, "ambient"));
+            }
+            else
+                Check(scene.AmbientPlaylist is null && scene.Transition is { Scene: "idle", Device: "*" } && options.Playlist(scene.ActivatingPlaylist!).EffectiveMinimumDurationMilliseconds == 5000,
+                    source + ": Active broadcasts a return to Idle using automatic timing and a five-second minimum");
+            foreach (var (name, type) in assigned)
             {
                 var playlist = options.Playlist(name, type);
                 var sample = activationVideos && name == scene.ActivatingPlaylist;

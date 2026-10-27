@@ -14,13 +14,15 @@ internal sealed class LiveMediaPanel : UserControl
     private readonly HashSet<string> _selectedRoles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<LiveTargetMode, Button> _modeButtons = [];
     private LiveTargetMode _mode;
-    private readonly FlowLayoutPanel _targets = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, Padding = new(4) };
-    private readonly FlowLayoutPanel _media = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, Padding = new(4) };
+    private readonly FlowLayoutPanel _targets = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, Padding = Padding.Empty, Margin = Padding.Empty, AccessibleName = "Live targets" };
+    private readonly FlowLayoutPanel _media = new() { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true, Padding = Padding.Empty, Margin = Padding.Empty, AccessibleName = "Live media library" };
+    private readonly TableLayoutPanel _layout = new() { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty };
     private readonly ToolTip _tips = new();
     private readonly Label _status = new() { Dock = DockStyle.Fill, ForeColor = DarkTheme.Accent, Text = "Discovering Experience devices…", AutoEllipsis = true };
-    private readonly NumericUpDown _volume = new() { Minimum = 0, Maximum = 100, Value = 100, Width = 65 };
+    private readonly NumericUpDown _volume = new() { Minimum = 0, Maximum = 100, Value = 100, Width = 51, AccessibleName = "Live audio volume percent" };
     private readonly CheckBox _mute = new() { Text = "Mute video", Checked = true, AutoSize = true };
-    private readonly ComboBox _filter = new DarkComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly NumericUpDown _speed = new() { Minimum = .5m, Maximum = 2, Value = 1, DecimalPlaces = 2, Increment = .1m, Width = 58, AccessibleName = "Live video playback speed" };
+    private readonly ComboBox _filter = new DarkComboBox { Width = 108, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _search = new() { Width = 190, PlaceholderText = "Find media" };
     private string _signature = "", _filesSignature = "";
     private string[] _files = [];
@@ -28,38 +30,48 @@ internal sealed class LiveMediaPanel : UserControl
     private readonly Image _tablet, _speaker;
     public LiveMediaPanel(ControllerHost host)
     {
-        _host = host; Dock = DockStyle.Fill; BackColor = DarkTheme.Background; ForeColor = DarkTheme.Text; Font = new("Segoe UI", 10);
+        _host = host; Dock = DockStyle.Fill; BackColor = DarkTheme.Background; ForeColor = DarkTheme.Text; Font = new("Segoe UI", 9);
         _tablet = Asset("Tablet.png"); _speaker = Asset("Speaker.png");
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new(4) };
-        layout.RowStyles.Add(new(SizeType.Absolute, 38)); layout.RowStyles.Add(new(SizeType.Absolute, 48)); layout.RowStyles.Add(new(SizeType.Percent, 100)); layout.RowStyles.Add(new(SizeType.Absolute, 38)); layout.RowStyles.Add(new(SizeType.Absolute, 116)); layout.RowStyles.Add(new(SizeType.Absolute, 36));
-        var modes = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        modes.Controls.Add(new Label { Text = "TARGET", AutoSize = true, ForeColor = DarkTheme.Accent, Padding = new(0, 8, 12, 0) });
+        _layout.RowStyles.Add(new(SizeType.AutoSize)); _layout.RowStyles.Add(new(SizeType.Absolute, 92)); _layout.RowStyles.Add(new(SizeType.AutoSize)); _layout.RowStyles.Add(new(SizeType.Percent, 100)); _layout.RowStyles.Add(new(SizeType.Absolute, 22));
+        var toolbar = LiveControls.Toolbar(); toolbar.AccessibleName = "Live target toolbar";
+        toolbar.Controls.Add(LiveControls.Caption("TARGET"));
         foreach (var mode in Enum.GetValues<LiveTargetMode>())
         {
             var button = new Button { Text = mode.ToString(), AutoSize = true, AccessibleName = "Target " + mode };
-            DarkTheme.Button(button, mode == _mode); button.Click += (_, _) => SetTargetMode(mode);
-            _modeButtons.Add(mode, button); modes.Controls.Add(button);
+            LiveControls.StyleButton(button, mode == _mode); button.Click += (_, _) => SetTargetMode(mode);
+            _modeButtons.Add(mode, button); toolbar.Controls.Add(button);
         }
-        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
-        Button Button(string text, Action action) { var b = new Button { Text = text, AutoSize = true }; DarkTheme.Button(b); b.Click += (_, _) => action(); toolbar.Controls.Add(b); return b; }
+        Button Button(string text, Action action) { var b = new Button { Text = text, AutoSize = true }; LiveControls.StyleButton(b); b.Click += (_, _) => action(); toolbar.Controls.Add(b); return b; }
         Button("Select all", SelectAll);
         Button("Clear", () => { if (_mode == LiveTargetMode.Roles) _selectedRoles.Clear(); else _selected.RemoveWhere(t => t.Audio == (_mode == LiveTargetMode.Audio)); _signature = ""; RefreshState(); SelectionStatus(); });
         Button("Discover", () => _ = DiscoverAsync());
-        toolbar.Controls.Add(new Label { Text = "Audio volume %", AutoSize = true, Padding = new(12, 8, 0, 0) });
+        toolbar.Controls.Add(LiveControls.Caption("Audio volume %"));
         _volume.BackColor = DarkTheme.Surface; _volume.ForeColor = ForeColor; toolbar.Controls.Add(_volume); toolbar.Controls.Add(_mute);
-        layout.Controls.Add(modes, 0, 0); layout.Controls.Add(toolbar, 0, 1); layout.Controls.Add(_targets, 0, 2);
-        var mediaTools = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
-        mediaTools.Controls.Add(new Label { Text = "PLAY ONCE", AutoSize = true, ForeColor = DarkTheme.Accent, Padding = new(0, 8, 12, 0) });
+        _layout.Controls.Add(toolbar, 0, 0); _layout.Controls.Add(_targets, 0, 1);
+        var mediaTools = LiveControls.Toolbar();
+        mediaTools.Controls.Add(LiveControls.Caption("PLAY ONCE"));
         _filter.Items.AddRange(["All media", "Videos", "Audio"]); _filter.SelectedIndex = 1; _filter.Enabled = false; DarkTheme.Choices(_filter);
+        _filter.ItemHeight = 19;
         _search.BackColor = DarkTheme.Surface; _search.ForeColor = ForeColor;
         _filter.SelectedIndexChanged += (_, _) => RenderMedia(); _search.TextChanged += (_, _) => RenderMedia();
         mediaTools.Controls.Add(_filter); mediaTools.Controls.Add(_search);
-        layout.Controls.Add(mediaTools, 0, 3); layout.Controls.Add(_media, 0, 4); layout.Controls.Add(_status, 0, 5); Controls.Add(layout);
+        _speed.BackColor = DarkTheme.Surface; _speed.ForeColor = ForeColor;
+        mediaTools.Controls.Add(LiveControls.Caption("Video speed ×")); mediaTools.Controls.Add(_speed);
+        _layout.Controls.Add(mediaTools, 0, 2); _layout.Controls.Add(_media, 0, 3); _layout.Controls.Add(_status, 0, 4); Controls.Add(_layout);
+        SizeChanged += (_, _) => FitTargetArea();
+    }
+    private void FitTargetArea()
+    {
+        // Grow with the inventory, but leave most of the remaining space to media.
+        var needed = _targets.Controls.Count == 0 ? 66 : _targets.Controls.Cast<Control>().Max(c => c.Bottom) - _targets.AutoScrollPosition.Y + 3;
+        var height = Math.Min(needed, Math.Max(86, (_layout.ClientSize.Height - 82) * 45 / 100));
+        if (_layout.RowStyles[1].Height != height) _layout.RowStyles[1].Height = height;
     }
     internal void SetTargetMode(LiveTargetMode mode)
     {
         _mode = mode;
-        foreach (var pair in _modeButtons) DarkTheme.Button(pair.Value, pair.Key == mode);
+        _speed.Enabled = mode != LiveTargetMode.Audio;
+        foreach (var pair in _modeButtons) LiveControls.StyleButton(pair.Value, pair.Key == mode);
         _filter.Enabled = mode == LiveTargetMode.Roles;
         _filter.SelectedIndex = mode == LiveTargetMode.Video ? 1 : mode == LiveTargetMode.Audio ? 2 : 0;
         _signature = ""; RefreshState(); SelectionStatus();
@@ -68,7 +80,7 @@ internal sealed class LiveMediaPanel : UserControl
     {
         var peers = _host.Experiences.Snapshot();
         if (_mode == LiveTargetMode.Roles)
-            foreach (var role in LivePlayback.Roles(peers).Where(r => r.Screens + r.Speakers > 0)) _selectedRoles.Add(role.Name);
+            foreach (var role in LivePlayback.Roles(peers, _host.KnownRoles).Where(r => r.Screens + r.Speakers > 0)) _selectedRoles.Add(role.Name);
         else foreach (var peer in peers.Where(p => p.Usable))
         {
             if (_mode == LiveTargetMode.Video) foreach (var screen in peer.Inventory.Screens.Where(s => s.Playable)) _selected.Add(new(peer.Inventory.Hostname, screen.Id, screen.Display));
@@ -92,25 +104,26 @@ internal sealed class LiveMediaPanel : UserControl
     {
         if (IsDisposed) return;
         var peers = _host.Experiences.Snapshot();
-        var signature = _mode + ":" + _targets.ClientSize.Width + string.Join('|', peers.Select(p => ExperienceInventory.Revision(p.Inventory.Serialize()) + p.Online + p.Ambiguous)) + string.Join('|', _selected.OrderBy(t => t.Hostname).ThenBy(t => t.Display).ThenBy(t => t.Id)) + string.Join('|', _selectedRoles.Order(StringComparer.OrdinalIgnoreCase));
+        var knownRoles = _host.KnownRoles;
+        var signature = _mode + ":" + _targets.ClientSize.Width + string.Join('|', knownRoles) + string.Join('|', peers.Select(p => ExperienceInventory.Revision(p.Inventory.Serialize()) + p.Online + p.Ambiguous)) + string.Join('|', _selected.OrderBy(t => t.Hostname).ThenBy(t => t.Display).ThenBy(t => t.Id)) + string.Join('|', _selectedRoles.Order(StringComparer.OrdinalIgnoreCase));
         if (signature != _signature)
         {
             _signature = signature; var scroll = _targets.AutoScrollPosition; _targets.SuspendLayout(); Clear(_targets);
             if (_mode == LiveTargetMode.Roles)
             {
-                var roles = LivePlayback.Roles(peers);
+                var roles = LivePlayback.Roles(peers, knownRoles);
                 foreach (var role in roles) AddRoleTile(role);
-                if (roles.Length == 0) _targets.Controls.Add(new Label { Text = "No roles have been reported.\nAssign Roles to screens or audio outputs in the Experience configuration.", AutoSize = true, Padding = new(16) });
+                if (roles.Length == 0) _targets.Controls.Add(new Label { Text = "No roles configured yet.\nAdd roles to playlists, screens or audio outputs.", AutoSize = true, Padding = new(16) });
             }
             else foreach (var peer in peers)
             {
                 var inventory = peer.Inventory;
-                var groupWidth = Math.Max(300, _targets.ClientSize.Width - 28);
-                var columns = Math.Max(1, (groupWidth - 28) / 240);
+                var groupWidth = Math.Max(200, _targets.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4);
+                var columns = Math.Max(1, (groupWidth - 8) / 194);
                 var rows = (int)Math.Ceiling((_mode == LiveTargetMode.Video ? inventory.Screens.Length : inventory.Speakers.Length) / (double)columns);
-                var group = new DarkCard { Dock = DockStyle.None, Width = groupWidth, Height = Math.Clamp(44 + rows * 100, 144, 440), Padding = new(8), Margin = new(4), BackColor = Color.FromArgb(22, 49, 68) };
-                var title = new Label { Dock = DockStyle.Top, Height = 28, ForeColor = DarkTheme.Accent, Text = inventory.DeviceName + (peer.Ambiguous ? " • DUPLICATE NAME" : peer.Online ? " • ONLINE" : " • OFFLINE"), Font = new(Font, FontStyle.Bold) };
-                var tiles = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true };
+                var group = new DarkCard { Dock = DockStyle.None, Width = groupWidth, Height = 26 + Math.Max(1, rows) * 64, Padding = new(3), Margin = new(0, 0, 0, 3), BackColor = Color.FromArgb(22, 49, 68) };
+                var title = new Label { Dock = DockStyle.Top, Height = 20, ForeColor = DarkTheme.Accent, Text = inventory.DeviceName + (peer.Ambiguous ? " • DUPLICATE NAME" : peer.Online ? " • ONLINE" : " • OFFLINE"), Font = new(Font, FontStyle.Bold) };
+                var tiles = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = true, Margin = Padding.Empty };
                 if (_mode == LiveTargetMode.Video) foreach (var screen in inventory.Screens)
                 {
                     var target = new LiveTarget(inventory.Hostname, screen.Id, screen.Display);
@@ -121,7 +134,7 @@ internal sealed class LiveMediaPanel : UserControl
             }
             if (peers.Length == 0 && _mode != LiveTargetMode.Roles) _targets.Controls.Add(new Label { Text = "No Experience devices found yet.\nRun Install-Experience.cmd on each Experience PC to enable Live discovery.", AutoSize = true, MaximumSize = new(700, 0), Padding = new(16) });
             if (_status.Text.StartsWith("Discovering", StringComparison.Ordinal)) SelectionStatus();
-            _targets.ResumeLayout(); _targets.AutoScrollPosition = new(-scroll.X, -scroll.Y);
+            _targets.ResumeLayout(); _targets.AutoScrollPosition = new(-scroll.X, -scroll.Y); FitTargetArea();
         }
         try
         {
@@ -135,7 +148,7 @@ internal sealed class LiveMediaPanel : UserControl
     }
     private void AddTile(Control panel, LiveTarget target, string title, string detail, bool enabled, Image artwork)
     {
-        var tile = new LiveTile(artwork, title, detail) { Text = title + " " + detail, AccessibleName = title + " " + detail, Width = 232, Height = 92, Enabled = enabled, Selected = _selected.Contains(target), Tag = target, Margin = new(4) };
+        var tile = new LiveTile(artwork, title, detail) { Text = title + " " + detail, AccessibleName = title + " " + detail, Width = 190, Height = 60, Enabled = enabled, Selected = _selected.Contains(target), Tag = target, Margin = new(2) };
         tile.Click += (_, _) => { if (!_selected.Add(target)) _selected.Remove(target); tile.Selected = _selected.Contains(target); tile.Invalidate(); SelectionStatus(); };
         _tips.SetToolTip(tile, title + "\n" + detail); panel.Controls.Add(tile);
     }
@@ -145,8 +158,8 @@ internal sealed class LiveMediaPanel : UserControl
         var tile = new LiveTile(role.Screens > 0 ? _tablet : _speaker, role.Name, detail)
         {
             Text = role.Name + " " + detail, AccessibleName = "Role " + role.Name + " " + detail,
-            Width = 232, Height = 92, Enabled = role.Screens + role.Speakers > 0,
-            Selected = _selectedRoles.Contains(role.Name), Tag = role.Name, Margin = new(4)
+            Width = 190, Height = 60, Enabled = role.Screens + role.Speakers > 0,
+            Selected = _selectedRoles.Contains(role.Name), Tag = role.Name, Margin = new(2)
         };
         tile.Click += (_, _) => { if (!_selectedRoles.Add(role.Name)) _selectedRoles.Remove(role.Name); tile.Selected = _selectedRoles.Contains(role.Name); tile.Invalidate(); SelectionStatus(); };
         _tips.SetToolTip(tile, "Role: " + role.Name + "\n" + detail + " available across Experience devices\nVideo plays on matching screens; audio plays on matching speakers.");
@@ -159,8 +172,8 @@ internal sealed class LiveMediaPanel : UserControl
         foreach (var file in _files.Where(f => f.Contains(_search.Text, StringComparison.OrdinalIgnoreCase) && (_filter.SelectedIndex == 0 || LivePlayback.Videos.Contains(Path.GetExtension(f)) == (_filter.SelectedIndex == 1))))
         {
             var video = LivePlayback.Videos.Contains(Path.GetExtension(file));
-            var button = new Button { Text = (video ? "▶  VIDEO\n" : "♫  AUDIO\n") + file, Width = 210, Height = 96, Margin = new(5), AccessibleName = "Play " + file, Tag = file };
-            DarkTheme.Button(button); button.Click += async (_, _) => await PlayAsync(file); _media.Controls.Add(button);
+            var button = new Button { Text = (video ? "▶  VIDEO\n" : "♫  AUDIO\n") + file, Width = 174, Height = 60, AccessibleName = "Play " + file, Tag = file, AutoEllipsis = true };
+            LiveControls.StyleButton(button); _tips.SetToolTip(button, file); button.Click += async (_, _) => await PlayAsync(file); _media.Controls.Add(button);
         }
     }
     internal async Task PlayAsync(string filename)
@@ -172,8 +185,8 @@ internal sealed class LiveMediaPanel : UserControl
             if (_mode != LiveTargetMode.Roles && video != (_mode == LiveTargetMode.Video)) { _status.Text = "Choose media matching the target mode."; return; }
             var peers = _host.Experiences.Snapshot();
             var plan = _mode == LiveTargetMode.Roles
-                ? LivePlayback.BuildRoles(_host.Options, peers, _selectedRoles, filename, (int)_volume.Value, _mute.Checked)
-                : LivePlayback.Build(_host.Options, peers, _selected.Where(t => t.Audio == (_mode == LiveTargetMode.Audio)), filename, (int)_volume.Value, _mute.Checked);
+                ? LivePlayback.BuildRoles(_host.Options, peers, _selectedRoles, filename, (int)_volume.Value, _mute.Checked, (double)_speed.Value)
+                : LivePlayback.Build(_host.Options, peers, _selected.Where(t => t.Audio == (_mode == LiveTargetMode.Audio)), filename, (int)_volume.Value, _mute.Checked, (double)_speed.Value);
             if (plan.Commands.Length == 0) { _status.Text = plan.Skipped.Length == 0 ? "Select at least one " + (_mode == LiveTargetMode.Roles ? "role." : video ? "video screen." : "speaker.") : string.Join("; ", plan.Skipped); return; }
             var results = await Task.WhenAll(plan.Commands.Select(async bytes => { try { await _host.SendLiveAsync(bytes); return (string?)null; } catch (Exception ex) { return ex.Message; } }));
             if (!IsDisposed) _status.Text = $"Sent {filename} • {results.Count(r => r is null)} commands" + (plan.Skipped.Length + results.Count(r => r is not null) > 0 ? " • " + string.Join("; ", plan.Skipped.Concat(results.OfType<string>())) : " • playback once");
@@ -193,10 +206,10 @@ internal sealed class LiveTile(Image artwork, string title, string detail) : But
         using var fill = new SolidBrush(Selected ? Color.FromArgb(65, 0, 155, 245) : Color.FromArgb(26, 0, 145, 225));
         using var border = new Pen(Enabled ? Selected ? Color.FromArgb(60, 190, 255) : Color.FromArgb(55, 107, 138) : Color.FromArgb(50, 67, 78), Selected ? 2.5f : 1f);
         var rect = new Rectangle(2, 2, Width - 5, Height - 5); g.FillRectangle(fill, rect); g.DrawRectangle(border, rect);
-        var scale = Math.Min(60f / artwork.Width, 60f / artwork.Height); var width = artwork.Width * scale; var height = artwork.Height * scale;
-        g.DrawImage(artwork, 8 + (60 - width) / 2, (Height - height) / 2, width, height);
-        TextRenderer.DrawText(g, title, Font, new Rectangle(76, 12, Width - 96, 43), Enabled ? Color.FromArgb(216, 239, 255) : Color.FromArgb(116, 142, 158), TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
-        TextRenderer.DrawText(g, detail, Font, new Rectangle(76, Height - 27, Width - 84, 20), Selected && Enabled ? Color.FromArgb(80, 201, 255) : Color.FromArgb(136, 164, 182), TextFormatFlags.EndEllipsis);
+        var scale = Math.Min(36f / artwork.Width, 36f / artwork.Height); var width = artwork.Width * scale; var height = artwork.Height * scale;
+        g.DrawImage(artwork, 5 + (36 - width) / 2, (Height - height) / 2, width, height);
+        TextRenderer.DrawText(g, title, Font, new Rectangle(44, 5, Width - 62, 32), Enabled ? Color.FromArgb(216, 239, 255) : Color.FromArgb(116, 142, 158), TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        TextRenderer.DrawText(g, detail, Font, new Rectangle(44, Height - 22, Width - 49, 18), Selected && Enabled ? Color.FromArgb(80, 201, 255) : Color.FromArgb(136, 164, 182), TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         if (Selected) TextRenderer.DrawText(g, "✓", Font, new Point(Width - 24, 6), Color.FromArgb(80, 201, 255));
         if (Focused) ControlPaint.DrawFocusRectangle(g, new Rectangle(6, 6, Width - 13, Height - 13));
     }

@@ -5,16 +5,18 @@ namespace PhotoBooth.Networking;
 internal static class ControllerDiscovery
 {
     public const string ResponseEvent = "controller.announced";
-    internal sealed record Announcement(string ControllerId, string Hostname, string Revision, int DefinitionsPort);
+    internal sealed record Announcement(string ControllerId, string Hostname, string Revision, int DefinitionsPort, string MediaRevision);
     public static Announcement? ReadAnnouncement(BroadcastEnvelope message)
     {
         if (message.Type != "event" || message.Event != ResponseEvent) return null;
         var id = Text(message.Body, "controllerId"); var hostname = Text(message.Body, "hostname"); var revision = Text(message.Body, "revision");
+        var mediaRevision = Text(message.Body, "mediaRevision");
         ValidateHostname(hostname);
         if (!Guid.TryParse(id, out _) || revision is not { Length: 64 } || !revision.All(Uri.IsHexDigit) ||
+            mediaRevision is not { Length: 64 } || !mediaRevision.All(Uri.IsHexDigit) ||
             !message.Body.TryGetProperty("definitionsPort", out var field) || !field.TryGetInt32(out var port) || port is < 1 or > 65535)
             throw new ArgumentException("Invalid controller announcement identity, revision or port.");
-        return new(id!, hostname!, revision, port);
+        return new(id!, hostname!, revision, port, mediaRevision);
     }
     private static string? Text(JsonElement body, string field) => body.EnumerateObject()
         .FirstOrDefault(p => p.Name.Equals(field, StringComparison.OrdinalIgnoreCase)).Value is { ValueKind: JsonValueKind.String } value ? value.GetString() : null;
@@ -23,9 +25,9 @@ internal static class ControllerDiscovery
     public static byte[] Request(BroadcastOptions options, string requestId) => BroadcastEnvelope.Create(options, "command", "*",
         new { command = "discover", service = "controller" }, requestId);
     public static byte[] Response(BroadcastOptions options, BroadcastEnvelope? request = null, string? controllerId = null,
-        string? revision = null, int definitionsPort = 54244) => BroadcastEnvelope.Create(options, "event", "*",
+        string? revision = null, int definitionsPort = 54244, string? mediaRevision = null) => BroadcastEnvelope.Create(options, "event", "*",
         new { @event = ResponseEvent, input = "controller", hostname = Environment.MachineName,
-            controllerId, revision, definitionsPort });
+            controllerId, revision, definitionsPort, mediaRevision = mediaRevision ?? PhotoBooth.Media.MediaInventory.EmptyRevision });
     public static string? Hostname(BroadcastEnvelope message, IReadOnlySet<string> requested)
     {
         if (message.Type != "event" || message.Event != ResponseEvent) return null;

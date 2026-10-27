@@ -13,6 +13,21 @@ internal sealed class MediaEngineSession(Action wake, RendererProgress? progress
     private int _errorCode, _errorHresult;
     private long _generation;
     private SoftwareVideoFrame? _softwareFrame;
+    private double _playbackSpeed = 1;
+    internal double PlaybackSpeed => _playbackSpeed;
+    internal void SetPlaybackSpeed(double speed)
+    {
+        PhotoBooth.Networking.VideoPlaybackSpeed.Validate(speed);
+        if (Ready && _engine is not null)
+        {
+            using var operation = progress?.Begin("MediaPlaybackRate", screenId);
+            // Play restores the engine's default rate; set both so startup/looping
+            // and in-place changes use the same requested speed.
+            _engine.DefaultPlaybackRate = speed;
+            _engine.PlaybackRate = speed;
+        }
+        _playbackSpeed = speed;
+    }
     internal bool SoftwareVideoDecoding { get; private set; }
     public IMFMediaEngine? Engine => _engine;
     public bool IsOpen => _engine is not null;
@@ -26,6 +41,7 @@ internal sealed class MediaEngineSession(Action wake, RendererProgress? progress
         MediaPath.EnsureLocalPath(path);
         SoftwareVideoDecoding = softwareVideoDecoding;
         _canPlay = 0;
+        _playbackSpeed = request.EffectivePlaybackSpeed;
         _ended = 0;
         _error = 0;
         _errorCode = 0;
@@ -73,6 +89,7 @@ internal sealed class MediaEngineSession(Action wake, RendererProgress? progress
         if (size.Width <= 0 || size.Height <= 0)
             throw new InvalidOperationException("Media has no video stream.");
         createTexture(size.Width, size.Height);
+        SetPlaybackSpeed(_playbackSpeed);
         using var operation = progress?.Begin("MediaPlay", screenId);
         _engine.Play().CheckError();
     }

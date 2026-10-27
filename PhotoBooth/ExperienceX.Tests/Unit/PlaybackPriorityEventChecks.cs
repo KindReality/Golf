@@ -52,5 +52,11 @@ internal static class PlaybackPriorityEventChecks
             "An exhausted causal chain still announces its conflict without resetting the loop-prevention budget");
         try { BroadcastChain.From(terminal).Enter("another-trigger"); throw new Exception("Terminal event reopened the chain."); }
         catch (InvalidOperationException) { Check(true, "Terminal conflict events cannot trigger an event feedback loop"); }
+        events.Report(request with { RequestId = "fade-command", Command = "fadeOut", DurationSeconds = 1, Value = "", Loop = false },
+            @"\\.\DISPLAY1", "screen1", CommandPriority.High);
+        end = Environment.TickCount64 + 2000;
+        while (packets.Count < 4) { if (Environment.TickCount64 > end) throw new TimeoutException("Fade conflict event not sent."); await Task.Delay(5); }
+        Check(PlaybackPriorityEvent.TryDescribe(BroadcastEnvelope.Parse(packets.Last()), out text) && text.StartsWith("Ignored fadeOut on experience-test/Projector/screen1"),
+            "Fade conflicts identify the action even though they have no media filename.");
     }
 }

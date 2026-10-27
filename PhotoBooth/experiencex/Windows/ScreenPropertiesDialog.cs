@@ -4,41 +4,46 @@ using Forms = System.Windows.Forms;
 
 namespace ExperienceX;
 
-internal sealed class VideoScreenDialog : ConfigurationDialog
+internal sealed class ScreenPropertiesDialog : ConfigurationDialog
 {
     private readonly Forms.TextBox _name = new() { Dock = Forms.DockStyle.Fill, AccessibleName = "Screen name" };
     private readonly Forms.ListBox _perspectives = new() { Dock = Forms.DockStyle.Fill, BorderStyle = Forms.BorderStyle.None, AccessibleName = "Perspective" };
     private readonly Forms.CheckedListBox _roles = new() { Dock = Forms.DockStyle.Fill, BorderStyle = Forms.BorderStyle.None, CheckOnClick = true, IntegralHeight = false, AccessibleName = "Roles" };
     private readonly Forms.TextBox _newRole = new() { Dock = Forms.DockStyle.Fill, PlaceholderText = "New role", AccessibleName = "New role" };
     private readonly Forms.Label _status = new() { Dock = Forms.DockStyle.Fill, AutoEllipsis = true };
-    private readonly Forms.Button _create = new() { Text = "Create screen", AutoSize = true };
+    private readonly Forms.Button _accept = new() { Text = "Create screen", AutoSize = true };
+    private readonly ScreenOptions? _editing;
     private readonly HashSet<string> _reservedNames;
     private sealed record AcceptedChoice(string Name, PerspectiveSelection? Perspective, string Roles);
     private AcceptedChoice? _accepted;
     public string ScreenName => _accepted?.Name ?? _name.Text.Trim();
-    public PerspectiveSelection? Selection => _accepted is { } choice ? choice.Perspective : PerspectiveChoices.Selected(_perspectives);
+    public PerspectiveSelection? Selection => _accepted is { } choice ? choice.Perspective : _editing is { IsVideo: false } ? _editing.Perspective : PerspectiveChoices.Selected(_perspectives);
     public string Roles => _accepted?.Roles ?? string.Join(",", RoleList.Parse(string.Join(",", _roles.CheckedItems.Cast<string>())));
 
-    internal static string[] KnownRoles(ExperienceOptions options) => options.DisplayScreens.Values.SelectMany(s => s).Select(s => s.Roles)
-        .Concat(options.AudioDevices.Values.Select(d => d.Roles)).SelectMany(RoleList.Parse)
-        .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    internal static string[] KnownRoles(ExperienceOptions options, IEnumerable<string>? shared = null) => RoleCatalog.Names(
+        options.DisplayScreens.Values.SelectMany(s => s).Select(s => s.Roles)
+            .Concat(options.AudioDevices.Values.Select(d => d.Roles)).Concat(shared ?? []));
 
-    public VideoScreenDialog(IReadOnlyList<ScreenOptions> existing, IReadOnlyList<PerspectiveSelection> perspectives,
-        IEnumerable<string> roles, string displayLabel)
+    public ScreenPropertiesDialog(IReadOnlyList<ScreenOptions> existing, IReadOnlyList<PerspectiveSelection> perspectives,
+        IEnumerable<string> roles, string displayLabel, ScreenOptions? editing = null)
     {
-        Text = "New video screen"; ClientSize = new(790, 490); MinimumSize = new(660, 430);
-        _reservedNames = existing.SelectMany(s => new[] { s.Name, s.DefaultName }).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _name.Text = ScreenOptions.AvailableDefaultName(existing);
-        PerspectiveChoices.Populate(_perspectives, perspectives);
-        foreach (var role in roles.SelectMany(RoleList.Parse).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)) _roles.Items.Add(role);
+        _editing = editing;
+        Text = editing is null ? "New video screen" : "Screen properties"; ClientSize = new(790, 490); MinimumSize = new(660, 430);
+        _accept.Text = editing is null ? "Create screen" : "Save changes";
+        _reservedNames = existing.Where(s => s.Id != editing?.Id).SelectMany(s => new[] { s.Name, s.DefaultName }).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _name.Text = editing?.Name ?? ScreenOptions.AvailableDefaultName(existing);
+        PerspectiveChoices.Populate(_perspectives, perspectives, editing?.Perspective, editing?.IsLed == true);
+        var selectedRoles = RoleList.Parse(editing?.Roles).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var role in roles.SelectMany(RoleList.Parse).Concat(selectedRoles).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))
+            _roles.Items.Add(role, selectedRoles.Contains(role));
 
         var layout = new Forms.TableLayoutPanel { Dock = Forms.DockStyle.Fill, Padding = new(22, 16, 22, 16), ColumnCount = 1, RowCount = 7 };
         foreach (var height in new[] { 38, 27, 34, 36 }) layout.RowStyles.Add(new(Forms.SizeType.Absolute, height));
         layout.RowStyles.Add(new(Forms.SizeType.Percent, 100)); layout.RowStyles.Add(new(Forms.SizeType.Absolute, 44)); layout.RowStyles.Add(new(Forms.SizeType.Absolute, 46));
-        layout.Controls.Add(new Forms.Label { Text = "NEW VIDEO SCREEN", Dock = Forms.DockStyle.Fill, Font = new("Segoe UI", 16, System.Drawing.FontStyle.Bold), ForeColor = DarkFormsTheme.Accent }, 0, 0);
+        layout.Controls.Add(new Forms.Label { Text = editing is null ? "NEW VIDEO SCREEN" : "SCREEN PROPERTIES", Dock = Forms.DockStyle.Fill, Font = new("Segoe UI", 16, System.Drawing.FontStyle.Bold), ForeColor = DarkFormsTheme.Accent }, 0, 0);
         layout.Controls.Add(new Forms.Label { Text = "Screen name", Dock = Forms.DockStyle.Fill, TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 1);
         layout.Controls.Add(_name, 0, 2);
-        layout.Controls.Add(new Forms.Label { Text = displayLabel + " • Starts full display; adjust its points after creation.", Dock = Forms.DockStyle.Fill, AutoEllipsis = true, ForeColor = DarkFormsTheme.Muted, TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 3);
+        layout.Controls.Add(new Forms.Label { Text = displayLabel + (editing is null ? " • Adjust its points after creation." : " • Edit this screen's settings."), Dock = Forms.DockStyle.Fill, AutoEllipsis = true, ForeColor = DarkFormsTheme.Muted, TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 3);
         var choices = new Forms.TableLayoutPanel { Dock = Forms.DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Forms.Padding.Empty };
         choices.ColumnStyles.Add(new(Forms.SizeType.Percent, 56)); choices.ColumnStyles.Add(new(Forms.SizeType.Percent, 44));
         var sources = new Forms.TableLayoutPanel { Dock = Forms.DockStyle.Fill, RowCount = 2, ColumnCount = 1, Margin = new(0, 0, 14, 0) };
@@ -52,12 +57,13 @@ internal sealed class VideoScreenDialog : ConfigurationDialog
         var addRole = new Forms.Button { Text = "Add", AutoSize = true, AccessibleName = "Add role" }; addRole.Click += (_, _) => AddRoles();
         add.Controls.Add(_newRole, 0, 0); add.Controls.Add(addRole, 1, 0); groups.Controls.Add(add, 0, 2);
         choices.Controls.Add(sources, 0, 0); choices.Controls.Add(groups, 1, 0); layout.Controls.Add(choices, 0, 4);
+        if (editing is { IsVideo: false }) { sources.Visible = false; choices.ColumnStyles[0].Width = 0; choices.ColumnStyles[1].Width = 100; }
         layout.Controls.Add(_status, 0, 5);
         var buttons = new Forms.FlowLayoutPanel { Dock = Forms.DockStyle.Fill, FlowDirection = Forms.FlowDirection.RightToLeft, WrapContents = false, Margin = Forms.Padding.Empty };
         var cancel = new Forms.Button { Text = "Cancel", AutoSize = true, DialogResult = Forms.DialogResult.Cancel };
-        buttons.Controls.Add(_create); buttons.Controls.Add(cancel); layout.Controls.Add(buttons, 0, 6);
-        Controls.Add(layout); AcceptButton = _create; CancelButton = cancel;
-        _create.Click += (_, _) =>
+        buttons.Controls.Add(_accept); buttons.Controls.Add(cancel); layout.Controls.Add(buttons, 0, 6);
+        Controls.Add(layout); AcceptButton = _accept; CancelButton = cancel;
+        _accept.Click += (_, _) =>
         {
             if (!ValidateSelection()) return;
             _accepted = new(ScreenName, Selection, Roles);
@@ -93,10 +99,10 @@ internal sealed class VideoScreenDialog : ConfigurationDialog
             ScreenOptions.ValidateName(ScreenName);
             if (_reservedNames.Contains(ScreenName)) throw new ArgumentException("This display already uses that screen name. Choose another name.");
             _ = Roles;
-            _create.Enabled = true; _status.ForeColor = DarkFormsTheme.Muted;
-            _status.Text = _roles.Items.Count == 0 ? "No roles configured yet. Add one above, or create without roles." : "Roles are optional. Checked roles are saved with this screen.";
+            _accept.Enabled = true; _status.ForeColor = DarkFormsTheme.Muted;
+            _status.Text = _roles.Items.Count == 0 ? "No roles configured yet. Add one above, or continue without roles." : "Roles are optional. Checked roles are saved with this screen.";
             return true;
         }
-        catch (ArgumentException ex) { _create.Enabled = false; _status.Text = ex.Message; _status.ForeColor = DarkFormsTheme.Error; return false; }
+        catch (ArgumentException ex) { _accept.Enabled = false; _status.Text = ex.Message; _status.ForeColor = DarkFormsTheme.Error; return false; }
     }
 }

@@ -55,7 +55,7 @@ internal sealed class PointSnapping
     }
     internal bool Current(ExperienceOptions options) => Originals.All(entry =>
         options.PointsFor(entry.Key.DisplayName, entry.Key.ScreenId) == entry.Value &&
-         Definition(options, entry.Key) is not null && (Definition(options, entry.Key)?.IsMask == true) == _masks[entry.Key] &&
+         Definition(options, entry.Key) is { IsLocked: false } && (Definition(options, entry.Key)?.IsMask == true) == _masks[entry.Key] &&
          (_types is null || _types[entry.Key] == Definition(options, entry.Key)?.Type) &&
          (Definition(options,entry.Key) is {IsLed:true,IsLedArray:false}) == _rectangles[entry.Key]);
     private static ScreenOptions? Definition(ExperienceOptions options, IPointSurface surface) =>

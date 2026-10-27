@@ -32,4 +32,5 @@ internal interface IPointSurface
     }
     Task<bool> ConfirmCalibrationAsync(PointOptions expected);
     void ReleaseCalibrationCapture();
+    void MovePointerToPoint(ScreenPoint point) { }
 }

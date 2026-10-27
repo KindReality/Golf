@@ -43,20 +43,20 @@ internal static class ShowEditorPageChecks
                     page.Navigate("Playlists", 1);
                     Console.WriteLine("PASS Storyboard inspector opens");
                     Field<TextBox>("Storyboard playlist").Text = "Renamed cue";
-                    Field<TextBox>("Playlist duration milliseconds").Text = "45000";
+                    Field<TextBox>("Playlist minimum duration seconds").Text = "45";
+                    Field<TextBox>("Playlist maximum duration seconds").Text = "45";
                     Button("+ Item").PerformClick(); Field<TextBox>("Item name").Text = "Second cue";
                     Console.WriteLine("PASS New item inspector opens");
                     Field<NumericUpDown>("Wait before item (ms)").Value = 20000;
                     Field<ComboBox>("Roles (comma-separated)").Text = "Projector, Ceiling";
                     Field<ComboBox>("Role selection").SelectedItem = "Random";
-                    Field<CheckBox>("Include subwoofer").Checked = true;
                     Field<CheckBox>("Loop video").Checked = true;
                     Shot("controller-storyboard-editor.png");
                     Button("Commands").PerformClick(); Shot("controller-command-editor.png");
                     Check(page.HasUnsavedChanges && host.Options.Playlists[1].Name == "cue" && host.Engine.Snapshot().Length == 0, "Editing items, roles and commands stays in the draft without dispatching anything");
                     await page.SaveAsync(); await Until(() => host.Options.Playlists[1].Name == "Renamed cue"); page.RefreshState();
                     var saved = host.Options.Playlists[1];
-                    Check(saved.DurationMilliseconds == 45000 && saved.Items.Length == 2 && saved.Items[1].DelayMilliseconds == 20000 && saved.Items[1].Roles == "Projector, Ceiling" && saved.Items[1].BroadcastMode == "Random" && saved.Items[1].Commands[0].Payload.GetProperty("loop").GetBoolean(), "Save persists playlist duration, millisecond timing, role routing and looping commands");
+                    Check(saved.MinimumDurationMilliseconds == 45000 && saved.MaximumDurationMilliseconds == 45000 && saved.Items.Length == 2 && saved.Items[1].DelayMilliseconds == 20000 && saved.Items[1].Roles == "Projector, Ceiling" && saved.Items[1].BroadcastMode == "Random" && saved.Items[1].Commands[0].Payload.GetProperty("loop").GetBoolean(), "Save persists playlist duration, millisecond timing, role routing and looping commands");
                     Check(host.Options.Playlists[2].Items[0].Commands[0].Playlist == "Renamed cue", "UI playlist rename preserves nested references");
                     Button("Run playlist").PerformClick(); await Until(() => host.Engine.Snapshot().Length == 1);
                     Button("Cancel run").PerformClick(); await Until(() => host.Engine.Snapshot().Length == 0);
@@ -75,6 +75,13 @@ internal static class ShowEditorPageChecks
                     Shot("controller-trigger-editor.png");
                     form.ClientSize = new(980, 660); page.Navigate("Playlists", 1); Shot("controller-storyboard-editor-compact.png");
                     Check(!form.OwnedForms.Any() && Descendants(page).OfType<PlaylistEditorView>().Count() == 1, "Navigation and editing use one window without popup dialogs");
+                    Field<TextBox>("Storyboard playlist").Text = "Unsaved navigation draft";
+                    page.Hide(); page.Show();
+                    Check(Descendants(page).OfType<SceneEditorView>().Count() == 1 && !Button("← Back").Enabled &&
+                        page.HasUnsavedChanges && page.Session.Current.Playlists[1].Name == "Unsaved navigation draft",
+                        "Leaving the page resets to Scenes and clears navigation history while retaining draft edits");
+                    page.Navigate("Triggers", 0); page.Hide(); page.Show();
+                    Check(Descendants(page).OfType<SceneEditorView>().Count() == 1, "Leaving Triggers also returns the page to Scenes");
                     var custom = new PlaylistCommand { Device = "*", Payload = JsonSerializer.SerializeToElement(new { experience = "video", value = "Ghosts/Eye.mp4", screen = "*", customParameter = "keep", loop = false }) };
                     using var command = new PlaylistCommandEditor(custom, ShowConfiguration.From(host.Options), host.Options, [], [], () => { });
                     Check(command.Read().Payload.GetProperty("customParameter").GetString() == "keep", "Typed media inspector retains custom payload properties");

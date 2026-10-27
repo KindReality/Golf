@@ -49,10 +49,10 @@ internal sealed class PlaybackPriorityEvents : IAsyncDisposable
                             chain = chain with { HopCount = BroadcastEnvelope.MaximumHops };
                         }
                     }
-                    var bytes = PlaybackPriorityEvent.Create(settings, request.Source!, request.RequestId, request.Value,
+                    var bytes = PlaybackPriorityEvent.Create(settings, request.Source!, request.RequestId, request.IsFade ? request.Command! : request.Value,
                         notice.Display, label, notice.Screen, request.EffectivePriority, notice.ActivePriority, request.Loop, request.Context, chain);
                     await _send(bytes, settings, _stop.Token).ConfigureAwait(false);
-                    Telemetry.Info("PlaybackPriorityEventSent", new { request.RequestId, notice.Display, notice.Screen, request.Value,
+                    Telemetry.Info("PlaybackPriorityEventSent", new { request.RequestId, notice.Display, notice.Screen, request.Value, request.Command,
                         RequestedPriority = request.EffectivePriority, notice.ActivePriority, Deferred = request.Loop });
                 }
                 catch (OperationCanceledException) when (_stop.IsCancellationRequested) { break; }

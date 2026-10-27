@@ -22,9 +22,11 @@ internal sealed class ControllerPeers(Func<ControllerOptions> options, ActivityL
         public long Seen, LastSync;
         public ControllerSharedDefinitions? Definitions;
         public string LoadedRevision = "";
+        public string MediaRevision = "", LoadedMediaRevision = "", InventoryRevision = "";
+        public MediaInventory? MediaInventory;
         public Task Fetch = Task.CompletedTask, Copy = Task.CompletedTask;
         public string? MediaFailure;
-        public bool MediaReady, CredentialsReady;
+        public bool CredentialsReady;
     }
     private readonly object _gate = new();
     private readonly Dictionary<string, Peer> _peers = new(StringComparer.OrdinalIgnoreCase);
@@ -55,8 +57,11 @@ internal sealed class ControllerPeers(Func<ControllerOptions> options, ActivityL
                     if (_peers.Count >= 127) throw new ArgumentException("Too many peer Controllers.");
                     _peers.Add(announcement.ControllerId, peer = new() { Id = announcement.ControllerId });
                 }
+                var address = message.SenderAddress ?? announcement.Hostname;
+                if (peer.Host != announcement.Hostname || peer.Address != address || peer.Port != announcement.DefinitionsPort)
+                { peer.LoadedMediaRevision = ""; peer.InventoryRevision = ""; peer.MediaInventory = null; peer.CredentialsReady = false; }
                 peer.Host = announcement.Hostname; peer.Revision = announcement.Revision; peer.Port = announcement.DefinitionsPort;
-                peer.Address = message.SenderAddress ?? announcement.Hostname; peer.Seen = Environment.TickCount64;
+                peer.Address = address; peer.Seen = Environment.TickCount64; peer.MediaRevision = announcement.MediaRevision;
                 if (peer.LoadedRevision != peer.Revision && peer.Fetch.IsCompleted)
                     peer.Fetch = FetchAsync(peer, announcement, peer.Address);
             }
@@ -113,8 +118,9 @@ internal sealed class ControllerPeers(Func<ControllerOptions> options, ActivityL
                 lock (_gate)
                 {
                     foreach (var peer in _peers.Values.Where(p => settings.PeerDiscovery.Enabled && p.Definitions is not null && Environment.TickCount64 - p.Seen < 30000 &&
+                        p.LoadedMediaRevision != p.MediaRevision &&
                         p.Copy.IsCompleted && (p.LastSync == 0 || Environment.TickCount64 - p.LastSync >= settings.PeerDiscovery.MediaSyncIntervalSeconds * 1000)))
-                    { peer.LastSync = Environment.TickCount64; peer.Copy = Task.Run(() => CopyAsync(peer, peer.Host)); }
+                    { peer.LastSync = Environment.TickCount64; var host = peer.Host; var address = peer.Address; var port = peer.Port; var revision = peer.MediaRevision; peer.Copy = Task.Run(() => CopyAsync(peer, host, address, port, revision)); }
                 }
                 string signature;
                 lock (_gate) signature = !settings.PeerDiscovery.Enabled ? "" : string.Join('|', _peers.Values.Where(p => p.Definitions is not null && Environment.TickCount64 - p.Seen < 30000).OrderBy(p => p.Id).Select(p => p.Id + p.LoadedRevision));
@@ -124,7 +130,7 @@ internal sealed class ControllerPeers(Func<ControllerOptions> options, ActivityL
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
     }
-    private async Task CopyAsync(Peer peer, string hostname)
+    private async Task CopyAsync(Peer peer, string hostname, string address, int port, string revision)
     {
         try
         {
@@ -132,17 +138,40 @@ internal sealed class ControllerPeers(Func<ControllerOptions> options, ActivityL
             try
             {
                 if (!options().PeerDiscovery.Enabled) return;
-                if (Environment.TickCount64 - peer.Seen >= 30000 || peer.Host != hostname) return;
+                bool Current() => peer.Host == hostname && peer.Address == address && peer.Port == port && peer.MediaRevision == revision;
+                if (Environment.TickCount64 - peer.Seen >= 30000 || !Current()) return;
+                var inventory = peer.MediaInventory;
+                if (inventory is null || peer.InventoryRevision != revision)
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token); timeout.CancelAfter(TimeSpan.FromSeconds(8));
+                    using var response = await _http.GetAsync(new UriBuilder("http", address, port, "/media").Uri, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+                    var bytes = await SnapshotDownload.ReadAsync(response, MediaInventory.MaximumBytes, timeout.Token);
+                    if (MediaInventory.Revision(bytes) != revision) throw new IOException("Peer media inventory changed; waiting for its next announcement.");
+                    inventory = MediaInventory.Parse(bytes);
+                    lock (_gate)
+                    {
+                        if (!Current()) return;
+                        peer.MediaInventory = inventory; peer.InventoryRevision = revision;
+                    }
+                }
                 if (!peer.CredentialsReady)
                 {
                     await (prepareShare?.Invoke(hostname, _stop.Token) ?? MediaShareAccess.PrepareAsync(hostname, _stop.Token));
-                    peer.CredentialsReady = true;
+                    lock (_gate)
+                    {
+                        if (!Current()) return;
+                        peer.CredentialsReady = true;
+                    }
                 }
                 var destination = mediaDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Home Technologies", "Controller", "Media");
-                var complete = await _media.SynchronizeAsync(hostname, sharePath?.Invoke(hostname) ?? ControllerDiscovery.MediaShare(hostname), destination, _stop.Token);
+                var complete = await _media.SynchronizeAsync(hostname, sharePath?.Invoke(hostname) ?? ControllerDiscovery.MediaShare(hostname), destination, _stop.Token, inventory);
                 if (!complete) throw new IOException("Some peer media files could not be copied; they will be retried.");
-                if (!peer.MediaReady || peer.MediaFailure is not null) log.Info("ControllerPeerMediaSynchronized", $"Media synchronized from {hostname}", new { Hostname = hostname, Destination = destination });
-                peer.MediaReady = true; peer.MediaFailure = null;
+                lock (_gate)
+                {
+                    if (!Current()) return;
+                    peer.LoadedMediaRevision = revision; peer.MediaFailure = null;
+                }
+                log.Info("ControllerPeerMediaSynchronized", $"Media checked from {hostname}", new { Hostname = hostname, Destination = destination, Revision = revision });
             }
             finally { _copies.Release(); }
         }

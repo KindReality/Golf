@@ -87,7 +87,7 @@ internal static class CalibrationChecks
                 throw new Exception("Mouse-release save failed.");
             if (left.RemoteMasks.Count != 0 || right.RemoteMasks.Count != 0)
                 throw new Exception("Local save produced a duplicate remote flash.");
-            editor.Key(left, Forms.Keys.Tab);
+            editor.BeginPointSelection(left);
             if (left.Selected != 0)
                 throw new Exception("Keyboard focus did not start at UL.");
             editor.Key(left, Forms.Keys.Tab);

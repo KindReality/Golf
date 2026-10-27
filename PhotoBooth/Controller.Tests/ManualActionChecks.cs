@@ -140,10 +140,11 @@ internal static class ManualActionChecks
                     host.Log.Info("NetworkEventReceived", "test-mega: beam.broken · beam1");
                     host.Log.Info("ManualCommandSent", "Video → Tests/Eye.mp4 · Projector / screen1"); page.RefreshState();
                     var preview = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.tools/controller-live-consolidated.png"));
-                    using (var bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height)) { form.DrawToBitmap(bitmap, new(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(preview); }
+                    using (var bitmap = new Bitmap(page.Width, page.Height)) { page.DrawToBitmap(bitmap, new(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(preview); }
                     Console.WriteLine("Live page preview: " + preview);
-                    form.ClientSize = new(1180, 700); page.PerformLayout();
-                    Check(Descendants(page).OfType<Panel>().Any(p => p.AutoScroll && p.VerticalScroll.Visible), "Compact displays can scroll the composer and media controls instead of clipping them");
+                    form.ClientSize = new(1180, 700); page.PerformLayout(); page.RefreshState();
+                    Check(!Descendants(page.Manual).OfType<Panel>().Any(p => p.AutoScroll && p.VerticalScroll.Visible), "Composer fits with saved pins on a compact display without scrolling");
+                    using (var bitmap = new Bitmap(page.Width, page.Height)) { page.DrawToBitmap(bitmap, new(0, 0, bitmap.Width, bitmap.Height)); bitmap.Save(Path.ChangeExtension(preview, ".compact.png")); }
                     var pinFile = File.ReadAllText(path);
                     try { await host.SavePinnedActionAsync(null, eventPin with { Id = Guid.NewGuid().ToString("N"), Name = "Projector / video" }); throw new Exception("Duplicate pin name was accepted."); }
                     catch (ArgumentException) { Check(File.ReadAllText(path) == pinFile, "Invalid pins never overwrite configuration"); }

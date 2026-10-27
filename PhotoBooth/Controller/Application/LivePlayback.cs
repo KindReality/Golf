@@ -13,18 +13,18 @@ internal static class LivePlayback
 {
     internal static readonly HashSet<string> Videos = new([".mp4", ".mpg", ".mpeg", ".avi", ".mov", ".mkv", ".wmv"], StringComparer.OrdinalIgnoreCase);
     internal static readonly HashSet<string> Audio = new([".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".wma"], StringComparer.OrdinalIgnoreCase);
-    public static LiveRole[] Roles(ExperiencePeer[] peers)
+    public static LiveRole[] Roles(ExperiencePeer[] peers, IEnumerable<string>? known = null)
     {
-        var names = peers.SelectMany(p => p.Inventory.Screens.Where(s => s.Kind == "video").Select(s => s.Roles)
-            .Concat(p.Inventory.Speakers.Select(s => s.Roles))).SelectMany(RoleList.Parse)
-            .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase);
+        var names = RoleCatalog.Names(peers.SelectMany(p => p.Inventory.Screens.Select(s => s.Roles)
+            .Concat(p.Inventory.Speakers.Select(s => s.Roles))).Concat(known ?? []));
         return names.Select(name => new LiveRole(name,
             peers.Where(p => p.Usable).Sum(p => p.Inventory.Screens.Count(s => s.Playable && RoleList.Matches(s.Roles, name))),
             peers.Where(p => p.Usable).Sum(p => p.Inventory.Speakers.Count(s => RoleList.Matches(s.Roles, name))))).ToArray();
     }
 
-    public static LivePlan BuildRoles(BroadcastOptions options, ExperiencePeer[] peers, IEnumerable<string> selection, string filename, int volume, bool muteVideo)
+    public static LivePlan BuildRoles(BroadcastOptions options, ExperiencePeer[] peers, IEnumerable<string> selection, string filename, int volume, bool muteVideo, double playbackSpeed = 1)
     {
+        VideoPlaybackSpeed.Validate(playbackSpeed);
         var video = ValidateMedia(filename, volume);
         var roles = string.Join(",", RoleList.ParseTargets(string.Join(",", selection)));
         if (roles.Length == 0) return new([], []);
@@ -44,7 +44,7 @@ internal static class LivePlayback
                 throw new ArgumentException("Select roles matching at most 32 audio outputs per device.");
             // One command per Experience: the recipient selects matching outputs once and coordinates its audio.
             object payload = video
-                ? new { experience = "video", value = filename, roles, loop = false, mute = muteVideo }
+                ? new { experience = "video", value = filename, roles, loop = false, mute = muteVideo, playbackSpeed }
                 : new { experience = "audio", value = filename, roles, loop = false, mute = false, volume };
             try { commands.Add(BroadcastEnvelope.Create(options, "command", inventory.DeviceName, payload, context: new() { Item = "Live" })); }
             catch (ArgumentException ex) when (ex.Message.Contains("1200"))
@@ -65,8 +65,9 @@ internal static class LivePlayback
         return video;
     }
 
-    public static LivePlan Build(BroadcastOptions options, ExperiencePeer[] peers, IEnumerable<LiveTarget> selection, string filename, int volume, bool muteVideo)
+    public static LivePlan Build(BroadcastOptions options, ExperiencePeer[] peers, IEnumerable<LiveTarget> selection, string filename, int volume, bool muteVideo, double playbackSpeed = 1)
     {
+        VideoPlaybackSpeed.Validate(playbackSpeed);
         var video = ValidateMedia(filename, volume);
         var commands = new List<byte[]>(); var skipped = new List<string>();
         foreach (var group in selection.Distinct().Where(t => t.Audio != video).GroupBy(t => t.Hostname, StringComparer.OrdinalIgnoreCase))
@@ -81,7 +82,7 @@ internal static class LivePlayback
                 {
                     var screen = inventory.Screens.FirstOrDefault(s => s.Id == target.Id && s.Display == target.Display);
                     if (screen?.Playable != true) { skipped.Add(group.Key + ": screen unavailable or media locked"); continue; }
-                    commands.Add(BroadcastEnvelope.Create(options, "command", inventory.DeviceName, new { experience = "video", value = filename, screen = screen.Display + "/" + screen.Name, loop = false, mute = muteVideo }, context: new() { Item = "Live" }));
+                    commands.Add(BroadcastEnvelope.Create(options, "command", inventory.DeviceName, new { experience = "video", value = filename, screen = screen.Display + "/" + screen.Name, loop = false, mute = muteVideo, playbackSpeed }, context: new() { Item = "Live" }));
                 }
             }
             else

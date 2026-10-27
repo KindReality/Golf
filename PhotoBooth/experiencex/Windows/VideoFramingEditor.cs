@@ -33,6 +33,7 @@ internal sealed class VideoFramingEditor(
 
     private bool Begin(ScreenOptions screen)
     {
+        if (screen.IsLocked) return false;
         if (_disposed || _saving || !screen.IsVideo) return false;
         if (_original is not null && _original.Id != screen.Id) { Flush(); return false; }
         if (_original is null) { _original = screen; _draft = screen.Framing; _aspect = screenAspect?.Invoke(screen) ?? 1; }
@@ -147,7 +148,7 @@ internal sealed class VideoFramingEditor(
     {
         if (_original is null) return;
         var current = options.ScreensFor(display).FirstOrDefault(s => s.Id == _original.Id);
-        if (!options.ConfigurationMode || current is null || !current.IsVideo || current.Points != _original.Points ||
+        if (!options.ConfigurationMode || current is null || !current.IsVideo || current.IsLocked || current.Points != _original.Points ||
             current.Perspective != _original.Perspective || current.Framing != _original.Framing && !(_saving && current.Framing == _draft))
             Cancel("ConfigurationChanged");
     }
